@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,7 +19,10 @@ from app.domain.runtime.errors import (
     RuntimeRunNotFoundError,
 )
 from app.domain.runtime.models import RuntimeRequest
-from app.domain.runtime.run_lifecycle import RuntimeRunLifecycleService
+from app.domain.runtime.run_lifecycle import (
+    RuntimeRunCreationCommand,
+    RuntimeRunLifecycleService,
+)
 from app.domain.runtime.run_projection import RuntimeRunProjector
 
 PAST_RETENTION = datetime(2000, 1, 1, tzinfo=UTC)
@@ -149,6 +153,181 @@ def _create_run(
             },
         },
     )
+
+
+def _creation_command(
+    run_id: str,
+    *,
+    status: str = "running",
+) -> RuntimeRunCreationCommand:
+    return RuntimeRunCreationCommand(
+        run_id=run_id,
+        site_id="site_alpha",
+        account_id="account_alpha",
+        subscription_id="subscription_alpha",
+        plan_version_id="plan_version_alpha",
+        ability_name="npcink/test-runtime-lifecycle",
+        ability_family="vision",
+        skill_id="skill_alpha",
+        workflow_id="workflow_alpha",
+        contract_version="runtime_contract.v2",
+        channel="openapi",
+        execution_kind="image",
+        execution_tier="cloud",
+        execution_pattern="whole_run_offload",
+        data_classification="restricted",
+        profile_id="image.quality",
+        canonical_run_id=f"local_{run_id}",
+        status=status,
+        idempotency_key=f"idempotency-{run_id}",
+        request_fingerprint=f"fingerprint-{run_id}",
+        trace_id=f"trace-{run_id}",
+        input_json={"prompt": run_id},
+        execution_input_ciphertext=f"ciphertext-{run_id}",
+        policy_json={
+            "storage_mode": "full_store_with_ttl",
+            "retention_ttl": 60,
+            "runtime_callback": {"callback_url": "https://callback.example/runtime"},
+            "task_backend": {"enabled": True, "mode": "polling"},
+        },
+        selected_provider_id="provider_alpha",
+        selected_model_id="model_alpha",
+        selected_instance_id="instance_alpha",
+    )
+
+
+def test_creation_command_maps_every_durable_field_and_processing_timestamp(
+    database_url: str,
+) -> None:
+    service = _service(database_url)
+    running_command = _creation_command("run_creation_running")
+    queued_command = replace(
+        running_command,
+        run_id="run_creation_queued",
+        canonical_run_id="local_run_creation_queued",
+        status="queued",
+        idempotency_key="idempotency-run_creation-queued",
+        request_fingerprint="fingerprint-run_creation-queued",
+        trace_id="trace-run_creation-queued",
+    )
+    with get_session(database_url) as session:
+        repository = RuntimeRepository(session)
+        running = service.create_durable_run(
+            repository=repository,
+            command=running_command,
+        )
+        queued = service.create_durable_run(
+            repository=repository,
+            command=queued_command,
+        )
+        session.commit()
+
+        assert running.run_id == running_command.run_id
+        assert running.site_id == running_command.site_id
+        assert running.account_id == running_command.account_id
+        assert running.subscription_id == running_command.subscription_id
+        assert running.plan_version_id == running_command.plan_version_id
+        assert running.ability_name == running_command.ability_name
+        assert running.ability_family == running_command.ability_family
+        assert running.skill_id == running_command.skill_id
+        assert running.workflow_id == running_command.workflow_id
+        assert running.contract_version == running_command.contract_version
+        assert running.channel == running_command.channel
+        assert running.execution_kind == running_command.execution_kind
+        assert running.execution_tier == running_command.execution_tier
+        assert running.execution_pattern == running_command.execution_pattern
+        assert running.data_classification == running_command.data_classification
+        assert running.profile_id == running_command.profile_id
+        assert running.canonical_run_id == running_command.canonical_run_id
+        assert running.status == running_command.status
+        assert running.idempotency_key == running_command.idempotency_key
+        assert running.request_fingerprint == running_command.request_fingerprint
+        assert running.trace_id == running_command.trace_id
+        assert running.input_json == running_command.input_json
+        assert running.execution_input_ciphertext == running_command.execution_input_ciphertext
+        assert running.policy_json == running_command.policy_json
+        assert running.selected_provider_id == running_command.selected_provider_id
+        assert running.selected_model_id == running_command.selected_model_id
+        assert running.selected_instance_id == running_command.selected_instance_id
+        assert running.processing_started_at is not None
+        assert queued.processing_started_at is None
+
+
+def test_terminal_transition_seams_preserve_evidence_retention_and_callback(
+    database_url: str,
+) -> None:
+    service = _service(database_url)
+    with get_session(database_url) as session:
+        repository = RuntimeRepository(session)
+        succeeded = service.create_durable_run(
+            repository=repository,
+            command=_creation_command("run_transition_succeeded"),
+        )
+        failed = service.create_durable_run(
+            repository=repository,
+            command=_creation_command("run_transition_failed"),
+        )
+        canceled = service.create_durable_run(
+            repository=repository,
+            command=_creation_command("run_transition_canceled"),
+        )
+        not_requested = service.create_durable_run(
+            repository=repository,
+            command=_creation_command("run_transition_not_requested"),
+        )
+
+        service.succeed_run(
+            repository,
+            succeeded,
+            result_json={"output_text": "success evidence"},
+            provider_id="success_provider",
+            model_id="success_model",
+            instance_id="success_instance",
+            fallback_used=True,
+        )
+        service.fail_run(
+            repository,
+            failed,
+            error_code="provider.timeout",
+            error_message="provider timed out",
+            provider_id="failed_provider",
+            model_id="failed_model",
+            instance_id="failed_instance",
+            fallback_used=False,
+        )
+        repository.request_run_cancel(canceled)
+        assert service.cancel_if_requested(repository=repository, run=canceled) is True
+        assert service.cancel_if_requested(repository=repository, run=not_requested) is False
+        session.commit()
+
+        assert succeeded.status == "succeeded"
+        assert succeeded.result_json == {"output_text": "success evidence"}
+        assert succeeded.selected_provider_id == "success_provider"
+        assert succeeded.selected_model_id == "success_model"
+        assert succeeded.selected_instance_id == "success_instance"
+        assert succeeded.fallback_used is True
+
+        assert failed.status == "failed"
+        assert failed.error_code == "provider.timeout"
+        assert failed.error_message == "provider timed out"
+        assert failed.selected_provider_id == "failed_provider"
+        assert failed.selected_model_id == "failed_model"
+        assert failed.selected_instance_id == "failed_instance"
+        assert failed.fallback_used is False
+
+        assert canceled.status == "canceled"
+        assert canceled.error_code == "runtime.canceled"
+        assert canceled.error_message == "run canceled before execution completed"
+        assert canceled.cancel_requested_at is not None
+        assert canceled.canceled_at is not None
+        assert not_requested.status == "running"
+
+        for terminal in (succeeded, failed, canceled):
+            assert terminal.finished_at is not None
+            assert terminal.retention_expires_at is not None
+            assert terminal.callback_status == "pending"
+            assert terminal.callback_next_attempt_at is not None
+            assert terminal.execution_input_ciphertext is None
 
 
 def test_fingerprints_and_idempotent_replay_are_canonical_and_conflict_exactly(
@@ -469,6 +648,7 @@ def test_lifecycle_dependency_boundary_and_runtime_service_facades() -> None:
         "_publish_queue_signal",
         "_consume_queue_signal",
         "_process_single_queued_run",
+        "_cancel_requested_before_attempt",
     }
     assert old_private_paths.isdisjoint(methods)
 
@@ -492,5 +672,14 @@ def test_lifecycle_dependency_boundary_and_runtime_service_facades() -> None:
     assert service_source.count(".build_request_fingerprint(") == 8
     assert service_source.count(".build_media_derivative_request_fingerprint(") == 1
     assert service_source.count(".publish_queue_signal(") == 6
-    assert "repository.create_run(" in service_source
-    assert "repository.mark_run_succeeded(" in service_source
+    for forbidden_repository_transition in (
+        ".create_run(",
+        ".mark_run_succeeded(",
+        ".mark_run_failed(",
+        ".mark_run_canceled(",
+    ):
+        assert f"repository{forbidden_repository_transition}" not in service_source
+    assert "_cancel_requested_before_attempt" not in service_source
+    assert "repository.record_provider_call(" in service_source
+    assert "def _execute_existing_run(" in service_source
+    assert "def _execute_candidate_chain(" in service_source

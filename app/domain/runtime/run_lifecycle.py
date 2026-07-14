@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -31,6 +32,37 @@ class ClaimedRunExecutor(Protocol):
     ) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeRunCreationCommand:
+    run_id: str
+    site_id: str
+    account_id: str | None
+    subscription_id: str | None
+    plan_version_id: str | None
+    ability_name: str
+    ability_family: str
+    skill_id: str
+    workflow_id: str
+    contract_version: str
+    channel: str
+    execution_kind: str
+    execution_tier: str
+    execution_pattern: str
+    data_classification: str
+    profile_id: str
+    canonical_run_id: str | None
+    status: str
+    idempotency_key: str | None
+    request_fingerprint: str
+    trace_id: str
+    input_json: dict[str, Any]
+    execution_input_ciphertext: str | None
+    policy_json: dict[str, Any]
+    selected_provider_id: str | None = None
+    selected_model_id: str | None = None
+    selected_instance_id: str | None = None
+
+
 class RuntimeRunLifecycleService:
     """Owns durable run lookup, replay, queue claim, cancel, and retention lifecycle."""
 
@@ -51,6 +83,106 @@ class RuntimeRunLifecycleService:
             1,
             int(media_derivative_site_running_limit),
         )
+
+    def create_durable_run(
+        self,
+        *,
+        repository: RuntimeRepository,
+        command: RuntimeRunCreationCommand,
+    ) -> RunRecord:
+        return repository.create_run(
+            run_id=command.run_id,
+            site_id=command.site_id,
+            account_id=command.account_id,
+            subscription_id=command.subscription_id,
+            plan_version_id=command.plan_version_id,
+            ability_name=command.ability_name,
+            ability_family=command.ability_family,
+            skill_id=command.skill_id,
+            workflow_id=command.workflow_id,
+            contract_version=command.contract_version,
+            channel=command.channel,
+            execution_kind=command.execution_kind,
+            execution_tier=command.execution_tier,
+            execution_pattern=command.execution_pattern,
+            data_classification=command.data_classification,
+            profile_id=command.profile_id,
+            canonical_run_id=command.canonical_run_id,
+            status=command.status,
+            idempotency_key=command.idempotency_key,
+            request_fingerprint=command.request_fingerprint,
+            trace_id=command.trace_id,
+            input_json=command.input_json,
+            execution_input_ciphertext=command.execution_input_ciphertext,
+            policy_json=command.policy_json,
+            selected_provider_id=command.selected_provider_id,
+            selected_model_id=command.selected_model_id,
+            selected_instance_id=command.selected_instance_id,
+        )
+
+    def succeed_run(
+        self,
+        repository: RuntimeRepository,
+        run: RunRecord,
+        *,
+        result_json: dict[str, Any],
+        provider_id: str,
+        model_id: str,
+        instance_id: str,
+        fallback_used: bool,
+    ) -> RunRecord:
+        return repository.mark_run_succeeded(
+            run,
+            result_json=result_json,
+            provider_id=provider_id,
+            model_id=model_id,
+            instance_id=instance_id,
+            fallback_used=fallback_used,
+        )
+
+    def fail_run(
+        self,
+        repository: RuntimeRepository,
+        run: RunRecord,
+        *,
+        error_code: str,
+        error_message: str,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        instance_id: str | None = None,
+        fallback_used: bool | None = None,
+    ) -> RunRecord:
+        return repository.mark_run_failed(
+            run,
+            error_code=error_code,
+            error_message=error_message,
+            provider_id=provider_id,
+            model_id=model_id,
+            instance_id=instance_id,
+            fallback_used=fallback_used,
+        )
+
+    def cancel_run_durably(
+        self,
+        *,
+        repository: RuntimeRepository,
+        run: RunRecord,
+        now: datetime | None = None,
+        message: str = "run canceled before execution completed",
+    ) -> RunRecord:
+        return repository.mark_run_canceled(run, now=now, message=message)
+
+    def cancel_if_requested(
+        self,
+        *,
+        repository: RuntimeRepository,
+        run: RunRecord,
+    ) -> bool:
+        repository.refresh_run(run)
+        if run.cancel_requested_at is None or run.status != "running":
+            return False
+        self.cancel_run_durably(repository=repository, run=run)
+        return True
 
     def build_request_fingerprint(
         self,
@@ -277,8 +409,9 @@ class RuntimeRunLifecycleService:
                 raise RuntimeCancelNotAllowedError(run_id, run.status)
 
             if run.status == "queued":
-                repository.mark_run_canceled(
-                    run,
+                self.cancel_run_durably(
+                    repository=repository,
+                    run=run,
                     message="run canceled before worker claim",
                 )
             elif run.status == "running":

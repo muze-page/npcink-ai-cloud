@@ -133,7 +133,10 @@ from app.domain.runtime.models import (
     normalize_runtime_request_policy,
     normalize_runtime_task_backend,
 )
-from app.domain.runtime.run_lifecycle import RuntimeRunLifecycleService
+from app.domain.runtime.run_lifecycle import (
+    RuntimeRunCreationCommand,
+    RuntimeRunLifecycleService,
+)
 from app.domain.runtime.run_projection import RuntimeRunProjector
 from app.domain.site_knowledge.backends import SiteKnowledgeBackendError
 from app.domain.site_knowledge.contracts import (
@@ -449,34 +452,37 @@ class RuntimeService:
                     settings=self.settings,
                 )
 
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id,
-                canonical_run_id=request.canonical_run_id or None,
-                status="queued" if should_enqueue else "running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=prepared_input,
-                execution_input_ciphertext=execution_input_ciphertext,
-                policy_json=merged_policy,
-                selected_provider_id=selected_candidate.provider_id,
-                selected_model_id=selected_candidate.model_id,
-                selected_instance_id=selected_candidate.instance_id,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="queued" if should_enqueue else "running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=prepared_input,
+                    execution_input_ciphertext=execution_input_ciphertext,
+                    policy_json=merged_policy,
+                    selected_provider_id=selected_candidate.provider_id,
+                    selected_model_id=selected_candidate.model_id,
+                    selected_instance_id=selected_candidate.instance_id,
+                ),
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
 
@@ -576,37 +582,40 @@ class RuntimeService:
                     settings=self.settings,
                 )
 
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id,
-                canonical_run_id=request.canonical_run_id or None,
-                status="queued" if should_enqueue else "running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="queued" if should_enqueue else "running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=execution_input_ciphertext,
+                    policy_json=merged_policy,
+                    selected_provider_id="site_knowledge",
+                    selected_model_id="site-knowledge-managed",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=execution_input_ciphertext,
-                policy_json=merged_policy,
-                selected_provider_id="site_knowledge",
-                selected_model_id="site-knowledge-managed",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
 
@@ -694,37 +703,40 @@ class RuntimeService:
                     settings=self.settings,
                 )
 
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or CLOUD_BATCH_RUNTIME_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="queued" if should_enqueue else "running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or CLOUD_BATCH_RUNTIME_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="queued" if should_enqueue else "running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=execution_input_ciphertext,
+                    policy_json=merged_policy,
+                    selected_provider_id="cloud_batch_runtime",
+                    selected_model_id="deterministic-content-quality-v1",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=execution_input_ciphertext,
-                policy_json=merged_policy,
-                selected_provider_id="cloud_batch_runtime",
-                selected_model_id="deterministic-content-quality-v1",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
 
@@ -838,37 +850,40 @@ class RuntimeService:
                 },
             }
 
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name="generate_optimized_media_derivative",
-                ability_family="vision",
-                skill_id="",
-                workflow_id="",
-                contract_version="media_derivative_cloud_request.v1",
-                channel="openapi",
-                execution_kind="media_derivative",
-                execution_tier="cloud",
-                execution_pattern="whole_run_offload",
-                data_classification="internal",
-                profile_id="media_derivative.worker",
-                canonical_run_id=None,
-                status="queued",
-                idempotency_key=resolved_idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=resolved_trace_id,
-                input_json={},
-                execution_input_ciphertext=encrypt_runtime_execution_input(
-                    media_input,
-                    settings=self.settings,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name="generate_optimized_media_derivative",
+                    ability_family="vision",
+                    skill_id="",
+                    workflow_id="",
+                    contract_version="media_derivative_cloud_request.v1",
+                    channel="openapi",
+                    execution_kind="media_derivative",
+                    execution_tier="cloud",
+                    execution_pattern="whole_run_offload",
+                    data_classification="internal",
+                    profile_id="media_derivative.worker",
+                    canonical_run_id=None,
+                    status="queued",
+                    idempotency_key=resolved_idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=resolved_trace_id,
+                    input_json={},
+                    execution_input_ciphertext=encrypt_runtime_execution_input(
+                        media_input,
+                        settings=self.settings,
+                    ),
+                    policy_json=policy,
+                    selected_provider_id="media_derivative",
+                    selected_model_id="pillow",
+                    selected_instance_id="cloud-worker",
                 ),
-                policy_json=policy,
-                selected_provider_id="media_derivative",
-                selected_model_id="pillow",
-                selected_instance_id="cloud-worker",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self.run_lifecycle_service.publish_queue_signal(run.run_id)
@@ -1000,7 +1015,8 @@ class RuntimeService:
         )
 
         if not source_bytes:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code="media_derivative.source_decode_failed",
                 error_message="no source bytes found in media derivative run",
@@ -1040,7 +1056,8 @@ class RuntimeService:
             MediaDerivativeFormatUnavailableError,
             MediaDerivativeProcessingFailedError,
         ) as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -1071,7 +1088,8 @@ class RuntimeService:
             ttl_minutes=ttl_minutes,
         )
         result_json = build_artifact_result_json(artifact)
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=result_json,
             provider_id="media_derivative",
@@ -2352,7 +2370,8 @@ class RuntimeService:
                     operator_reason=reason,
                     operator_evidence=evidence,
                 )
-                repository.mark_run_failed(
+                self.run_lifecycle_service.fail_run(
+                    repository,
                     run,
                     error_code="runtime.operator_stale_running_failed",
                     error_message=f"operator marked stale running failed: {reason}",
@@ -3112,7 +3131,8 @@ class RuntimeService:
         except RuntimeError:
             if not self._is_wordpress_ai_connector_run(run):
                 raise
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code="connector_runtime.execution_input_invalid",
                 error_message="connector runtime execution input could not be decoded",
@@ -3133,7 +3153,8 @@ class RuntimeService:
                     site=site,
                 )
             except RuntimeErrorBase as error:
-                repository.mark_run_failed(
+                self.run_lifecycle_service.fail_run(
+                    repository,
                     run,
                     error_code=error.error_code,
                     error_message=error.message,
@@ -3182,16 +3203,20 @@ class RuntimeService:
         last_model_id = ""
         last_instance_id = ""
 
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         for candidate_index, candidate in enumerate(candidates):
             fallback_used = candidate_index > 0
 
             for retry_count in range(max_retries + 1):
-                if self._cancel_requested_before_attempt(run, repository=repository):
-                    repository.mark_run_canceled(run)
+                if self.run_lifecycle_service.cancel_if_requested(
+                    repository=repository,
+                    run=run,
+                ):
                     return
                 last_fallback_used = fallback_used
                 last_provider_id = candidate.provider_id
@@ -3206,7 +3231,8 @@ class RuntimeService:
                     if allow_fallback and get_error_taxonomy(last_error_code).fallback_eligible:
                         break
 
-                    repository.mark_run_failed(
+                    self.run_lifecycle_service.fail_run(
+                        repository,
                         run,
                         error_code=last_error_code,
                         error_message=last_error_message,
@@ -3271,7 +3297,8 @@ class RuntimeService:
                     if should_fallback:
                         break
 
-                    repository.mark_run_failed(
+                    self.run_lifecycle_service.fail_run(
+                        repository,
                         run,
                         error_code=last_error_code,
                         error_message=last_error_message,
@@ -3317,7 +3344,8 @@ class RuntimeService:
                         )
                         if allow_fallback:
                             break
-                        repository.mark_run_failed(
+                        self.run_lifecycle_service.fail_run(
+                            repository,
                             run,
                             error_code=last_error_code,
                             error_message=last_error_message,
@@ -3355,7 +3383,8 @@ class RuntimeService:
                             provider_output,
                         )
                     except InlineImageMaterializationError as error:
-                        repository.mark_run_failed(
+                        self.run_lifecycle_service.fail_run(
+                            repository,
                             run,
                             error_code=error.error_code,
                             error_message=error.message,
@@ -3373,7 +3402,8 @@ class RuntimeService:
                             provider_output=provider_output,
                         )
                     except AudioArtifactMaterializationError as error:
-                        repository.mark_run_failed(
+                        self.run_lifecycle_service.fail_run(
+                            repository,
                             run,
                             error_code=error.error_code,
                             error_message=error.message,
@@ -3426,7 +3456,8 @@ class RuntimeService:
                     ability_name=run.ability_name or "",
                     input_payload=input_payload,
                 )
-                repository.mark_run_succeeded(
+                self.run_lifecycle_service.succeed_run(
+                    repository,
                     run,
                     result_json=wrapped_result,
                     provider_id=candidate.provider_id,
@@ -3439,7 +3470,8 @@ class RuntimeService:
             if not allow_fallback:
                 break
 
-        repository.mark_run_failed(
+        self.run_lifecycle_service.fail_run(
+            repository,
             run,
             error_code=last_error_code,
             error_message=last_error_message,
@@ -3506,7 +3538,8 @@ class RuntimeService:
                 }
             self._record_automatic_web_search_report(run, policy=policy, report=report)
             if plan.is_required:
-                repository.mark_run_failed(
+                self.run_lifecycle_service.fail_run(
+                    repository,
                     run,
                     error_code=error.error_code,
                     error_message=error.message,
@@ -3524,7 +3557,8 @@ class RuntimeService:
             )
             self._record_automatic_web_search_report(run, policy=policy, report=report)
             if plan.is_required:
-                repository.mark_run_failed(
+                self.run_lifecycle_service.fail_run(
+                    repository,
                     run,
                     error_code=error.error_code,
                     error_message=error.message,
@@ -3600,8 +3634,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -3657,7 +3693,8 @@ class RuntimeService:
                 run_id=run.run_id,
             )
         except (SiteKnowledgeContractViolation, SiteKnowledgeBackendError) as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -3676,7 +3713,8 @@ class RuntimeService:
             )
             return
 
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=result_json,
             provider_id="site_knowledge",
@@ -3789,37 +3827,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id="web_search",
+                    selected_model_id="web-search-managed",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id="web_search",
-                selected_model_id="web-search-managed",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_web_search_run(
@@ -3841,8 +3882,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -3859,7 +3902,8 @@ class RuntimeService:
                 run_id=run.run_id,
             )
         except WebSearchContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -3890,7 +3934,8 @@ class RuntimeService:
                     run=run,
                     provider_call=provider_call,
                 )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -3927,7 +3972,8 @@ class RuntimeService:
             provider_call=provider_call,
             usage_context=usage_context,
         )
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=result_json,
             provider_id="web_search",
@@ -4075,37 +4121,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or IMAGE_SOURCE_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or IMAGE_SOURCE_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id="image_source",
+                    selected_model_id="image-source-managed",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id="image_source",
-                selected_model_id="image-source-managed",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_image_source_run(
@@ -4174,37 +4223,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or MEDIA_BATCH_PLAN_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or MEDIA_BATCH_PLAN_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id="media_batch_plan",
+                    selected_model_id="deterministic-intent-parser",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id="media_batch_plan",
-                selected_model_id="deterministic-intent-parser",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_media_batch_plan_run(
@@ -4273,37 +4325,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or SITE_OPS_ANALYSIS_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or SITE_OPS_ANALYSIS_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id="site_ops_analysis",
+                    selected_model_id="deterministic-ops-analyzer-v1",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id="site_ops_analysis",
-                selected_model_id="deterministic-ops-analyzer-v1",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_site_ops_analysis_run(
@@ -4377,37 +4432,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or IMAGE_CONTEXT_EVIDENCE_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or IMAGE_CONTEXT_EVIDENCE_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id=selected_candidate.provider_id,
+                    selected_model_id=selected_candidate.model_id,
+                    selected_instance_id=selected_candidate.instance_id,
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id=selected_candidate.provider_id,
-                selected_model_id=selected_candidate.model_id,
-                selected_instance_id=selected_candidate.instance_id,
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_image_context_evidence_run(
@@ -4430,8 +4488,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -4448,7 +4508,8 @@ class RuntimeService:
                 run_id=run.run_id,
             )
         except MediaBatchPlanContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4459,7 +4520,8 @@ class RuntimeService:
             )
             return
 
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id="media_batch_plan",
@@ -4475,8 +4537,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -4493,7 +4557,8 @@ class RuntimeService:
                 run_id=run.run_id,
             )
         except SiteOpsAnalysisContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4510,7 +4575,8 @@ class RuntimeService:
                 run.site_id,
                 run.trace_id,
             )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code="site_ops_analysis.execution_failed",
                 error_message="site ops analysis runtime failed",
@@ -4521,7 +4587,8 @@ class RuntimeService:
             )
             return
 
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id="site_ops_analysis",
@@ -4538,8 +4605,10 @@ class RuntimeService:
         input_payload: dict[str, Any] | None = None,
         candidate: RoutingCandidate | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -4550,7 +4619,8 @@ class RuntimeService:
         selected_candidate = candidate or self._resolve_run_routing_candidate(run)
         provider = self.providers.get(selected_candidate.provider_id)
         if provider is None:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code="runtime.provider_not_configured",
                 error_message=(
@@ -4586,7 +4656,8 @@ class RuntimeService:
                 price_output=selected_candidate.price_output,
             )
         except ImageContextEvidenceContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4617,7 +4688,8 @@ class RuntimeService:
                     run=run,
                     provider_call=provider_call,
                 )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4647,7 +4719,8 @@ class RuntimeService:
             run=run,
             provider_call=provider_call,
         )
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id=execution.usage.provider_id,
@@ -4663,8 +4736,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         started = perf_counter()
@@ -4711,7 +4786,8 @@ class RuntimeService:
                 run=run,
                 provider_call=provider_call,
             )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4750,7 +4826,8 @@ class RuntimeService:
             run=run,
             provider_call=provider_call,
         )
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id="cloud_batch_runtime",
@@ -4776,8 +4853,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -4815,7 +4894,8 @@ class RuntimeService:
                 llm_prompt_plan=llm_prompt_plan,
             )
         except ImageSourceContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4846,7 +4926,8 @@ class RuntimeService:
                     run=run,
                     provider_call=provider_call,
                 )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4876,7 +4957,8 @@ class RuntimeService:
             run=run,
             provider_call=provider_call,
         )
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id="image_source",
@@ -6423,15 +6505,6 @@ class RuntimeService:
                 "status": "omitted",
             }
         return result_json if isinstance(result_json, dict) else {}
-
-    def _cancel_requested_before_attempt(
-        self,
-        run: RunRecord,
-        *,
-        repository: RuntimeRepository,
-    ) -> bool:
-        repository.refresh_run(run)
-        return run.cancel_requested_at is not None and run.status == "running"
 
     def _get_storage_mode(self, policy: dict[str, object]) -> str:
         storage_mode = str(policy.get("storage_mode") or RUNTIME_STORAGE_MODE_RESULT_ONLY)
