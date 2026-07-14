@@ -618,7 +618,7 @@ export default function PortalPage() {
         </PortalSection>
       </section>
 
-      <PortalSitesWorkspace />
+      <PortalSitesWorkspace siteSummaries={siteSummaryCache} />
     </PortalPageStack>
   );
 }

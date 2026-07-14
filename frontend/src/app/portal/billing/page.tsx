@@ -63,6 +63,22 @@ function normalizePaymentText(value: unknown): string {
   return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
 }
 
+function formatBillingPeriodRange(startValue: string, endValue: string, locale: string): string {
+  const start = new Date(startValue);
+  const end = new Date(endValue);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return '';
+  const currentYear = new Date().getFullYear();
+  const includeYear = start.getFullYear() !== end.getFullYear()
+    || start.getFullYear() !== currentYear
+    || end.getFullYear() !== currentYear;
+  const formatter = new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'zh-CN', {
+    ...(includeYear ? { year: 'numeric' as const } : {}),
+    month: locale === 'en' ? 'short' : 'numeric',
+    day: 'numeric',
+  });
+  return `${formatter.format(start)} – ${formatter.format(end)}`;
+}
+
 function resolvePackageStatusDetail(
   quotaSummary: QuotaSummary | null,
   packageLabel: string,
@@ -106,7 +122,7 @@ function resolvePackageStatusDetail(
 
 function PortalBillingContent() {
   const searchParams = useSearchParams();
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   const { session, isLoading: sessionLoading, isAuthenticated, refresh } = useSession();
   const {
     entitlements,
@@ -461,8 +477,15 @@ function PortalBillingContent() {
     '';
   const currentPeriodLabel =
     currentPeriodStart && currentPeriodEnd
-      ? `${formatDate(currentPeriodStart)} - ${formatDate(currentPeriodEnd)}`
+      ? formatBillingPeriodRange(currentPeriodStart, currentPeriodEnd, locale)
       : t('portal.home.package_pending_label', {}, 'To confirm');
+  const currentPeriodEndDetail = currentPeriodEnd
+    ? t(
+        'portal.billing.period_end_detail',
+        { time: formatDate(currentPeriodEnd) },
+        `Ends ${formatDate(currentPeriodEnd)}`
+      )
+    : '';
   const packageStatus =
     String(quotaSummary?.status || '') === 'limited'
       ? 'warning'
@@ -516,6 +539,7 @@ function PortalBillingContent() {
           {
             label: t('portal.usage.period_label', {}, 'Period'),
             value: currentPeriodLabel,
+            detail: currentPeriodEndDetail,
             size: 'compact',
           },
         ]}
@@ -526,7 +550,6 @@ function PortalBillingContent() {
       <PortalCard variant="portal" className="bg-white dark:bg-slate-950">
         <PortalEntitlementUsage
           quotaSummary={quotaSummary}
-          periodLabel={currentPeriodLabel}
           t={t}
         />
       </PortalCard>

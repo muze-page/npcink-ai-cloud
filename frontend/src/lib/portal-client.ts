@@ -358,6 +358,15 @@ export interface Entitlements {
       paid_next_expires_at?: string;
       total_remaining?: number;
     };
+    credit_ledger_summary?: {
+      consumed_credits?: number;
+      granted_credits?: number;
+      adjustment_credits?: number;
+      refund_credits?: number;
+      net_credit_delta?: number;
+      net_used_credits?: number;
+      entry_count?: number;
+    };
     credit_policy?: {
       rate_version?: string;
       period_policy?: string;
@@ -1218,6 +1227,7 @@ function normalizePortalSiteSummaryRecord(raw: unknown): PortalSiteSummaryRecord
   const nestedSubscription = ((nestedCoverage.subscription || {}) as Record<string, unknown>);
   const nestedPlanVersion = ((nestedCoverage.plan_version || {}) as Record<string, unknown>);
   const nestedEntitlementSnapshot = ((nestedCoverage.entitlement_snapshot || {}) as Record<string, unknown>);
+  const nestedCustomerStatus = ((record.customer_status || {}) as Record<string, unknown>);
   const subscriptionMetadata = ((nestedSubscription.metadata || {}) as Record<string, unknown>);
 
   return {
@@ -1262,6 +1272,16 @@ function normalizePortalSiteSummaryRecord(raw: unknown): PortalSiteSummaryRecord
       typeof nestedEntitlementSnapshot === 'object' && Object.keys(nestedEntitlementSnapshot).length > 0
         ? (nestedEntitlementSnapshot as PortalSiteSummaryRecord['entitlement_snapshot'])
         : (record.entitlement_snapshot as PortalSiteSummaryRecord['entitlement_snapshot']),
+    customer_status:
+      Object.keys(nestedCustomerStatus).length > 0
+        ? {
+            status: String(nestedCustomerStatus.status || 'inactive'),
+            needs_attention: Boolean(nestedCustomerStatus.needs_attention),
+            issue_count: Number(nestedCustomerStatus.issue_count || 0),
+            generated_at: String(nestedCustomerStatus.generated_at || ''),
+          }
+        : undefined,
+    generated_at: String(record.generated_at || ''),
   };
 }
 
@@ -1712,6 +1732,7 @@ export interface PortalCreditTrendPoint {
 export interface PortalCreditTrendPayload {
   contract_version: 'portal-credit-trend-v1';
   account_id: string;
+  generated_at: string;
   site_id: string;
   window: PortalCreditTrendWindow;
   bucket_seconds: number;

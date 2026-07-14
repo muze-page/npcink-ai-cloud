@@ -267,6 +267,31 @@ export function PortalPackageChangePanel({
         })}
       </div>
 
+      <div className="mt-4 flex flex-col gap-4 rounded-[18px] border border-blue-100 bg-blue-50/70 p-4 dark:border-blue-900/60 dark:bg-blue-950/20 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+            {selectedChoice
+              ? t(
+                  'portal.billing.package_change_path',
+                  { from: currentChoiceLabel, to: selectedChoice.label },
+                  `${currentChoiceLabel} to ${selectedChoice.label}`
+                )
+              : t('portal.billing.package_select_hint', {}, 'Select a package above to continue.')}
+          </p>
+          {selectedComparison ? (
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{changeDetail}</p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary shrink-0 whitespace-nowrap"
+          disabled={selectionDisabled}
+          onClick={onConfirm}
+        >
+          {pendingAction ? t('common.saving', {}, 'Saving...') : actionLabel}
+        </button>
+      </div>
+
       <section className="mt-5" aria-labelledby="portal-package-comparison-title">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -393,30 +418,6 @@ export function PortalPackageChangePanel({
         )}
       </div>
 
-      <div className="mt-5 flex flex-col gap-4 rounded-[18px] border border-slate-200 bg-[#f5f5f7] p-4 dark:border-slate-800 dark:bg-slate-900/60 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm font-semibold text-slate-950 dark:text-white">
-            {selectedChoice
-              ? t(
-                  'portal.billing.package_change_path',
-                  { from: currentChoiceLabel, to: selectedChoice.label },
-                  `${currentChoiceLabel} to ${selectedChoice.label}`
-                )
-              : t('portal.billing.package_select_hint', {}, 'Select a package above to continue.')}
-          </p>
-          {selectedComparison ? (
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{changeDetail}</p>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          className="btn btn-primary shrink-0 whitespace-nowrap"
-          disabled={selectionDisabled}
-          onClick={onConfirm}
-        >
-          {pendingAction ? t('common.saving', {}, 'Saving...') : actionLabel}
-        </button>
-      </div>
       {error ? (
         <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/25 dark:text-red-200">
           {error}

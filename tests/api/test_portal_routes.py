@@ -4972,6 +4972,12 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert account_entitlements_data["account_id"] == "acct_portal_reads"
     assert account_entitlements_data["quota_summary"]["credit"]["key"] == "ai_credits"
     assert account_entitlements_data["quota_summary"]["credit"]["limit"] == 2000.0
+    assert (
+        account_entitlements_data["quota_summary"]["credit_ledger_summary"][
+            "consumed_credits"
+        ]
+        == 5.0
+    )
 
     credit_ledger_response = client.get(
         "/portal/v1/sites/site_portal_reads/credit-ledger?limit=10",
@@ -5066,6 +5072,7 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         assert trend_response.status_code == 200
         trend_data = trend_response.json()["data"]
         assert trend_data["contract_version"] == "portal-credit-trend-v1"
+        assert trend_data["generated_at"] == trend_data["end_at"]
         assert trend_data["window"] == trend_window
         assert len(trend_data["points"]) == expectation["points"]
         assert trend_data["total_credits"] == expectation["credits"]
@@ -5166,6 +5173,7 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert bucket_data["bucket"] == "30m"
     assert bucket_data["bucket_seconds"] == 1800
     assert bucket_data["pagination"]["total"] >= 1
+    assert all(item["start_at"] < item["end_at"] for item in bucket_data["items"])
     latest_bucket = bucket_data["items"][0]
     assert latest_bucket["event_count"] >= 1
     assert latest_bucket["consumed_credits"] >= 1
@@ -5182,6 +5190,18 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     )
     assert bucket_detail_response.status_code == 200
     assert bucket_detail_response.json()["data"]["pagination"]["total"] >= 1
+
+    recent_bucket_response = client.get(
+        "/portal/v1/account/credit-event-buckets",
+        params={"bucket": "30m", "window": "7d"},
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert recent_bucket_response.status_code == 200
+    recent_bucket_data = recent_bucket_response.json()["data"]
+    assert recent_bucket_data["summary"]["consumed_credits"] == (
+        bucket_data["summary"]["consumed_credits"] + 2.0
+    )
+    assert all(item["start_at"] < item["end_at"] for item in recent_bucket_data["items"])
 
     # Keep the remainder of this long scenario focused on the payment grant it creates below.
     with get_session(database_url) as session:

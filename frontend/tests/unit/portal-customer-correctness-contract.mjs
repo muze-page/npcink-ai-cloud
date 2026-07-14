@@ -14,13 +14,16 @@ const monitoringSource = readFileSync(resolve(root, 'src/app/portal/monitoring/p
 const headerSource = readFileSync(resolve(root, 'src/components/portal/PortalWorkspaceHeader.tsx'), 'utf8');
 const paginationSource = readFileSync(resolve(root, 'src/components/ui/ListPagination.tsx'), 'utf8');
 const loadingSource = readFileSync(resolve(root, 'src/components/portal/PortalPageState.tsx'), 'utf8');
+const portalClientSource = readFileSync(resolve(root, 'src/lib/portal-client.ts'), 'utf8');
 
 assert.match(sitesSource, /const visibleSites = getVisiblePortalSites\(sites\)/);
 assert.match(sitesSource, /visibleSites\.length/);
 assert.match(sitesSource, /htmlFor="portal-service-site-search"[\s\S]*id="portal-service-site-search"/);
 assert.match(sitesRedirectSource, /router\.replace\(`\/portal\$\{query[\s\S]*#sites`\)/);
 assert.match(sitesRedirectSource, /encodeURIComponent\(currentPath\)/);
-assert.match(homeSource, /<PortalSitesWorkspace \/>/);
+assert.match(homeSource, /<PortalSitesWorkspace siteSummaries=\{siteSummaryCache\} \/>/);
+assert.match(sitesSource, /siteSummaries\[site\.site_id\]\?\.customer_status\?\.needs_attention/);
+assert.match(portalClientSource, /customer_status:[\s\S]*nestedCustomerStatus\.needs_attention/);
 assert.doesNotMatch(
   accountSource,
   /PortalMetricStrip|getVisiblePortalSites\(session\.sites\)\.length/,

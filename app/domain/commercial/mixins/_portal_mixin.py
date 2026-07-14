@@ -200,11 +200,11 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             primary_subscription = service._select_primary_subscription(subscriptions)
             period_start_at, period_end_at = service._resolve_period(primary_subscription, now)
             query_start_at = (
-                max(period_start_at, now - window_durations[normalized_window])
+                now - window_durations[normalized_window]
                 if normalized_window in window_durations
                 else period_start_at
             )
-            query_end_at = min(period_end_at, now)
+            query_end_at = now if normalized_window in window_durations else min(period_end_at, now)
             if (range_start_at is None) != (range_end_at is None):
                 raise CommercialValidationError(
                     "service.portal_credit_events_range_invalid",
@@ -216,12 +216,14 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                         "service.portal_credit_events_range_invalid",
                         "credit event start_at must be earlier than end_at",
                     )
-                query_start_at = max(period_start_at, range_start_at)
+                query_start_at = max(query_start_at, range_start_at)
                 query_end_at = min(query_end_at, range_end_at)
             group_rows, total, consumed_credits = repository.list_portal_credit_event_groups(
                 account_id=account_id,
                 subscription_id=(
-                    primary_subscription.subscription_id if primary_subscription else None
+                    primary_subscription.subscription_id
+                    if normalized_window == "period" and primary_subscription
+                    else None
                 ),
                 event_types=[CREDIT_LEDGER_EVENT_CONSUME],
                 since=query_start_at,
@@ -406,15 +408,17 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             primary_subscription = service._select_primary_subscription(subscriptions)
             period_start_at, period_end_at = service._resolve_period(primary_subscription, now)
             query_start_at = (
-                max(period_start_at, now - window_durations[normalized_window])
+                now - window_durations[normalized_window]
                 if normalized_window in window_durations
                 else period_start_at
             )
-            query_end_at = min(period_end_at, now)
+            query_end_at = now if normalized_window in window_durations else min(period_end_at, now)
             bucket_rows = repository.summarize_portal_credit_event_buckets(
                 account_id=account_id,
                 subscription_id=(
-                    primary_subscription.subscription_id if primary_subscription else None
+                    primary_subscription.subscription_id
+                    if normalized_window == "period" and primary_subscription
+                    else None
                 ),
                 event_types=[CREDIT_LEDGER_EVENT_CONSUME],
                 since=query_start_at,
@@ -428,6 +432,10 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             bucket_index = int(row.get("bucket_index") or 0)
             raw_start_at = datetime.fromtimestamp(bucket_index * bucket_seconds, UTC)
             raw_end_at = raw_start_at + timedelta(seconds=bucket_seconds)
+            bucket_start_at = max(raw_start_at, query_start_at)
+            bucket_end_at = min(raw_end_at, query_end_at)
+            if bucket_start_at >= bucket_end_at:
+                continue
             features = cast(list[dict[str, Any]], row.get("features") or [])
             feature_totals = [
                 {
@@ -448,8 +456,8 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             items.append(
                 {
                     "bucket_id": f"{normalized_bucket}:{bucket_index}",
-                    "start_at": self._serialize_datetime(max(raw_start_at, query_start_at)),
-                    "end_at": self._serialize_datetime(min(raw_end_at, query_end_at)),
+                    "start_at": self._serialize_datetime(bucket_start_at),
+                    "end_at": self._serialize_datetime(bucket_end_at),
                     "consumed_credits": round(max(0.0, -net_delta), 6),
                     "event_count": int(row.get("event_count") or 0),
                     "site_count": int(row.get("site_count") or 0),
@@ -552,6 +560,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
         return {
             "contract_version": "portal-credit-trend-v1",
             "account_id": account_id,
+            "generated_at": self._serialize_datetime(end_at),
             "site_id": normalized_site_id,
             "window": normalized_window,
             "bucket_seconds": int(bucket_size.total_seconds()),

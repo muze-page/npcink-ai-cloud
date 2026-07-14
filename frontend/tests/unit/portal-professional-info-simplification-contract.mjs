@@ -9,7 +9,9 @@ const creditTrendSource = readFileSync(resolve(root, 'src/components/portal/Port
 const aiInsightsPagePath = resolve(root, 'src/app/portal/ai-insights/page.tsx');
 const monitoringSource = readFileSync(resolve(root, 'src/app/portal/monitoring/page.tsx'), 'utf8');
 const siteServiceStatusSource = readFileSync(resolve(root, 'src/components/portal/PortalSiteServiceStatus.tsx'), 'utf8');
+const siteKnowledgeSource = readFileSync(resolve(root, 'src/components/portal/PortalSiteKnowledgePanel.tsx'), 'utf8');
 const siteRecordSource = readFileSync(resolve(root, 'src/app/portal/sites/[siteId]/page.tsx'), 'utf8');
+const siteKnowledgePagePath = resolve(root, 'src/app/portal/site-knowledge/page.tsx');
 const sitesSource = readFileSync(resolve(root, 'src/components/portal/PortalSitesWorkspace.tsx'), 'utf8');
 const portalHomeSource = readFileSync(resolve(root, 'src/app/portal/page.tsx'), 'utf8');
 const auditSource = readFileSync(resolve(root, 'src/app/portal/audit/PortalAuditClient.tsx'), 'utf8');
@@ -56,11 +58,27 @@ assert.equal(
   false,
   'Portal service suggestions must not remain as a standalone customer page'
 );
+assert.equal(
+  existsSync(siteKnowledgePagePath),
+  false,
+  'Site knowledge must remain site-scoped instead of becoming a standalone Portal page'
+);
 
 assert.doesNotMatch(
   siteServiceStatusSource,
   /Plugin monitoring|Installed plugin health|Vector observability|P95|top1|MonitoringTabs|PortalPluginMonitoringPanel|PortalMediaProcessingPanel|PortalSiteKnowledgePanel|workflow_status|evidence_summary|likely_cause|next_step|DiagnosticAdvisor|diagnosticAdvisor|suggestion_only|direct_wordpress_write|automatic_repair_allowed/,
   'Portal service status must avoid plugin/vector observability and diagnostic-advisor labels in the customer page'
+);
+assert.match(siteRecordSource, /<PortalSiteKnowledgePanel/);
+assert.match(
+  siteKnowledgeSource,
+  /current_document_count[\s\S]*search_queries_total[\s\S]*no_hit_total[\s\S]*last_indexed_at/,
+  'Portal site knowledge must stay limited to customer-facing coverage and recent-use facts'
+);
+assert.doesNotMatch(
+  siteKnowledgeSource,
+  /AnalyticsLineChart|AnalyticsBarChart|p95|top1|embedding_provider|embedding_model|embedding_dimensions|vector_backend|current_chunk_count|indexed_chunks_total|\.timeline|\.intents/,
+  'Portal site knowledge must not expose vector internals or operator performance diagnostics'
 );
 assert.match(
   pluginMonitoringSource,
@@ -172,8 +190,13 @@ assert.doesNotMatch(
 );
 assert.match(
   auditSource,
-  /portalClient\.getAuditBundle\(\{ limit: 10 \}\)/,
-  'Portal recent activity must use the account-level audit bundle'
+  /portalClient\.getAuditBundle\(\{ limit \}\)/,
+  'Portal recent activity must use the account-level audit bundle with the requested page size'
+);
+assert.match(
+  auditSource,
+  /loadActivity\(10\)/,
+  'Portal recent activity must keep the initial account-level page bounded to 10 records'
 );
 assert.match(
   auditSource,

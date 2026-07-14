@@ -390,7 +390,11 @@ function PortalUsageContent() {
   const availableCredits = Number(quotaSummary?.credit?.total_remaining ?? 0);
   const creditEventCount = Number(creditEventBuckets?.pagination?.total ?? 0);
   const filteredConsumedCredits = Number(creditEventBuckets?.summary?.consumed_credits ?? 0);
-  const usedCredits = Number(quotaSummary?.credit?.used ?? 0);
+  const usedCredits = Number(
+    quotaSummary?.credit_ledger_summary?.consumed_credits
+    ?? quotaSummary?.credit?.used
+    ?? 0
+  );
   const paidCredits = Number(quotaSummary?.credit?.paid_remaining ?? 0);
   const nextPaidCreditExpiry = String(quotaSummary?.credit?.paid_next_expires_at || '');
   const currentPeriodStart =
@@ -411,7 +415,11 @@ function PortalUsageContent() {
   const currentPeriodEndDetail = currentPeriodEnd
     ? formatUsagePeriodEnd(currentPeriodEnd, locale)
     : '';
-  const updatedAt = usage?.generated_at ? formatUsageUpdatedAt(usage.generated_at, locale) : '';
+  const updatedAtValue = quotaSummary?.generated_at || usage?.generated_at || '';
+  const updatedAt = updatedAtValue ? formatUsageUpdatedAt(updatedAtValue, locale) : '';
+  const creditRecordsUpdatedAt = creditEventBuckets?.generated_at
+    ? formatUsageUpdatedAt(creditEventBuckets.generated_at, locale)
+    : '';
   const formatCreditPoints = (value: number) =>
     t('portal.usage.credit_points_value', { count: formatNumber(Math.abs(Math.round(value))) }, '{{count}} points');
   const eventFeatureText = (entry: PortalCreditEvent, field: 'title' | 'detail') =>
@@ -469,9 +477,9 @@ function PortalUsageContent() {
       detail: t('portal.usage.overview_available_detail', {}, 'Package and paid points available now.'),
     },
     {
-      label: t('portal.usage.period_used_label', {}, 'Used this period'),
+      label: t('portal.usage.period_used_label', {}, 'Points deducted this period'),
       value: formatQuotaValue(usedCredits),
-      detail: t('portal.usage.trend_points_detail', {}, 'Points used by service requests in this view.'),
+      detail: t('portal.usage.trend_points_detail', {}, 'Actual service deductions in the current package period.'),
     },
     {
       label: t('portal.usage.paid_remaining_label', {}, 'Paid credits'),
@@ -587,6 +595,9 @@ function PortalUsageContent() {
                   },
                   '{{credits}} points used across {{count}} time periods.'
                 )}
+                {creditRecordsUpdatedAt
+                  ? ` · ${t('portal.usage.updated_at_inline', { time: creditRecordsUpdatedAt }, 'Updated {{time}}')}`
+                  : ''}
               </p>
             </div>
           </div>

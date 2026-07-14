@@ -2547,7 +2547,13 @@ class CommercialRepository:
             if dialect_name == "sqlite"
             else func.extract("epoch", CreditLedgerEntry.created_at)
         )
-        bucket_index = func.cast(epoch_seconds / bucket_seconds, Integer).label("bucket_index")
+        # PostgreSQL rounds numeric-to-integer casts, which can move entries in the
+        # second half of an interval into the next bucket. Floor explicitly so the
+        # bucket always starts at or before the event timestamp on every dialect.
+        bucket_index = func.cast(
+            func.floor(epoch_seconds / bucket_seconds),
+            Integer,
+        ).label("bucket_index")
         statement = (
             select(
                 bucket_index,

@@ -74,7 +74,16 @@ assert.doesNotMatch(
   'portal home must not repeat global navigation as local quick links'
 );
 
-assert.match(source, /<PortalSitesWorkspace \/>/, 'portal home must render the merged site workspace');
+assert.match(
+  source,
+  /<PortalSitesWorkspace siteSummaries=\{siteSummaryCache\} \/>/,
+  'portal home must pass normalized site summaries into the merged site workspace'
+);
+assert.match(
+  sitesWorkspaceSource,
+  /siteSummaries\[site\.site_id\]\?\.customer_status\?\.needs_attention/,
+  'portal home site status must include monitoring-derived customer status'
+);
 const siteRegisterIndex = sitesWorkspaceSource.indexOf('portal.site_register');
 assert.ok(siteRegisterIndex >= 0, 'merged site workspace must render a connected-site register section');
 const siteRegisterSource = sitesWorkspaceSource.slice(siteRegisterIndex);

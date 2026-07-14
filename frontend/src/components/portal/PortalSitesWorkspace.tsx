@@ -17,11 +17,23 @@ import {
   getVisiblePortalSites,
   portalSiteNeedsAttention,
 } from '@/lib/portal-site-display';
-import { portalClient, type Site } from '@/lib/portal-client';
+import { portalClient, type PortalSiteSummaryRecord, type Site } from '@/lib/portal-client';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import { formatDate } from '@/lib/utils';
 
-function PortalSitesWorkspaceContent() {
+type PortalSitesWorkspaceProps = {
+  siteSummaries?: Record<string, PortalSiteSummaryRecord>;
+};
+
+function workspaceSiteNeedsAttention(
+  site: Site,
+  siteSummaries: Record<string, PortalSiteSummaryRecord>
+): boolean {
+  return portalSiteNeedsAttention(site)
+    || Boolean(siteSummaries[site.site_id]?.customer_status?.needs_attention);
+}
+
+function PortalSitesWorkspaceContent({ siteSummaries = {} }: PortalSitesWorkspaceProps) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -59,12 +71,13 @@ function PortalSitesWorkspaceContent() {
   }, [searchQuery, visibleSites]);
   const sortedSites = useMemo(() => {
     return [...filteredSites].sort((left, right) => {
-      const attentionDelta = Number(portalSiteNeedsAttention(right)) - Number(portalSiteNeedsAttention(left));
+      const attentionDelta = Number(workspaceSiteNeedsAttention(right, siteSummaries))
+        - Number(workspaceSiteNeedsAttention(left, siteSummaries));
       if (attentionDelta !== 0) return attentionDelta;
       return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
     });
-  }, [filteredSites]);
-  const restrictedCount = visibleSites.filter(portalSiteNeedsAttention).length;
+  }, [filteredSites, siteSummaries]);
+  const restrictedCount = visibleSites.filter((site) => workspaceSiteNeedsAttention(site, siteSummaries)).length;
   const clearCount = visibleSites.length - restrictedCount;
 
   useEffect(() => {
@@ -202,8 +215,8 @@ function PortalSitesWorkspaceContent() {
                       {getPortalSiteDisplayName(site)}
                     </p>
                     <PortalStatusBadge
-                      status={portalSiteNeedsAttention(site) ? 'warning' : 'active'}
-                      label={portalSiteNeedsAttention(site)
+                      status={workspaceSiteNeedsAttention(site, siteSummaries) ? 'warning' : 'active'}
+                      label={workspaceSiteNeedsAttention(site, siteSummaries)
                         ? t('portal.home.filter_attention_only', {}, 'Needs attention')
                         : t('portal.home.risk_level_normal', {}, 'Normal')}
                       className="normal-case tracking-normal"
@@ -309,10 +322,10 @@ function PortalSitesWorkspaceContent() {
   );
 }
 
-export function PortalSitesWorkspace() {
+export function PortalSitesWorkspace({ siteSummaries = {} }: PortalSitesWorkspaceProps) {
   return (
     <Suspense fallback={<div className="h-48 rounded-[18px] bg-slate-100 dark:bg-slate-900" aria-hidden="true" />}>
-      <PortalSitesWorkspaceContent />
+      <PortalSitesWorkspaceContent siteSummaries={siteSummaries} />
     </Suspense>
   );
 }

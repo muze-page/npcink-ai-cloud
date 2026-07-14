@@ -2330,6 +2330,11 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "period_end_at": summary.get("period_end_at"),
             "status": portal_status,
             "credit": credit,
+            "credit_ledger_summary": (
+                summary.get("credit_ledger_summary")
+                if isinstance(summary.get("credit_ledger_summary"), dict)
+                else {}
+            ),
             "credit_policy": (
                 summary.get("credit_policy")
                 if isinstance(summary.get("credit_policy"), dict)

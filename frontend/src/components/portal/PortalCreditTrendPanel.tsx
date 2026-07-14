@@ -39,6 +39,14 @@ export function PortalCreditTrendPanel({
   const hasUsage = totalCredits > 0 && maxCredits > 0;
   const labelEvery = points.length <= 12 ? 1 : points.length <= 24 ? 4 : 5;
   const dateLocale = locale === 'en' ? 'en-US' : 'zh-CN';
+  const generatedAt = payload?.generated_at || payload?.end_at || '';
+  const generatedAtDate = generatedAt ? new Date(generatedAt) : null;
+  const updatedAt = generatedAtDate && !Number.isNaN(generatedAtDate.getTime())
+    ? new Intl.DateTimeFormat(dateLocale, {
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(generatedAtDate)
+    : '';
   const formatPointLabel = (value: string) => new Intl.DateTimeFormat(
     dateLocale,
     window === '1h' || window === '24h'
@@ -115,6 +123,9 @@ export function PortalCreditTrendPanel({
                 { count: formatNumber(totalCredits) },
                 `${formatNumber(totalCredits)} points used in this range`,
               )}
+              {updatedAt
+                ? ` · ${t('portal.usage.updated_at_inline', { time: updatedAt }, 'Updated {{time}}')}`
+                : ''}
             </p>
             <div
               role="img"

@@ -1,14 +1,11 @@
 'use client';
 
 import {
-  PortalScaffoldEmptyState,
+  PortalCard,
   PortalMetricStrip,
   PortalSection,
-  PortalCard,
 } from '@/components/portal/PortalScaffold';
 import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
-import { PortalTag } from '@/components/portal/PortalTag';
-import { AnalyticsBarChart, AnalyticsLineChart } from '@/components/ui/EChartsWrapper';
 import { useLocale } from '@/contexts/LocaleContext';
 import type { PortalVectorObservabilitySummary } from '@/lib/portal-client';
 import { formatDate, formatNumber } from '@/lib/utils';
@@ -20,20 +17,6 @@ type PortalSiteKnowledgePanelProps = {
   onRetry?: () => void;
 };
 
-function formatPercent(value: number): string {
-  return `${(Number(value || 0) * 100).toFixed(1)}%`;
-}
-
-function formatScore(value: number): string {
-  return Number(value || 0).toFixed(3);
-}
-
-function timelineLabel(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return `${String(date.getHours()).padStart(2, '0')}:00`;
-}
-
 export function PortalSiteKnowledgePanel({
   summary,
   isLoading = false,
@@ -42,49 +25,60 @@ export function PortalSiteKnowledgePanel({
 }: PortalSiteKnowledgePanelProps) {
   const { t } = useLocale();
   const totals = summary?.totals || null;
-  const hasActivity =
-    Number(totals?.index_jobs_total || 0) > 0 ||
-    Number(totals?.search_queries_total || 0) > 0 ||
-    Number(totals?.current_chunk_count || 0) > 0;
-  const timelineData = (summary?.timeline || []).map((point) => ({
-    label: timelineLabel(point.bucket_start_at),
-    value: Number(point.search_queries_total || 0),
-    secondaryValue: Number(point.no_hit_total || 0),
-  }));
-  const intentData = (summary?.intents || []).map((item) => ({
-    label: item.intent || 'unknown',
-    value: Number(item.queries_total || 0),
-    color: Number(item.no_hit_total || 0) > 0 ? '#f59e0b' : '#2563eb',
-  }));
   const snapshot = summary?.index_snapshots?.[0] || null;
+  const indexedPages = Number(snapshot?.document_count ?? totals?.current_document_count ?? 0);
+  const searchCount = Number(totals?.search_queries_total || 0);
+  const noAnswerCount = Number(totals?.no_hit_total || 0);
+  const lastUpdatedAt = snapshot?.last_indexed_at || totals?.last_index_job_finished_at || '';
+  const hasKnowledge = indexedPages > 0 || Number(totals?.index_jobs_total || 0) > 0;
+  const needsAttention = Boolean(
+    hasKnowledge && summary && ['warning', 'error'].includes(summary.health.status)
+  );
+  const windowDays = Math.max(1, Math.round(Number(summary?.window?.hours || 168) / 24));
+  const statusLabel = !hasKnowledge
+    ? t('portal.vector_obs.status_empty', {}, 'Not set up')
+    : needsAttention
+      ? t('portal.vector_obs.status_attention', {}, 'Needs attention')
+      : t('portal.vector_obs.status_ready', {}, 'Ready');
+  const displayedStatusLabel = error
+    ? t('portal.home.package_pending_label', {}, 'To confirm')
+    : summary
+      ? statusLabel
+      : t('common.loading');
+  const statusTone = error || !hasKnowledge ? 'inactive' : needsAttention ? 'warning' : 'active';
 
   return (
-    <PortalSection className="space-y-4">
+    <PortalSection
+      id="site-knowledge"
+      className="scroll-mt-24 space-y-5"
+      data-portal-site="site-knowledge"
+    >
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-            {t('portal.vector_obs.eyebrow', {}, 'Site knowledge')}
-          </p>
-	          <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-	            {t('portal.vector_obs.title', {}, 'Site knowledge')}
-	          </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">
+          <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
+            {t('portal.vector_obs.title', {}, 'Site knowledge')}
+          </h2>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
             {t(
-              'portal.vector_obs.desc',
+              'portal.vector_obs.customer_desc',
               {},
-	              'Read-only status for site knowledge search.'
+              'Site knowledge helps AI use the pages already indexed from this site.'
             )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {summary?.health ? (
-            <PortalStatusBadge
-	              status={summary.health.status}
-	              label={t(`status.${summary.health.status}`, {}, summary.health.status)}
-            />
-          ) : null}
+          <PortalStatusBadge
+            status={statusTone}
+            label={displayedStatusLabel}
+            className="normal-case tracking-normal"
+          />
           {onRetry ? (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={onRetry}
+              disabled={isLoading}
+            >
               {t('common.refresh', {}, 'Refresh')}
             </button>
           ) : null}
@@ -95,130 +89,74 @@ export function PortalSiteKnowledgePanel({
         <PortalCard className="text-sm text-slate-600 dark:text-slate-300">
           {t('common.loading')}
         </PortalCard>
-      ) : error ? (
-        <PortalCard className="border-red-200 bg-red-50/70 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-200">
-          {error}
-        </PortalCard>
-      ) : !hasActivity ? (
-        <PortalScaffoldEmptyState
-	          title={t('portal.vector_obs.empty_title', {}, 'No site knowledge activity yet')}
-          description={t(
-            'portal.vector_obs.empty_desc',
+      ) : null}
+
+      {error ? (
+        <PortalCard className="border-amber-200 bg-amber-50/70 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
+          {t(
+            'portal.vector_obs.load_failed',
             {},
-	            'Activity will appear after site knowledge sync or search runs.'
+            'Site knowledge status could not be loaded. Try again later.'
           )}
+        </PortalCard>
+      ) : null}
+
+      {!isLoading && !error && summary && !hasKnowledge ? (
+        <PortalCard className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+          {t(
+            'portal.vector_obs.customer_empty_desc',
+            {},
+            'No pages have been indexed yet. Sync site knowledge from the WordPress plugin.'
+          )}
+        </PortalCard>
+      ) : null}
+
+      {!isLoading && !error && summary && hasKnowledge ? (
+        <PortalMetricStrip
+          columnsClassName="md:grid-cols-3"
+          items={[
+            {
+              label: t('portal.vector_obs.indexed', {}, 'Saved pages'),
+              value: formatNumber(indexedPages),
+              detail: t(
+                'portal.vector_obs.indexed_detail',
+                {},
+                'Pages currently available to site knowledge.'
+              ),
+            },
+            {
+              label: t('portal.vector_obs.last_indexed', {}, 'Last updated'),
+              value: lastUpdatedAt
+                ? formatDate(lastUpdatedAt)
+                : t('portal.home.package_pending_label', {}, 'To confirm'),
+              detail: t(
+                'portal.vector_obs.update_hint',
+                {},
+                'Update from the WordPress plugin when site content changes.'
+              ),
+              size: 'compact',
+            },
+            {
+              label: t(
+                'portal.vector_obs.recent_usage',
+                { days: String(windowDays) },
+                'Recent use'
+              ),
+              value: t(
+                'portal.vector_obs.search_count',
+                { count: formatNumber(searchCount) },
+                '{{count}} searches'
+              ),
+              detail: t(
+                'portal.vector_obs.no_answer_detail',
+                { count: formatNumber(noAnswerCount) },
+                '{{count}} could not find related content.'
+              ),
+              size: 'compact',
+            },
+          ]}
         />
-      ) : (
-        <>
-          <PortalMetricStrip
-            columnsClassName="md:grid-cols-4"
-            items={[
-              {
-	                label: t('portal.vector_obs.indexed', {}, 'Saved pages'),
-	                value: formatNumber(Number(totals?.current_document_count || 0)),
-	                detail: t('portal.vector_obs.saved_piece_count', { count: formatNumber(Number(totals?.current_chunk_count || 0)) }, '{{count}} saved piece(s)'),
-              },
-              {
-                label: t('portal.vector_obs.searches', {}, 'Searches'),
-                value: formatNumber(Number(totals?.search_queries_total || 0)),
-                detail: `${summary?.window?.hours || 24}h`,
-              },
-              {
-	                label: t('portal.vector_obs.no_hit', {}, 'No answer rate'),
-	                value: formatPercent(Number(totals?.no_hit_rate || 0)),
-	                detail: t('portal.vector_obs.no_answer_count', { count: formatNumber(Number(totals?.no_hit_total || 0)) }, '{{count}} no answer'),
-                toneClassName:
-                  Number(totals?.no_hit_rate || 0) >= 0.25
-                    ? 'text-amber-700 dark:text-amber-200'
-                    : '',
-              },
-              {
-	                label: t('portal.vector_obs.p95', {}, 'Search time'),
-	                value: `${formatNumber(Number(totals?.p95_search_latency_ms || 0))}ms`,
-	                detail: t('portal.vector_obs.match_score', { score: formatScore(Number(totals?.avg_top1_score || 0)) }, 'Match {{score}}'),
-                size: 'compact',
-              },
-            ]}
-          />
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <PortalCard className="space-y-3">
-              <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-	                {t('portal.vector_obs.trend', {}, 'Searches and no answers')}
-              </h3>
-              <AnalyticsLineChart
-                data={timelineData}
-                height={240}
-                primarySeriesName={t('portal.vector_obs.searches', {}, 'Searches')}
-	                secondarySeriesName={t('portal.vector_obs.no_hit_count', {}, 'No answer')}
-                primaryColor="#2563eb"
-                secondaryColor="#f59e0b"
-              />
-            </PortalCard>
-            <PortalCard className="space-y-3">
-              <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-	                  {t('portal.vector_obs.intents', {}, 'Search topics')}
-              </h3>
-              <AnalyticsBarChart data={intentData} height={240} barColor="#2563eb" />
-            </PortalCard>
-          </div>
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <PortalCard className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-	                  {t('portal.vector_obs.coverage', {}, 'Knowledge coverage')}
-	                </h3>
-              </div>
-              <div className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
-                <div className="flex justify-between gap-3">
-	                  <span>{t('portal.vector_obs.last_indexed', {}, 'Last updated')}</span>
-                  <span className="font-semibold text-slate-950 dark:text-white">
-                    {snapshot?.last_indexed_at ? formatDate(snapshot.last_indexed_at) : t('common.not_found')}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {Object.entries(snapshot?.source_type_counts || {}).map(([key, value]) => (
-                    <PortalTag key={key} tone="info">
-                      {key}: {formatNumber(Number(value || 0))}
-                    </PortalTag>
-                  ))}
-                </div>
-              </div>
-            </PortalCard>
-
-            <PortalCard className="space-y-3">
-              <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-	                  {t('portal.vector_obs.failures', {}, 'Issues')}
-              </h3>
-              {(summary?.errors || []).length ? (
-                <div className="space-y-2">
-                  {(summary?.errors || []).slice(0, 5).map((item) => (
-                    <div
-                      key={`${item.error_code}-${item.last_seen_at}`}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900/40"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold text-slate-950 dark:text-white">
-	                          {t('portal.vector_obs.issue_item', {}, 'Knowledge issue')}
-                        </p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          {item.last_seen_at ? formatDate(item.last_seen_at) : t('common.not_found')}
-                        </p>
-                      </div>
-                      <PortalTag tone="warning">{formatNumber(item.count)}</PortalTag>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-slate-600 dark:text-slate-300">
-	                  {t('portal.vector_obs.no_failures', {}, 'No issues in this period.')}
-                </p>
-              )}
-            </PortalCard>
-          </div>
-        </>
-      )}
+      ) : null}
     </PortalSection>
   );
 }
