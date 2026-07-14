@@ -14,6 +14,8 @@ from app.domain.cloud_batch_runtime.contracts import (
 from app.domain.runtime.run_projection import RuntimeRunProjector
 
 NOW = datetime(2026, 7, 14, 10, 0, tzinfo=UTC)
+EXPIRED_RETENTION_AT = datetime(2000, 1, 1, tzinfo=UTC)
+RETAINED_UNTIL = datetime(2999, 1, 1, tzinfo=UTC)
 
 
 def _run(status: str, **overrides: Any) -> RunRecord:
@@ -78,7 +80,7 @@ def _run(status: str, **overrides: Any) -> RunRecord:
             NOW - timedelta(minutes=1) if status != "queued" else None
         ),
         "finished_at": NOW if terminal else None,
-        "retention_expires_at": NOW + timedelta(hours=1) if terminal else None,
+        "retention_expires_at": RETAINED_UNTIL if terminal else None,
         "result_purged_at": None,
     }
     values.update(overrides)
@@ -180,7 +182,7 @@ def test_lifecycle_projects_callback_cancel_retention_and_task_backend() -> None
     }
     assert lifecycle["retention"] == {
         "ttl_seconds": 3600,
-        "expires_at": (NOW + timedelta(hours=1)).isoformat(),
+        "expires_at": RETAINED_UNTIL.isoformat(),
         "state": "retained",
         "result_purged_at": None,
     }
@@ -286,7 +288,7 @@ def test_execution_context_timestamp_and_expiry_projection() -> None:
         "succeeded",
         execution_pattern="step_offload",
         started_at=naive_started_at,
-        retention_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        retention_expires_at=EXPIRED_RETENTION_AT,
     )
 
     context = projector.build_execution_context_payload(run)
@@ -304,7 +306,7 @@ def test_execution_context_timestamp_and_expiry_projection() -> None:
     assert projector.serialize_timestamp(naive_started_at) == "2026-07-14T08:00:00+00:00"
     assert projector.is_run_result_expired(run) is True
     run.result_purged_at = NOW
-    run.retention_expires_at = datetime.now(UTC) + timedelta(days=1)
+    run.retention_expires_at = RETAINED_UNTIL
     assert projector.is_run_result_expired(run) is True
 
 
