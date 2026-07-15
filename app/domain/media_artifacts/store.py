@@ -176,15 +176,6 @@ def iter_artifact_chunks(store: ArtifactStore, storage_key: str) -> Iterator[byt
             yield chunk
 
 
-def iter_open_artifact_chunks(stream: BinaryIO, *, chunk_size: int) -> Iterator[bytes]:
-    with stream:
-        while True:
-            chunk = stream.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
-
-
 def read_artifact_bytes(
     store: ArtifactStore,
     storage_key: str,

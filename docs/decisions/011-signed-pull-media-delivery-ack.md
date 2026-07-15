@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — B4B1 implemented; B4B2 legacy-route removal pending
+Accepted — B4B2 implemented
 
 ## Date
 
@@ -85,16 +85,26 @@ two distinct evidence points without full-body buffering.
   revive an expired, purge-pending, or purged artifact.
 - Local connectors still verify, review, import, write, and audit under local
   CMS governance.
-- B4B2 must remove the legacy authenticated/public-token routes and helpers;
-  B4B1 intentionally does not delete `AudioAsset`.
+- B4B2 removes the legacy authenticated/public-token routes and helpers plus
+  the permanent audio-asset promote/playback model, table, and configuration.
+- Audio generation remains a hosted runtime capability and produces only a
+  short-lived `MediaArtifact`; WordPress retains local verification, review,
+  import, write, and audit ownership.
+- The destructive `0063` migration refuses to drop a non-empty legacy table.
+  A pre-GA operator must explicitly clear old rows and reset their copied-byte
+  volume first; downgrade restores an empty shape, not deleted data.
+- The retained derivative download-count projection is non-canonical and
+  awaits B4B3 convergence on `MediaArtifactDelivery`.
 
 ## Rollback
 
-Disable acceptance of the two new routes and their exact edge location, pause
-connector rollout of the pull/ACK consumer contract, and revert migration
-`20260715_0062`. Do not restore URL/Base64 fields to public results. Existing
-artifact TTL cleanup remains the safe fallback while a corrected delivery
-contract is prepared.
+Pause connector rollout of the pull/ACK consumer contract and revert the
+application change if the contract itself is defective. Downgrading `0063`
+recreates only an empty legacy table and does not restore deleted rows or
+bytes; restoring the permanent playback surface is not an automatic rollback.
+Do not restore URL/Base64/token fields to public results. Existing artifact TTL
+cleanup remains the safe fallback while a corrected delivery contract is
+prepared.
 
 ## Verification
 
@@ -104,5 +114,7 @@ contract is prepared.
   oversized stream behavior;
 - strict ACK validation and conflict behavior;
 - producer and lifecycle-projection credential stripping;
-- migration upgrade/downgrade; and
+- `0063` non-empty fail-closed, empty-table upgrade, and shape-only downgrade;
+- static absence of legacy routes, token helpers, permanent audio-asset model,
+  and dead derivative download writer; and
 - exact Nginx route, rate, connection, GET-only, and no-buffering contract tests.

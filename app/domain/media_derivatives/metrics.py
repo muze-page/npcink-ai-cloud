@@ -70,23 +70,6 @@ def record_media_derivative_job_metric(
     return metric
 
 
-def record_media_derivative_artifact_download(
-    *,
-    session: Session,
-    artifact_id: str,
-    downloaded_at: datetime | None = None,
-) -> None:
-    current_time = downloaded_at or datetime.now(UTC)
-    metric = session.scalar(
-        select(MediaDerivativeJobMetric).where(MediaDerivativeJobMetric.artifact_id == artifact_id)
-    )
-    if metric is None:
-        return
-    metric.artifact_download_count = int(metric.artifact_download_count or 0) + 1
-    metric.artifact_last_downloaded_at = current_time
-    session.flush()
-
-
 class MediaDerivativeObservabilityService:
     def __init__(
         self,

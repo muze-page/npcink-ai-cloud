@@ -1,7 +1,7 @@
 # Media Runtime Boundary v1
 
-Status: P3-B4B1 signed pull and delivery ACK implemented; B4B2 legacy-route
-removal plus orphan/lifecycle reconciliation and B5 remain target work.
+Status: P3-B4B2 legacy delivery and permanent audio-asset surfaces removed;
+orphan/lifecycle reconciliation and B5 remain target work.
 
 ## 1. Purpose
 
@@ -16,9 +16,9 @@ assignment, publication, and local audit.
 This document began as the P0 target contract. Section 3 records the implemented
 P3-B1 byte-store foundation, P3-B2 streamed ingress, P3-B3A upload/image-job
 resource split, P3-B3B1 image-generation artifact convergence, and P3-B3B2
-artifact-referenced vision input, P3-B4A lifecycle projection, and P3-B4B1
-signed pull/delivery ACK. B4B2 legacy-route removal and the remaining
-orphan/lifecycle work described for B4-B5 are still target work.
+artifact-referenced vision input, P3-B4A lifecycle projection, P3-B4B1 signed
+pull/delivery ACK, and P3-B4B2 legacy-route/permanent-audio-asset removal. The
+remaining orphan/lifecycle work described for B4-B5 is still target work.
 
 ## 2. Stable Markers
 
@@ -39,21 +39,23 @@ scope, durable run evidence, queue workers, provider routing, usage and
 entitlement checks, diagnostics, and existing media-oriented work. That
 evidence supports the direction but does not prove this target contract.
 
-The current refactor plan identifies remaining media debt: legacy authenticated
-and audio token download routes still require B4B2 deletion, and orphan
-reconciliation plus broader lifecycle closeout remain pending. Historical
-database blob paths, request/result Base64 media payloads, and the
-audio-specific download-token special case are migration inputs, not contracts
-to preserve.
+P3-B4B2 removed the legacy authenticated derivative download, public-token
+download, permanent audio-asset model/router/configuration, and their dead
+derivative download counter writer. Orphan reconciliation, broader lifecycle
+closeout, and convergence of the retained derivative download-count projection
+onto `MediaArtifactDelivery` remain pending. Historical database blob paths,
+request/result Base64 media payloads, and audio-specific download-token shapes
+are migration history, not contracts to preserve.
 
 The target state is one `TEMPORARY_MEDIA_RUNTIME` that serves typed operations
 through the existing Cloud runtime foundation. It uses one metadata envelope,
 one pluggable byte store, one site-isolated delivery model, and no second
 runtime or WordPress control plane.
 
-P3-B1 provides the metadata-only `MediaArtifact`, a local-volume
-`ArtifactStore`, bounded artifact downloads, independent AudioAsset objects,
-and byte-first purge. It deliberately preserves the existing artifact routes.
+P3-B1 originally provided the metadata-only `MediaArtifact`, a local-volume
+`ArtifactStore`, bounded artifact streams, independent permanent audio-asset
+objects, and byte-first purge. P3-B4B2 supersedes its temporary compatibility
+posture by deleting the independent audio-asset and legacy delivery surfaces.
 
 P3-B2 converted the former `POST /v1/runtime/media-derivatives` seam from whole-body buffering
 and one-shot multipart parsing to a bounded signed ingress:
@@ -126,9 +128,9 @@ P3-B3A atomically replaces that pre-GA public POST route with two resources:
 - upload idempotency verifies the typed request and server checksum before any
   repeat put. A missing/expired/corrupt replay artifact fails closed. Image-job
   replay is checked before queue capacity and new-job TTL admission;
-- the former POST route has no compatibility alias. The legacy authenticated
-  artifact download and audio public-download remain callable only until B4B2;
-  neither is part of the implemented signed-pull contract.
+- the former POST route has no compatibility alias. P3-B4B2 later removed the
+  legacy authenticated artifact download and audio public-token download;
+  neither is part of the signed-pull contract.
 
 P3-B3A still uses two disk I/O passes at ingress and may materialize one bounded
 source plus watermark inside the Pillow worker because the current processor
@@ -204,7 +206,8 @@ snapshot. P3-B4B1 adds nonce-protected same-site HMAC pull, dedicated
 non-buffered verified streaming, independent `MediaArtifactDelivery` evidence,
 and strict idempotent transfer ACK that may shorten but never extend retention.
 Known media projections remove historical URL/token/Base64 fields without
-rewriting durable results. B4B2 legacy-route removal, orphan reconciliation,
+rewriting durable results. P3-B4B2 removes the legacy routes, token helpers,
+permanent audio-asset surface, and active table. Orphan reconciliation,
 remaining lifecycle convergence, and broader media kinds remain later work.
 
 The three B4A public projection outlets are run-result reads; initial,
@@ -457,9 +460,9 @@ provider URLs, storage keys, or signed pull credentials.
 - **Change:** Move media to one streamed artifact envelope, typed processors,
   `ArtifactStore`, signed pull, delivery acknowledgement, TTL, purge, and
   site-scoped observability.
-- **Delete:** Remove database media blobs, request/result JSON or Base64 bytes,
-  and, in B4B2, the legacy authenticated route plus audio-specific
-  download-token special case.
+- **Delete:** Database media blobs, request/result JSON or Base64 bytes, the
+  legacy authenticated/public-token routes, and the permanent audio-asset
+  playback surface are removed through P3-B4B2.
 - **Defer:** Defer audio, video, document processors, resumable upload,
   S3-compatible storage, CDN/gallery behavior, permanent storage, and arbitrary
   media pipelines until measured need.
@@ -470,8 +473,9 @@ retains that transport, the JSON job resource uses artifact references, the
 former POST is gone, and active producers, consumers, projections, fixtures,
 tests, and proxy paths use the new contracts. Canonical HMAC fields, CMS
 ownership, and final local write truth remain unchanged. Signed pull/ack and
-delivery evidence are implemented in B4B1; removal of the audio-specific and
-legacy delivery routes remains B4B2 work.
+delivery evidence are implemented in B4B1; B4B2 removes the audio-specific and
+legacy delivery routes without deleting the audio-generation business
+capability.
 
 ## 13. WordPress Acceptance For P0-P5
 
@@ -494,10 +498,11 @@ legacy delivery routes remains B4B2 work.
   converge on artifact references. Provider URL/data-URL transport is private,
   transient, and absent from public and durable contracts. Addon upload handoff
   and real WordPress evidence remain P5 work.
-- **P3-B4A/B4B1:** Current lifecycle is projected at exact public envelopes;
-  signed pull, verified stream completion, independent delivery evidence,
-  credential stripping, and strict transfer ACK are implemented. B4B2 legacy
-  route deletion and orphan/lifecycle reconciliation remain pending.
+- **P3-B4A/B4B1/B4B2:** Current lifecycle is projected at exact public
+  envelopes; signed pull, verified stream completion, independent delivery
+  evidence, credential stripping, and strict transfer ACK are implemented.
+  Legacy delivery routes and the permanent audio-asset playback surface are
+  deleted. Orphan/lifecycle reconciliation remains pending.
 - **P3 target:** The four target resources, typed image contracts, security
   controls, signed pull, delivery acknowledgement, TTL, and purge are
   implemented and covered by focused tests.
@@ -532,8 +537,9 @@ control-plane truth.
 
 ## 15. Non-goals
 
-- B4B1 does not remove the legacy authenticated/public-token routes or
-  `AudioAsset`; that destructive cleanup is B4B2 work.
+- B4B2 does not implement orphan reconciliation or infer filesystem paths from
+  dropped audio-asset rows; pre-GA operators must explicitly reset that data
+  and its old volume before the destructive migration can proceed.
 - Introducing Kafka, Celery, Temporal, RabbitMQ, a second scheduler, or another
   workflow truth.
 - Building a Cloud media library, gallery, DAM, CDN product, or permanent

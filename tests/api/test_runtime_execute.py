@@ -31,9 +31,9 @@ from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     SITE_API_KEY_STATUS_REVOKED,
     AccountSubscription,
-    AudioAsset,
     MediaArtifact,
     PlanVersion,
+    ProviderCallRecord,
     RunRecord,
     RuntimeGuardEvent,
     Site,
@@ -57,7 +57,6 @@ from app.domain.hosted_model_defaults import (
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
 )
-from app.domain.media_artifacts import build_artifact_store
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
 from app.domain.web_search.service import (
@@ -1140,9 +1139,6 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
     database_url, client = _build_client(
         tmp_path,
         providers={"minimax": provider},
-        settings_overrides={
-            "audio_asset_playback_token_secret": "test-audio-playback-secret-00000000"
-        },
     )
     seed_provider_model_allowlist(
         database_url,
@@ -1208,6 +1204,7 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
         audio_result["artifact"]
     )
     assert data["result"]["audio_materialization"]["status"] == "materialized"
+    assert data["provider_call_count"] == 1
 
     with get_session(database_url) as session:
         artifact = session.query(MediaArtifact).filter_by(site_id="site_alpha").one()
@@ -1215,6 +1212,34 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
         assert artifact.byte_size > 0
         assert artifact.content_type == "audio/mpeg"
         artifact_id = artifact.artifact_id
+        run = session.scalar(select(RunRecord).where(RunRecord.run_id == data["run_id"]))
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.selected_provider_id == "minimax"
+        assert run.selected_model_id == AUDIO_NARRATION_MODEL_ID
+        provider_calls = list(
+            session.scalars(
+                select(ProviderCallRecord).where(
+                    ProviderCallRecord.run_id == data["run_id"]
+                )
+            )
+        )
+        assert len(provider_calls) == 1
+        assert provider_calls[0].provider_id == "minimax"
+        assert provider_calls[0].model_id == AUDIO_NARRATION_MODEL_ID
+        meter_events = list(
+            session.scalars(
+                select(UsageMeterEvent).where(UsageMeterEvent.run_id == data["run_id"])
+            )
+        )
+        assert [event.meter_key for event in meter_events] == [
+            "runs",
+            "provider_calls",
+            "tokens_in",
+            "tokens_total",
+        ]
+        assert all(event.ability_family == "audio" for event in meter_events)
+        assert all(event.execution_kind == "audio_generation" for event in meter_events)
 
     download_headers = build_auth_headers(
         "GET",
@@ -1230,100 +1255,6 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
     assert download_response.headers["content-type"].startswith("audio/mpeg")
     assert int(download_response.headers["content-length"]) == len(download_response.content)
     assert download_response.content.startswith(b"ID3")
-
-    promote_payload = {
-        "artifact_id": artifact_id,
-        "source_content_hash": "sha256:" + ("a" * 64),
-        "metadata": {"post_id": 42, "post_type": "post", "title": "Audio article"},
-        "playback_ttl_seconds": 120,
-    }
-    promote_body = json.dumps(promote_payload).encode("utf-8")
-    promote_headers = merge_json_headers(
-        build_auth_headers(
-            "POST",
-            "/v1/runtime/audio-assets",
-            site_id="site_alpha",
-            idempotency_key="idem-audio-asset-promote-001",
-            nonce="nonce-audio-asset-promote-001",
-            trace_id="1234567890abcdef1234567890abcd17",
-            body=promote_body,
-        )
-    )
-    promote_response = client.post(
-        "/v1/runtime/audio-assets",
-        content=promote_body,
-        headers=promote_headers,
-    )
-    assert promote_response.status_code == 200, promote_response.text
-    promoted = promote_response.json()["data"]
-    assert promoted["playback_mode"] == "cloud_hosted"
-    assert promoted["direct_wordpress_write"] is False
-    assert promoted["source_artifact_id"] == artifact_id
-    assert promoted["source_content_hash"] == "sha256:" + ("a" * 64)
-    assert "storage_key" not in promoted
-    assert promoted["playback_url"].startswith(
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback?"
-    )
-
-    playback_response = client.get(promoted["playback_url"])
-    assert playback_response.status_code == 200
-    assert playback_response.headers["content-type"].startswith("audio/mpeg")
-    assert playback_response.content.startswith(b"ID3")
-
-    invalid_playback_response = client.get(
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback?expires=1&token=bad"
-    )
-    assert invalid_playback_response.status_code == 410
-
-    playback_url_headers = build_auth_headers(
-        "GET",
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url",
-        site_id="site_alpha",
-        query="ttl_seconds=180",
-    )
-    playback_url_response = client.get(
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url?ttl_seconds=180",
-        headers=playback_url_headers,
-    )
-    assert playback_url_response.status_code == 200, playback_url_response.text
-    playback_url_data = playback_url_response.json()["data"]
-    assert playback_url_data["asset_id"] == promoted["asset_id"]
-    assert playback_url_data["playback_url_ttl_seconds"] == 180
-
-    beta_playback_url_headers = build_auth_headers(
-        "GET",
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url",
-        site_id="site_beta",
-        key_id="key_beta",
-        query="ttl_seconds=180",
-    )
-    beta_playback_url_response = client.get(
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url?ttl_seconds=180",
-        headers=beta_playback_url_headers,
-    )
-    assert beta_playback_url_response.status_code == 404
-
-    with get_session(database_url) as session:
-        asset = session.query(AudioAsset).filter_by(site_id="site_alpha").one()
-        assert asset.asset_id == promoted["asset_id"]
-        assert asset.source_artifact_id == artifact_id
-        assert asset.source_run_id
-        assert asset.byte_size > 0
-        assert asset.metadata_json["playback_mode"] == "cloud_hosted"
-        assert asset.storage_key != artifact.storage_key
-        store = build_artifact_store(client.app.state.services.settings)
-        store.delete(artifact.storage_key)
-        asset_storage_key = asset.storage_key
-
-    still_playable = client.get(promoted["playback_url"])
-    assert still_playable.status_code == 200
-    assert still_playable.content.startswith(b"ID3")
-
-    store.delete(asset_storage_key)
-
-    unavailable_playback = client.get(promoted["playback_url"])
-    assert unavailable_playback.status_code == 503
-    assert unavailable_playback.json()["error_code"] == "audio_asset.storage_unavailable"
 
     dispose_engine(database_url)
 

@@ -1,6 +1,7 @@
 # ADR-005: Cloud-managed local-volume ArtifactStore
 
-- Status: Accepted
+- Status: Accepted for `ArtifactStore`; permanent `AudioAsset` portion
+  superseded by ADR-011/P3-B4B2
 - Date: 2026-07-14
 
 ## Context
@@ -25,7 +26,7 @@ correlation metadata.
 Writes use bounded reads, a caller-supplied hard byte budget, SHA-256 and size
 calculation during transfer, mode `0600`, fsync, and atomic rename. Keys are
 server-generated, validated opaque identifiers; paths and keys are never
-public API fields. Downloads and playback iterate fixed-size chunks. Delete is
+public API fields. Signed artifact delivery iterates verified fixed-size chunks. Delete is
 idempotent. After atomic rename, the implementation fsyncs the containing
 directory. If that durability confirmation fails, it removes the published
 name and fsyncs again; failure to confirm rollback raises a specialized
@@ -38,8 +39,10 @@ failed objects from the immediately eligible set; ordering by effective
 eligibility time lets both new and due retry work progress without changing
 the artifact expiry contract or persisting raw exception messages.
 
-AudioAsset promotion copies the temporary source into a new store object so
-source TTL cleanup cannot delete the durable asset.
+The former `AudioAsset` promotion copied a temporary source into a second store
+object. ADR-011/P3-B4B2 later removed that permanent Cloud playback surface;
+the current runtime keeps audio as a short-lived `MediaArtifact` and delivers
+it through the same signed-pull contract as other media.
 
 ## Alternatives Considered
 
@@ -82,3 +85,8 @@ pre-migration database backup as well as reverting this batch.
 
 P3-B1 leaves multipart/Base64 ingress, unified media upload/jobs, signed pull
 and delivery ack, additional media operations, and S3/MinIO to B2-B5.
+
+P3-B4B2 migration `20260715_0063` removes the now-empty `audio_assets` table.
+It refuses a non-empty table so the pre-GA operator must explicitly clear old
+rows and reset their copied-object volume first. Downgrade recreates only an
+empty schema shape.

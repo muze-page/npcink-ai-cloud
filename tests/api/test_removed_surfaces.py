@@ -46,6 +46,8 @@ def test_removed_public_control_plane_surfaces_are_absent_from_openapi(tmp_path)
         "/internal/service/admin/models",
         "/internal/service/admin/recognition",
         "/internal/service/admin/wordpress-ai-routing",
+        "/v1/runtime/audio-assets",
+        "/v1/runtime/artifacts",
     )
 
     for path in paths:
@@ -89,10 +91,25 @@ def test_removed_urls_return_404(tmp_path) -> None:
         "/internal/service/admin/recognition",
         "/internal/service/admin/wordpress-ai-routing",
         "/internal/service/sites/site_alpha/user-grants",
+        "/v1/runtime/artifacts/art_00000000000000000000000000000000/download",
+        (
+            "/v1/runtime/artifacts/art_00000000000000000000000000000000/"
+            "public-download?token=removed"
+        ),
+        "/v1/runtime/audio-assets/aud_removed/playback-url?ttl_seconds=180",
+        "/v1/runtime/audio-assets/aud_removed/playback?expires=1&token=removed",
     )
 
     for url in removed_urls:
         assert client.get(url).status_code == 404, url
+
+    assert (
+        client.post(
+            "/v1/runtime/audio-assets",
+            json={"artifact_id": "art_removed"},
+        ).status_code
+        == 404
+    )
 
 
 def test_minimal_surfaces_remain_in_openapi(tmp_path) -> None:
@@ -104,6 +121,8 @@ def test_minimal_surfaces_remain_in_openapi(tmp_path) -> None:
         "/v1/catalog/models",
         "/v1/runtime/resolve",
         "/v1/runtime/execute",
+        "/v1/runtime/media/artifacts/{artifact_id}/download",
+        "/v1/runtime/media/artifacts/{artifact_id}/delivery-ack",
         "/v1/runs/{run_id}",
         "/v1/router/recommendation",
         "/portal/v1/session",

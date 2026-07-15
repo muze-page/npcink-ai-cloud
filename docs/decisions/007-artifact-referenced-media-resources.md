@@ -1,6 +1,6 @@
 # ADR-007: Artifact-referenced media resources
 
-- Status: Accepted
+- Status: Accepted; legacy delivery note superseded by ADR-011/P3-B4B2
 - Date: 2026-07-15
 
 ## Context
@@ -66,8 +66,9 @@ is deferred. Transform outputs use operation `image.transform.v1`.
 
 The exact 52 MiB proxy location moves to `/v1/runtime/media/uploads` only.
 `/v1/runtime/media/jobs` is ordinary bounded JSON under the global `/v1/`
-limit. Existing authenticated artifact download and audio public-download
-remain for B4 and are not described as signed pull.
+limit. At the time of this decision, the old authenticated and public-token
+downloads remained for B4; ADR-011/P3-B4B2 subsequently replaced and deleted
+them in favor of the unified signed pull and ACK.
 
 ## Consequences
 
@@ -81,8 +82,8 @@ remain for B4 and are not described as signed pull.
 - Provider-wire Base64 that is required by an external provider protocol is
   outside this decision. It must not be copied into the public media resource
   contract or durable run input.
-- Signed pull, delivery acknowledgement, broader media kinds, remote stores,
-  and CMS-local writes remain separate work.
+- ADR-011 later implemented signed pull and delivery acknowledgement. Broader
+  media kinds, remote stores, and CMS-local writes remain separate work.
 
 ## Alternatives Considered
 

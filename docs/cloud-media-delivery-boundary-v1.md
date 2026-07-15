@@ -1,6 +1,6 @@
 # Cloud Media Delivery Boundary v1
 
-Status: B4B1 implemented; B4B2 legacy-route removal pending
+Status: B4B2 implemented
 Date: 2026-07-15
 Scope: WordPress-first Cloud runtime, with a platform-neutral delivery seam
 
@@ -15,7 +15,7 @@ This is a Cloud runtime contract, not a WordPress API. Future Typecho, Z-BlogPHP
 Ghost, or other connectors may use the same contract without creating a
 platform-by-channel adapter matrix. B4B1 does not implement those connectors.
 
-## Active B4B1 Contract
+## Active B4B1/B4B2 Contract
 
 Public media result envelopes contain only an artifact reference and verified
 metadata. They do not contain a download URL, public token, signed query,
@@ -91,15 +91,45 @@ is unchanged and does not require a nonce.
 - no WordPress media-library write, publication, approval, or local audit truth;
 - no permanent Cloud media library, CDN, gallery, or resumable/range transfer;
 - no compatibility aliases in new result envelopes;
-- no audio/video processing expansion in B4B1; and
-- no deletion of the legacy `AudioAsset` table in this batch.
+- no audio/video processor expansion in B4B2; and
+- no deletion of audio generation, provider/run/usage/entitlement evidence, or
+  the temporary audio `MediaArtifact` result path.
 
-## Staged Closeout
+## B4B2 Closeout
 
-B4B1 implements the replacement contract and prevents new producers or
-projection outlets from publishing legacy delivery URLs. The old authenticated
-artifact download and audio public-token routes remain callable only until
-B4B2 removes their routes, token helpers, tests, and residual data fields. New
-Cloud or connector code must not call them.
+B4B1 implemented the replacement contract and prevented new producers or
+projection outlets from publishing legacy delivery URLs. B4B2 removes the old
+authenticated derivative download, public-token download, permanent
+audio-asset promote/playback routes, token helpers, model, configuration, and
+dead metric writer. Cloud now exposes one media byte-delivery path: the
+site-bound signed pull and transfer ACK above.
+
+The audio-generation capability remains active. It produces a short-lived
+audio `MediaArtifact` with provider, run, usage, entitlement, and result
+metadata evidence. WordPress will pull that artifact through the unified
+contract, verify bytes and checksum locally, present review, and perform any
+approved import under local governance. Cloud provides no permanent audio
+asset, playback URL, player, or CMS write surface.
+
+## Pre-GA Deployment Reset
+
+Migration `20260715_0063` is intentionally destructive and fail-closed. If
+`audio_assets` contains any row, upgrade stops with an explicit pre-GA reset
+error. Before retrying, the operator must enter a maintenance window, confirm
+that the deployment has no user data to retain, explicitly clear the legacy
+rows, and reset the old audio-asset artifact volume so copied storage objects
+cannot remain orphaned. The migration does not guess filesystem or object-store
+paths from database rows.
+
+After that explicit reset, upgrade drops the empty table. Downgrade recreates
+only the empty B4B1-era table shape; it cannot restore deleted rows or bytes.
+Historical migrations `0046` and `0061` remain unchanged as migration evidence.
+
+The retained derivative `artifact_download_count` schema/API field is not
+canonical delivery truth and no longer receives writes from the removed route.
+B4B3 must either derive unified delivery observations from
+`MediaArtifactDelivery` or remove the projection through an explicit migration
+and UI/API contract change. B4B2 does not broaden into that observability
+refactor.
 
 See [ADR-011](decisions/011-signed-pull-media-delivery-ack.md).
