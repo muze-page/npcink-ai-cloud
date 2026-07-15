@@ -88,10 +88,12 @@ normalization, run-finalization, or transaction rollback errors remove objects
 published by the failed transaction. A process crash or genuinely uncertain
 database-commit outcome remains an explicit B4 orphan-reconciliation case.
 
-The result contains artifact references and verified metadata only, including
-the existing same-site authenticated relative download URL. It is marked
-`suggestion_only=true` and `requires_local_review=true`. Signed pull,
-delivery acknowledgement, and orphan reconciliation remain B4 work. WordPress
+The result contains artifact references and verified metadata only. Retrieval
+uses the separate signed-pull and delivery-ACK contract in ADR-011; no download
+URL or credential is embedded in the result. It is marked
+`suggestion_only=true` and `requires_local_review=true`. Signed pull and
+delivery acknowledgement are implemented by ADR-011; orphan reconciliation
+remains B4 work. WordPress
 continues to own download verification, preview, review, media import,
 association, publication, and local audit.
 

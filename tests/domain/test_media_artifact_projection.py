@@ -169,6 +169,8 @@ def test_projects_only_known_envelopes_and_current_lifecycle(database_url: str) 
                     "keep": "root",
                     "storage_key": "must-not-leak",
                     "purge_last_error_code": "must-not-leak",
+                    "download_url": "/historical/download?token=secret",
+                    "b64_json": "historical-base64",
                 },
             },
             session=session,
@@ -183,6 +185,8 @@ def test_projects_only_known_envelopes_and_current_lifecycle(database_url: str) 
     assert root_projected["artifact"]["keep"] == "root"
     assert "storage_key" not in root_projected["artifact"]
     assert "purge_last_error_code" not in root_projected["artifact"]
+    assert "download_url" not in root_projected["artifact"]
+    assert "b64_json" not in root_projected["artifact"]
     assert [item["status"] for item in projected["artifacts"]] == [
         "expired",
         "expired",
@@ -201,7 +205,17 @@ def test_projects_only_known_envelopes_and_current_lifecycle(database_url: str) 
             {
                 "artifact_type": "audio_generation_candidates",
                 "contract_version": "audio_generation_result.v1",
-                "audios": [{"artifact": {"artifact_id": "art_available"}}],
+                "audios": [
+                    {
+                        "url": "/historical/public-download?token=secret",
+                        "subtitle_url": "https://provider.example/subtitle.srt",
+                        "b64_json": "historical-base64",
+                        "artifact": {
+                            "artifact_id": "art_available",
+                            "authenticated_download_url": "/historical/download",
+                        },
+                    }
+                ],
                 "items": [{"artifact": {"artifact_id": "art_expired"}}],
             },
             session=session,
@@ -241,6 +255,10 @@ def test_projects_only_known_envelopes_and_current_lifecycle(database_url: str) 
         )
 
     assert audio_projected["audios"][0]["artifact"]["status"] == "available"
+    assert "url" not in audio_projected["audios"][0]
+    assert "subtitle_url" not in audio_projected["audios"][0]
+    assert "b64_json" not in audio_projected["audios"][0]
+    assert "authenticated_download_url" not in audio_projected["audios"][0]["artifact"]
     assert audio_projected["items"][0]["artifact"]["status"] == "expired"
     assert unknown_projected["audios"][0]["artifact"]["status"] == "created"
     assert unversioned_audio_projected["audios"][0]["artifact"]["status"] == "created"

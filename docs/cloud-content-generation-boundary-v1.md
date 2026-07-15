@@ -230,6 +230,9 @@ Before shipping content-generation features:
 - for image generation, return artifact candidates only; WordPress media import,
   featured image assignment, insertion, and publication remain local approval
   and write flows
+- deliver generated and transformed media only through the credential-free
+  [Cloud Media Delivery Boundary v1](cloud-media-delivery-boundary-v1.md);
+  signed pull and ACK are transfer evidence, never CMS write approval
 - when exposing AI generation from image-source suggestions, follow
   [Image Source AI Generation Handoff v1](image-source-ai-generation-handoff-v1.md)
 - define suspension and key-revocation operator path

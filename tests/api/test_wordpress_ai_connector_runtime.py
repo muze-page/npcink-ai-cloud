@@ -2936,9 +2936,7 @@ def test_wordpress_ai_connector_image_generation_uses_managed_image_profile(
     assert len(result["artifacts"]) == 1
     artifact_result = result["artifacts"][0]
     assert artifact_result["artifact_reference"] == {"artifact_id": artifact_result["artifact_id"]}
-    assert artifact_result["download_url"] == (
-        f"/v1/runtime/artifacts/{artifact_result['artifact_id']}/download"
-    )
+    assert "download_url" not in artifact_result
     assert artifact_result["status"] == "available"
     assert artifact_result["media_kind"] == "image"
     assert artifact_result["operation"] == "image.generate.v1"

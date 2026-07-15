@@ -615,8 +615,9 @@ def _recent_audio_run_summary(run: RunRecord) -> dict[str, object]:
 
 def _recent_audio_artifact_summary(result_payload: dict[str, Any]) -> dict[str, object]:
     audio = _first_dict(result_payload.get("audios"))
+    artifact = _dict(audio.get("artifact"))
     return {
-        "audio_ready": bool(audio.get("url") or audio.get("b64_json")),
+        "audio_ready": bool(audio.get("artifact_id") or artifact.get("artifact_id")),
         "duration_seconds": float(audio.get("duration_seconds") or 0.0),
         "mime_type": str(audio.get("mime_type") or ""),
     }

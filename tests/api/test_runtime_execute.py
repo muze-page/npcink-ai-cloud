@@ -782,9 +782,7 @@ def test_execute_route_defaults_image_generation_to_grok_imagine(
     assert len(result["artifacts"]) == 1
     artifact_result = result["artifacts"][0]
     assert artifact_result["artifact_reference"] == {"artifact_id": artifact_result["artifact_id"]}
-    assert artifact_result["download_url"] == (
-        f"/v1/runtime/artifacts/{artifact_result['artifact_id']}/download"
-    )
+    assert "download_url" not in artifact_result
     assert artifact_result["status"] == "available"
     assert artifact_result["media_kind"] == "image"
     assert artifact_result["operation"] == "image.generate.v1"
@@ -1196,13 +1194,18 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
     assert data["result"]["artifact_type"] == "audio_generation_candidates"
     assert data["result"]["direct_wordpress_write"] is False
     assert data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
-    audio_url = data["result"]["audios"][0]["url"]
-    assert audio_url.startswith("/v1/runtime/artifacts/")
-    assert "/public-download?token=" in audio_url
-    assert data["result"]["audios"][0]["artifact"]["source_media_type"] == "audio"
-    assert data["result"]["audios"][0]["artifact"]["download_url"] == audio_url
-    assert data["result"]["audios"][0]["artifact"]["authenticated_download_url"].endswith(
-        "/download"
+    audio_result = data["result"]["audios"][0]
+    assert data["result"]["provider_response_format"] == "artifact_reference"
+    assert audio_result["artifact"]["source_media_type"] == "audio"
+    assert {
+        "url",
+        "audio_url",
+        "download_url",
+        "authenticated_download_url",
+        "b64_json",
+    }.isdisjoint(audio_result)
+    assert {"download_url", "authenticated_download_url"}.isdisjoint(
+        audio_result["artifact"]
     )
     assert data["result"]["audio_materialization"]["status"] == "materialized"
 
@@ -1215,30 +1218,18 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
 
     download_headers = build_auth_headers(
         "GET",
-        f"/v1/runtime/artifacts/{artifact_id}/download",
+        f"/v1/runtime/media/artifacts/{artifact_id}/download",
         site_id="site_alpha",
+        nonce="audio-generation-pull-001",
     )
     download_response = client.get(
-        f"/v1/runtime/artifacts/{artifact_id}/download",
+        f"/v1/runtime/media/artifacts/{artifact_id}/download",
         headers=download_headers,
     )
     assert download_response.status_code == 200
     assert download_response.headers["content-type"].startswith("audio/mpeg")
     assert int(download_response.headers["content-length"]) == len(download_response.content)
     assert download_response.content.startswith(b"ID3")
-
-    public_download_response = client.get(audio_url)
-    assert public_download_response.status_code == 200
-    assert public_download_response.headers["content-type"].startswith("audio/mpeg")
-    assert int(public_download_response.headers["content-length"]) == len(
-        public_download_response.content
-    )
-    assert public_download_response.content.startswith(b"ID3")
-
-    invalid_public_download_response = client.get(
-        f"/v1/runtime/artifacts/{artifact_id}/public-download?token=bad"
-    )
-    assert invalid_public_download_response.status_code == 403
 
     promote_payload = {
         "artifact_id": artifact_id,

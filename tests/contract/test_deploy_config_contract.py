@@ -107,6 +107,77 @@ def test_media_upload_proxy_overrides_are_exact_and_bounded() -> None:
         assert "set_real_ip_from" not in direct_client_config
 
 
+def test_media_pull_proxy_is_exact_get_only_streaming_and_independently_bounded() -> None:
+    cloud_root = _cloud_root()
+    configs = {
+        "dev": (cloud_root / "deploy" / "nginx.dev.conf").read_text(),
+        "prod": (cloud_root / "deploy" / "nginx.prod.conf").read_text(),
+        "domain": (
+            cloud_root / "deploy" / "magick-domain-nginx.conf.template"
+        ).read_text(),
+    }
+    location = r'~ "^/v1/runtime/media/artifacts/art_[0-9a-f]{32}/download$"'
+
+    for text in configs.values():
+        assert "log_format npcink_uri_only" in text
+        log_format = text.split("log_format npcink_uri_only", 1)[1].split(";", 1)[0]
+        assert "$uri" in log_format
+        for forbidden_log_value in (
+            "$request ",
+            "$request_uri",
+            "$args",
+            "$query_string",
+            "$http_referer",
+        ):
+            assert forbidden_log_value not in log_format
+        assert text.count(f"location {location} {{") == 1
+        assert (
+            "limit_req_zone $binary_remote_addr "
+            "zone=media_pull_rate:10m rate=5r/s;"
+        ) in text
+        assert "limit_conn_zone $binary_remote_addr zone=media_pull_conn:10m;" in text
+        assert "limit_conn_zone $server_name zone=media_pull_global_conn:1m;" in text
+        block = _nginx_location_block(text, location)
+        assert "limit_except GET {" in block
+        assert "deny all;" in block
+        assert "limit_conn media_pull_conn 4;" in block
+        assert "limit_conn media_pull_global_conn 16;" in block
+        assert "limit_req zone=media_pull_rate burst=10 nodelay;" in block
+        assert "proxy_buffering off;" in block
+        assert "proxy_request_buffering off;" not in block
+
+    sanitized_access_log = "access_log /var/log/nginx/access.log npcink_uri_only;"
+    assert configs["dev"].count(sanitized_access_log) == 1
+    assert configs["prod"].count(sanitized_access_log) == 1
+    assert configs["domain"].count(sanitized_access_log) == 2
+
+    prod_block = _nginx_location_block(configs["prod"], location)
+    assert "limit_req zone=public_runtime burst=40 nodelay;" in prod_block
+    assert "proxy_connect_timeout 5s;" in prod_block
+    assert "proxy_send_timeout 180s;" in prod_block
+    assert "proxy_read_timeout 180s;" in prod_block
+    assert "proxy_pass http://npcink_ai_cloud_api;" in prod_block
+    assert "proxy_pass http://$npcink_ai_cloud_api;" in _nginx_location_block(
+        configs["dev"], location
+    )
+    assert "proxy_pass __UPSTREAM__;" in _nginx_location_block(
+        configs["domain"], location
+    )
+
+
+def test_production_api_trusts_the_same_pinned_network_used_by_compose() -> None:
+    compose = (_cloud_root() / "docker-compose.prod.yml").read_text()
+
+    shared_subnet = "${NPCINK_CLOUD_PROXY_SUBNET:-172.28.0.0/24}"
+    assert f"--forwarded-allow-ips {shared_subnet}" in compose
+    assert f"- subnet: {shared_subnet}" in compose
+    assert compose.count(shared_subnet) == 2
+    assert "--forwarded-allow-ips *" not in compose
+    assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in (
+        _cloud_root() / "deploy" / "nginx.prod.conf"
+    ).read_text()
+
+
 def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_env() -> None:
     cloud_root = _cloud_root()
     compose_text = (cloud_root / "docker-compose.prod.yml").read_text()

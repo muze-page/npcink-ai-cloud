@@ -61,10 +61,11 @@ The local UI should use this plan to build an editable prompt draft. It should
 not call `npcink-cloud/generate-image` until the user confirms the prompt.
 The Cloud image-source result must not include the raw prompt draft.
 
-After generation, the local connector uses the same-site authenticated artifact
-download, verifies size and SHA-256, presents the image for review, and only
-then enters the local media-import governance path. The current authenticated
-download is not the future signed-pull/ack contract.
+After generation, the local connector uses the same-site signed artifact pull,
+verifies size and SHA-256, acknowledges the completed delivery, presents the
+image for review, and only then enters the local media-import governance path.
+The transfer follows [Cloud Media Delivery Boundary v1](cloud-media-delivery-boundary-v1.md)
+and does not imply local import or write approval.
 
 ## Phase 3: Batch
 

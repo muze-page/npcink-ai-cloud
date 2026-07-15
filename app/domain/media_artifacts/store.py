@@ -137,6 +137,8 @@ class LocalVolumeArtifactStore:
                     byte_size += len(chunk)
         except ArtifactStoreError:
             raise
+        except OSError as error:
+            raise ArtifactStoreError("artifact metadata read failed") from error
         return ArtifactStorageMetadata(storage_key, byte_size, f"sha256:{digest.hexdigest()}")
 
     def _path(self, storage_key: str) -> Path:

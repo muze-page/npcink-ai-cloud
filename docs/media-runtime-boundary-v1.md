@@ -1,6 +1,7 @@
 # Media Runtime Boundary v1
 
-Status: P3-B4A dynamic artifact lifecycle projection implemented; B4B-B5 remain target work.
+Status: P3-B4B1 signed pull and delivery ACK implemented; B4B2 legacy-route
+removal plus orphan/lifecycle reconciliation and B5 remain target work.
 
 ## 1. Purpose
 
@@ -15,8 +16,9 @@ assignment, publication, and local audit.
 This document began as the P0 target contract. Section 3 records the implemented
 P3-B1 byte-store foundation, P3-B2 streamed ingress, P3-B3A upload/image-job
 resource split, P3-B3B1 image-generation artifact convergence, and P3-B3B2
-artifact-referenced vision input. Signed pull/ack and the remaining lifecycle
-described for B4-B5 are still target work.
+artifact-referenced vision input, P3-B4A lifecycle projection, and P3-B4B1
+signed pull/delivery ACK. B4B2 legacy-route removal and the remaining
+orphan/lifecycle work described for B4-B5 are still target work.
 
 ## 2. Stable Markers
 
@@ -37,11 +39,12 @@ scope, durable run evidence, queue workers, provider routing, usage and
 entitlement checks, diagnostics, and existing media-oriented work. That
 evidence supports the direction but does not prove this target contract.
 
-The current refactor plan identifies remaining media debt: source/provider byte
-transfer still needs streaming, and the existing operation-specific paths still
-need to converge on one media lifecycle. Historical database blob paths, current
-request/result Base64 media payloads, and an audio-specific download-token
-special case are migration inputs, not contracts to preserve.
+The current refactor plan identifies remaining media debt: legacy authenticated
+and audio token download routes still require B4B2 deletion, and orphan
+reconciliation plus broader lifecycle closeout remain pending. Historical
+database blob paths, request/result Base64 media payloads, and the
+audio-specific download-token special case are migration inputs, not contracts
+to preserve.
 
 The target state is one `TEMPORARY_MEDIA_RUNTIME` that serves typed operations
 through the existing Cloud runtime foundation. It uses one metadata envelope,
@@ -123,9 +126,9 @@ P3-B3A atomically replaces that pre-GA public POST route with two resources:
 - upload idempotency verifies the typed request and server checksum before any
   repeat put. A missing/expired/corrupt replay artifact fails closed. Image-job
   replay is checked before queue capacity and new-job TTL admission;
-- the former POST route has no compatibility alias. The existing authenticated
-  artifact download and audio public-download remain unchanged and are not
-  evidence of the future signed-pull contract.
+- the former POST route has no compatibility alias. The legacy authenticated
+  artifact download and audio public-download remain callable only until B4B2;
+  neither is part of the implemented signed-pull contract.
 
 P3-B3A still uses two disk I/O passes at ingress and may materialize one bounded
 source plus watermark inside the Pillow worker because the current processor
@@ -163,9 +166,9 @@ artifact-only results:
   run-finalization rollback cleans published objects; hard crashes and
   uncertain commit outcomes remain B4 orphan-reconciliation work;
 - `image_generation_result.v1` contains artifact references, validated media
-  facts, the existing same-site authenticated relative download URL,
-  `suggestion_only=true`, and `requires_local_review=true`. Provider URL,
-  Base64, raw response, `storage_key`, and WordPress write fields are absent.
+  facts, `suggestion_only=true`, and `requires_local_review=true`. Download URL,
+  provider URL, Base64, raw response, `storage_key`, and WordPress write fields
+  are absent.
 
 P3-B3B2 atomically replaces URL/data-URL WordPress alt-text vision input with
 one required `source_artifact_id`:
@@ -193,15 +196,16 @@ one required `source_artifact_id`:
   suggestion. WordPress still owns attachment choice, review, metadata write,
   and local audit.
 
-The existing authenticated download is an interim delivery path, not evidence
-of B4 signed pull or acknowledgement. Signed pull/ack, orphan reconciliation,
-audio transport convergence, and broader media kinds remain later work.
 Historical run-result metadata remains a creation-time snapshot. P3-B4A now
 projects current `expired`/`purged` state across run-result reads, execution
 responses, idempotent replay, and delayed callbacks without rewriting that
-snapshot. Signed pull/ack, orphan reconciliation, audio transport convergence,
-and broader media kinds remain B4B+ work. The download route already rejects
-expired artifacts.
+snapshot. P3-B4B1 adds nonce-protected same-site HMAC pull, dedicated
+`public_pull_*` replay/rate/rejection scopes, exact metadata preflight,
+non-buffered verified streaming, independent `MediaArtifactDelivery` evidence,
+and strict idempotent transfer ACK that may shorten but never extend retention.
+Known media projections remove historical URL/token/Base64 fields without
+rewriting durable results. B4B2 legacy-route removal, orphan reconciliation,
+remaining lifecycle convergence, and broader media kinds remain later work.
 
 The three B4A public projection outlets are run-result reads; initial,
 transient, and idempotent execution responses; and delayed terminal callback
@@ -231,8 +235,8 @@ ingest -> validate -> queue -> process -> artifact -> signed pull
    selected typed processor, and streams the result back to the store.
 5. **Artifact:** Cloud records result metadata and a bounded expiry time; no
    binary result enters relational runtime truth.
-6. **Signed pull:** WordPress receives a short-lived, one-time or limited-use,
-   site-bound download authorization and streams the artifact from Cloud.
+6. **Signed pull:** WordPress sends a site-bound HMAC request with a dedicated
+   one-time nonce and streams the artifact from Cloud.
 7. **Local verify/review/write:** WordPress verifies the bytes and checksum,
    rechecks permissions and local object state, presents review, and performs
    any approved local media write.
@@ -254,11 +258,12 @@ Resource status is:
   - **implemented in P3-B3A**; creates one queue-backed job for one approved
     typed media operation;
 - `GET /v1/runtime/media/artifacts/{artifact_id}/download`
-  - **target, not implemented**; verifies a signed pull and streams the matching
-    site-scoped artifact;
+  - **implemented in P3-B4B1**; verifies a nonce-protected signed pull, records
+    delivery start/completion evidence, and streams the exact site-scoped
+    artifact without response buffering;
 - `POST /v1/runtime/media/artifacts/{artifact_id}/delivery-ack`
-  - **target, not implemented**; records delivery completion only and may
-    shorten the artifact TTL.
+  - **implemented in P3-B4B1**; records verified transfer acknowledgement only
+    and may shorten, but never extend, the artifact TTL.
 
 The logical resource relationships are:
 
@@ -383,8 +388,8 @@ The implementation must fail closed and apply all of these controls:
   content or durable artifact identities.
 - Reject executable or active content. Image contracts do not accept HTML,
   script, executable archives, or active SVG as decoded image output.
-- Issue signed pulls with short expiry, site and artifact binding, and one-time
-  or bounded-use semantics. Do not log raw signatures or signed URLs.
+- Accept only timestamp-bounded HMAC pulls bound to the site, artifact path, and
+  a one-time nonce. Do not mint download credentials or log raw signatures.
 - Return downloads with validated content type and safe disposition. Never
   reflect untrusted filenames or headers into the response.
 - Keep bytes, prompts, provider payloads, secrets, storage keys, and signed
@@ -392,10 +397,11 @@ The implementation must fail closed and apply all of these controls:
 
 ## 10. Delivery, Acknowledgment, And Local Write Boundary
 
-WordPress retrieves an available artifact with `SIGNED_PULL`. The pull is
-short-lived, one-time or limited-use, and bound to the authenticated site and
-artifact. Cloud does not push media bytes to an arbitrary callback URL and does
-not treat a caller-provided URL as a delivery target.
+WordPress retrieves an available artifact with `SIGNED_PULL`. The direct HMAC
+request is timestamp-bounded, bound to the authenticated site and artifact
+path, and consumes a one-time nonce. Cloud does not mint a bearer URL, push
+media bytes to an arbitrary callback URL, or treat a caller-provided URL as a
+delivery target.
 
 After download, WordPress must independently verify byte count, checksum,
 magic bytes, MIME, and decode. It must then recheck local actor permission,
@@ -430,11 +436,13 @@ Cleanup requirements are:
 - shorten the remaining TTL after delivery acknowledgement while preserving a
   small retry grace period;
 - retry failed deletion without restoring artifact availability;
-- prevent expired or purged artifacts from receiving new signed pulls.
+- prevent expired or purged artifacts from receiving new signed pulls or ACKs;
+- serialize ACK and purge decisions on the artifact row so acknowledgement
+  cannot extend or revive an expired, purge-pending, or purged artifact.
 
 Metrics and redacted diagnostics must cover upload/download byte counts and
 duration, validation rejects, queue age, processing latency, success/failure,
-checksum mismatch, signed-pull issuance and use, delivery acknowledgements,
+checksum mismatch, signed-pull admission and use, delivery acknowledgements,
 expiry and purge lag, orphan counts, deletion failures, and store capacity.
 
 Metrics may aggregate by site, operation, media kind, provider, and result
@@ -450,8 +458,8 @@ provider URLs, storage keys, or signed pull credentials.
   `ArtifactStore`, signed pull, delivery acknowledgement, TTL, purge, and
   site-scoped observability.
 - **Delete:** Remove database media blobs, request/result JSON or Base64 bytes,
-  and the audio-specific download-token special case when the implementation
-  switches atomically.
+  and, in B4B2, the legacy authenticated route plus audio-specific
+  download-token special case.
 - **Defer:** Defer audio, video, document processors, resumable upload,
   S3-compatible storage, CDN/gallery behavior, permanent storage, and arbitrary
   media pipelines until measured need.
@@ -462,7 +470,8 @@ retains that transport, the JSON job resource uses artifact references, the
 former POST is gone, and active producers, consumers, projections, fixtures,
 tests, and proxy paths use the new contracts. Canonical HMAC fields, CMS
 ownership, and final local write truth remain unchanged. Signed pull/ack and
-the audio-specific delivery special case remain B3B/B4 work.
+delivery evidence are implemented in B4B1; removal of the audio-specific and
+legacy delivery routes remains B4B2 work.
 
 ## 13. WordPress Acceptance For P0-P5
 
@@ -480,12 +489,15 @@ the audio-specific delivery special case remain B3B/B4 work.
 - **P3-B3A:** Two of four unified resources are implemented: streamed upload
   and artifact-referenced image job. Durable runtime inputs contain references
   and typed parameters only; the former combined POST and its Base64 queue
-  fields are deleted. Signed pull/ack and remaining transfer convergence are
-  not represented as complete.
+  fields are deleted.
 - **P3-B3B1/B2:** Image-generation output and WordPress alt-text vision input
   converge on artifact references. Provider URL/data-URL transport is private,
   transient, and absent from public and durable contracts. Addon upload handoff
   and real WordPress evidence remain P5 work.
+- **P3-B4A/B4B1:** Current lifecycle is projected at exact public envelopes;
+  signed pull, verified stream completion, independent delivery evidence,
+  credential stripping, and strict transfer ACK are implemented. B4B2 legacy
+  route deletion and orphan/lifecycle reconciliation remain pending.
 - **P3 target:** The four target resources, typed image contracts, security
   controls, signed pull, delivery acknowledgement, TTL, and purge are
   implemented and covered by focused tests.
@@ -520,9 +532,8 @@ control-plane truth.
 
 ## 15. Non-goals
 
-- P3-B2 did not implement the four target unified routes, new schema,
-  processors, or migrations; P3-B3A implements only upload and image-job
-  resources.
+- B4B1 does not remove the legacy authenticated/public-token routes or
+  `AudioAsset`; that destructive cleanup is B4B2 work.
 - Introducing Kafka, Celery, Temporal, RabbitMQ, a second scheduler, or another
   workflow truth.
 - Building a Cloud media library, gallery, DAM, CDN product, or permanent

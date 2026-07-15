@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -15,10 +17,22 @@ from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
-from app.core.models import MediaArtifact, ProviderCallRecord, RunRecord
+from app.core.models import (
+    MediaArtifact,
+    MediaArtifactDelivery,
+    ProviderCallRecord,
+    ReplayReceipt,
+    RunRecord,
+    RuntimeGuardEvent,
+)
 from app.core.secrets import decrypt_runtime_execution_input
 from app.core.services import CloudServices
 from app.domain.media_artifacts import build_artifact_store
+from app.domain.media_artifacts.delivery import (
+    iter_verified_delivery_chunks,
+    prepare_media_artifact_delivery,
+)
+from app.domain.media_derivatives.artifacts import cleanup_expired_artifacts
 from app.domain.media_derivatives.contracts import BLOCKED_RESPONSE_FIELDS, MediaJobRequest
 from app.domain.runtime.service import RuntimeService
 from tests.conftest import (
@@ -33,6 +47,59 @@ from tests.conftest import (
 
 UPLOAD_PATH = "/v1/runtime/media/uploads"
 JOB_PATH = "/v1/runtime/media/jobs"
+
+
+def _download_path(artifact_id: str) -> str:
+    return f"/v1/runtime/media/artifacts/{artifact_id}/download"
+
+
+def _ack_path(artifact_id: str) -> str:
+    return f"/v1/runtime/media/artifacts/{artifact_id}/delivery-ack"
+
+
+def _pull_headers(
+    artifact_id: str,
+    *,
+    nonce: str = "",
+    site_id: str = "site_alpha",
+    key_id: str = TEST_KEY_ID,
+    query: str = "",
+    idempotency_key: str = "",
+) -> dict[str, str]:
+    return build_auth_headers(
+        "GET",
+        _download_path(artifact_id),
+        site_id=site_id,
+        key_id=key_id,
+        nonce=nonce,
+        query=query,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _ack_headers(
+    artifact_id: str,
+    payload: dict[str, object],
+    *,
+    key: str,
+    nonce: str,
+    query: str = "",
+    site_id: str = "site_alpha",
+    key_id: str = TEST_KEY_ID,
+) -> tuple[bytes, dict[str, str]]:
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    headers = build_auth_headers(
+        "POST",
+        _ack_path(artifact_id),
+        site_id=site_id,
+        key_id=key_id,
+        body=body,
+        nonce=nonce,
+        idempotency_key=key,
+        query=query,
+    )
+    headers["content-type"] = "application/json"
+    return body, headers
 
 
 def _png(width: int = 32, height: int = 24, color: str = "red") -> bytes:
@@ -180,6 +247,729 @@ def _process_jobs(
         settings=settings,
         runtime_queue=queue,
     ).process_queued_runs(max_runs=max_runs, timeout_seconds=0)
+
+
+def test_signed_pull_and_ack_record_verified_transfer_evidence(tmp_path: Path) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    payload = _png()
+    checksum = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, payload, key="delivery-source", nonce="delivery-source")
+        )
+        download = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce="delivery-pull-1"),
+        )
+
+        assert download.status_code == 200, download.json()
+        assert download.content == payload
+        assert download.headers["accept-ranges"] == "none"
+        assert download.headers["cache-control"] == "private, no-store"
+        assert "token" not in download.headers["content-disposition"]
+        delivery_id = download.headers["x-npcink-delivery-id"]
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            assert delivery.completed_at is not None
+            assert delivery.completed_byte_size == len(payload)
+            assert delivery.completed_checksum == checksum
+
+        ack_payload = {
+            "contract_version": "media_artifact_delivery_ack.v1",
+            "delivery_id": delivery_id,
+            "received_byte_size": len(payload),
+            "received_checksum": checksum,
+        }
+        invalid_body, invalid_headers = _ack_headers(
+            artifact_id,
+            {**ack_payload, "unexpected": "rejected"},
+            key="delivery-ack-invalid",
+            nonce="delivery-ack-invalid",
+        )
+        invalid = client.post(
+            _ack_path(artifact_id), content=invalid_body, headers=invalid_headers
+        )
+        assert invalid.status_code == 422, invalid.json()
+        assert invalid.json()["error_code"] == (
+            "media_artifact.delivery_ack_validation_error"
+        )
+
+        query = "credential=forbidden"
+        queried_body, queried_headers = _ack_headers(
+            artifact_id,
+            ack_payload,
+            key="delivery-ack-query",
+            nonce="delivery-ack-query",
+            query=query,
+        )
+        queried = client.post(
+            f"{_ack_path(artifact_id)}?{query}",
+            content=queried_body,
+            headers=queried_headers,
+        )
+        assert queried.status_code == 400, queried.json()
+        assert queried.json()["error_code"] == "media_artifact.query_not_allowed"
+
+        ack_body, ack_headers = _ack_headers(
+            artifact_id,
+            ack_payload,
+            key="delivery-ack-key",
+            nonce="delivery-ack-1",
+        )
+        acknowledged = client.post(
+            _ack_path(artifact_id), content=ack_body, headers=ack_headers
+        )
+
+        assert acknowledged.status_code == 200, acknowledged.json()
+        ack_data = acknowledged.json()["data"]
+        assert ack_data["acknowledgement_scope"] == "verified_transfer_only"
+        assert ack_data["idempotent_replay"] is False
+        assert "direct_cms_write" not in ack_data
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert artifact is not None and delivery is not None
+            assert delivery.acked_at is not None
+            assert delivery.retention_expires_at_before is not None
+            assert delivery.retention_expires_at_after is not None
+            assert artifact.expires_at == delivery.retention_expires_at_after
+
+        replay_body, replay_headers = _ack_headers(
+            artifact_id,
+            ack_payload,
+            key="delivery-ack-key",
+            nonce="delivery-ack-2",
+        )
+        replay = client.post(
+            _ack_path(artifact_id), content=replay_body, headers=replay_headers
+        )
+        assert replay.status_code == 200, replay.json()
+        assert replay.json()["data"]["idempotent_replay"] is True
+
+        conflicting_payload = {**ack_payload, "received_byte_size": len(payload) - 1}
+        conflict_body, conflict_headers = _ack_headers(
+            artifact_id,
+            conflicting_payload,
+            key="delivery-ack-key",
+            nonce="delivery-ack-3",
+        )
+        conflict = client.post(
+            _ack_path(artifact_id), content=conflict_body, headers=conflict_headers
+        )
+        assert conflict.status_code == 409, conflict.json()
+        assert conflict.json()["error_code"] == "media_artifact.delivery_ack_conflict"
+    finally:
+        dispose_engine(database_url)
+
+
+def test_delivery_ack_rejects_incomplete_delivery(tmp_path: Path) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, _png(), key="ack-incomplete-source", nonce="ack-incomplete-source")
+        )
+        with get_session(database_url) as session:
+            prepared = prepare_media_artifact_delivery(
+                session=session,
+                artifact_store=build_artifact_store(settings),
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id="ack-incomplete-trace",
+            )
+            delivery_id = prepared.delivery.delivery_id
+            byte_size = prepared.delivery.expected_byte_size
+            checksum = prepared.delivery.expected_checksum
+            session.commit()
+        prepared.stream.close()
+        payload = {
+            "contract_version": "media_artifact_delivery_ack.v1",
+            "delivery_id": delivery_id,
+            "received_byte_size": byte_size,
+            "received_checksum": checksum,
+        }
+        body, headers = _ack_headers(
+            artifact_id,
+            payload,
+            key="ack-incomplete",
+            nonce="ack-incomplete",
+        )
+
+        response = client.post(_ack_path(artifact_id), content=body, headers=headers)
+
+        assert response.status_code == 409, response.json()
+        assert response.json()["error_code"] == "media_artifact.delivery_not_completed"
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            assert delivery.acked_at is None
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize("mismatch", ["byte_size", "checksum"])
+def test_first_delivery_ack_rejects_mismatched_received_facts(
+    tmp_path: Path,
+    mismatch: str,
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    media_bytes = _png()
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client,
+                media_bytes,
+                key=f"ack-mismatch-source-{mismatch}",
+                nonce=f"ack-mismatch-source-{mismatch}",
+            )
+        )
+        download = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce=f"ack-mismatch-pull-{mismatch}"),
+        )
+        assert download.status_code == 200, download.json()
+        delivery_id = download.headers["x-npcink-delivery-id"]
+        payload = {
+            "contract_version": "media_artifact_delivery_ack.v1",
+            "delivery_id": delivery_id,
+            "received_byte_size": (
+                len(media_bytes) - 1 if mismatch == "byte_size" else len(media_bytes)
+            ),
+            "received_checksum": (
+                "sha256:" + ("0" * 64)
+                if mismatch == "checksum"
+                else f"sha256:{hashlib.sha256(media_bytes).hexdigest()}"
+            ),
+        }
+        body, headers = _ack_headers(
+            artifact_id,
+            payload,
+            key=f"ack-mismatch-{mismatch}",
+            nonce=f"ack-mismatch-{mismatch}",
+        )
+
+        response = client.post(_ack_path(artifact_id), content=body, headers=headers)
+
+        assert response.status_code == 422, response.json()
+        assert response.json()["error_code"] == (
+            "media_artifact.delivery_integrity_mismatch"
+        )
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            assert delivery.acked_at is None
+            assert delivery.ack_idempotency_key is None
+    finally:
+        dispose_engine(database_url)
+
+
+def test_delivery_ack_hides_cross_site_delivery(tmp_path: Path) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    media_bytes = _png()
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, media_bytes, key="ack-cross-site-source", nonce="ack-cross-site-source")
+        )
+        download = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce="ack-cross-site-pull"),
+        )
+        assert download.status_code == 200, download.json()
+        delivery_id = download.headers["x-npcink-delivery-id"]
+        payload = {
+            "contract_version": "media_artifact_delivery_ack.v1",
+            "delivery_id": delivery_id,
+            "received_byte_size": len(media_bytes),
+            "received_checksum": f"sha256:{hashlib.sha256(media_bytes).hexdigest()}",
+        }
+        body, headers = _ack_headers(
+            artifact_id,
+            payload,
+            key="ack-cross-site",
+            nonce="ack-cross-site",
+            site_id="site_beta",
+            key_id="key_beta",
+        )
+
+        response = client.post(_ack_path(artifact_id), content=body, headers=headers)
+
+        assert response.status_code == 404, response.json()
+        assert response.json()["error_code"] == "media_artifact.delivery_not_found"
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            assert delivery.acked_at is None
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize("delivery_state", ["expired", "revoked"])
+def test_delivery_ack_rejects_expired_or_revoked_delivery(
+    tmp_path: Path,
+    delivery_state: str,
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    media_bytes = _png()
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client,
+                media_bytes,
+                key=f"ack-{delivery_state}-source",
+                nonce=f"ack-{delivery_state}-source",
+            )
+        )
+        download = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce=f"ack-{delivery_state}-pull"),
+        )
+        assert download.status_code == 200, download.json()
+        delivery_id = download.headers["x-npcink-delivery-id"]
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            if delivery_state == "expired":
+                delivery.ack_deadline_at = datetime.now(UTC) - timedelta(seconds=1)
+            else:
+                delivery.revoked_at = datetime.now(UTC)
+            session.commit()
+        payload = {
+            "contract_version": "media_artifact_delivery_ack.v1",
+            "delivery_id": delivery_id,
+            "received_byte_size": len(media_bytes),
+            "received_checksum": f"sha256:{hashlib.sha256(media_bytes).hexdigest()}",
+        }
+        body, headers = _ack_headers(
+            artifact_id,
+            payload,
+            key=f"ack-{delivery_state}",
+            nonce=f"ack-{delivery_state}",
+        )
+
+        response = client.post(_ack_path(artifact_id), content=body, headers=headers)
+
+        assert response.status_code == 410, response.json()
+        assert response.json()["error_code"] == "media_artifact.delivery_expired"
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            assert delivery.acked_at is None
+    finally:
+        dispose_engine(database_url)
+
+
+def test_delivery_ack_does_not_revive_a_purged_artifact(tmp_path: Path) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    media_bytes = _png()
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, media_bytes, key="ack-purged-source", nonce="ack-purged-source")
+        )
+        download = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce="ack-purged-pull"),
+        )
+        assert download.status_code == 200, download.json()
+        delivery_id = download.headers["x-npcink-delivery-id"]
+        cleanup_time = datetime.now(UTC)
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = cleanup_time - timedelta(seconds=1)
+            session.commit()
+        assert (
+            cleanup_expired_artifacts(
+                database_url=database_url,
+                artifact_store=build_artifact_store(settings),
+                now=cleanup_time,
+            )
+            == 1
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            purged_at = artifact.purged_at
+            expires_at = artifact.expires_at
+            assert artifact.status == "purged"
+            assert purged_at is not None
+
+        payload = {
+            "contract_version": "media_artifact_delivery_ack.v1",
+            "delivery_id": delivery_id,
+            "received_byte_size": len(media_bytes),
+            "received_checksum": f"sha256:{hashlib.sha256(media_bytes).hexdigest()}",
+        }
+        body, headers = _ack_headers(
+            artifact_id,
+            payload,
+            key="ack-purged",
+            nonce="ack-purged",
+        )
+
+        response = client.post(_ack_path(artifact_id), content=body, headers=headers)
+
+        assert response.status_code == 410, response.json()
+        assert response.json()["error_code"] == "media_artifact.delivery_expired"
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert artifact is not None and delivery is not None
+            assert artifact.status == "purged"
+            assert artifact.purged_at == purged_at
+            assert artifact.expires_at == expires_at
+            assert delivery.acked_at is None
+    finally:
+        dispose_engine(database_url)
+
+
+def test_ack_idempotency_key_cannot_be_reused_across_deliveries(tmp_path: Path) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    media_payloads = (_png(color="red"), _png(color="blue"))
+    try:
+        deliveries: list[tuple[str, str, bytes]] = []
+        for index, media_bytes in enumerate(media_payloads, start=1):
+            artifact_id = _artifact_id(
+                _upload(
+                    client,
+                    media_bytes,
+                    key=f"ack-key-reuse-source-{index}",
+                    nonce=f"ack-key-reuse-source-{index}",
+                )
+            )
+            download = client.get(
+                _download_path(artifact_id),
+                headers=_pull_headers(artifact_id, nonce=f"ack-key-reuse-pull-{index}"),
+            )
+            assert download.status_code == 200, download.json()
+            deliveries.append(
+                (artifact_id, download.headers["x-npcink-delivery-id"], media_bytes)
+            )
+
+        responses = []
+        for index, (artifact_id, delivery_id, media_bytes) in enumerate(
+            deliveries,
+            start=1,
+        ):
+            ack_payload = {
+                "contract_version": "media_artifact_delivery_ack.v1",
+                "delivery_id": delivery_id,
+                "received_byte_size": len(media_bytes),
+                "received_checksum": f"sha256:{hashlib.sha256(media_bytes).hexdigest()}",
+            }
+            body, headers = _ack_headers(
+                artifact_id,
+                ack_payload,
+                key="ack-key-shared-across-deliveries",
+                nonce=f"ack-key-reuse-{index}",
+            )
+            responses.append(
+                client.post(_ack_path(artifact_id), content=body, headers=headers)
+            )
+
+        assert responses[0].status_code == 200, responses[0].json()
+        assert responses[1].status_code == 409, responses[1].json()
+        assert responses[1].json()["error_code"] == (
+            "media_artifact.delivery_ack_conflict"
+        )
+        with get_session(database_url) as session:
+            acked = list(
+                session.scalars(
+                    select(MediaArtifactDelivery).where(
+                        MediaArtifactDelivery.ack_idempotency_key
+                        == "ack-key-shared-across-deliveries"
+                    )
+                )
+            )
+        assert len(acked) == 1
+        assert acked[0].delivery_id == deliveries[0][1]
+    finally:
+        dispose_engine(database_url)
+
+
+def test_concurrent_signed_pull_nonce_allows_exactly_one_request(tmp_path: Path) -> None:
+    database_url, _, _, seed_client = _client(tmp_path)
+    first_client = TestClient(seed_client.app)
+    second_client = TestClient(seed_client.app)
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                seed_client,
+                _png(),
+                key="concurrent-pull-source",
+                nonce="concurrent-pull-source",
+            )
+        )
+        headers = _pull_headers(artifact_id, nonce="concurrent-pull-shared-nonce")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(
+                    client.get,
+                    _download_path(artifact_id),
+                    headers=headers,
+                )
+                for client in (first_client, second_client)
+            ]
+        responses = [future.result() for future in futures]
+
+        assert sorted(response.status_code for response in responses) == [200, 409]
+        rejected = next(response for response in responses if response.status_code == 409)
+        assert rejected.json()["error_code"] == "auth.replay_blocked"
+        with get_session(database_url) as session:
+            deliveries = list(
+                session.scalars(
+                    select(MediaArtifactDelivery).where(
+                        MediaArtifactDelivery.artifact_id == artifact_id
+                    )
+                )
+            )
+            receipts = list(
+                session.scalars(
+                    select(ReplayReceipt).where(
+                        ReplayReceipt.replay_key == "concurrent-pull-shared-nonce"
+                    )
+                )
+            )
+        assert len(deliveries) == 1
+        assert len(receipts) == 3
+        assert {receipt.scope_kind for receipt in receipts} == {
+            "public_pull_site",
+            "public_pull_key",
+            "public_pull_ip",
+        }
+    finally:
+        first_client.close()
+        second_client.close()
+        dispose_engine(database_url)
+
+
+def test_signed_pull_security_failures_are_isolated_from_public_post_guard(
+    tmp_path: Path,
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    try:
+        upload = _upload(
+            client,
+            _png(),
+            key="pull-security-source",
+            nonce="pull-security-source",
+        )
+        artifact_id = _artifact_id(upload)
+        run_path = f"/v1/runs/{upload.json()['data']['run_id']}"
+        ordinary_get_headers = build_auth_headers(
+            "GET",
+            run_path,
+            site_id="site_alpha",
+        )
+        assert "X-Npcink-Nonce" not in ordinary_get_headers
+        ordinary_get = client.get(run_path, headers=ordinary_get_headers)
+        assert ordinary_get.status_code == 200, ordinary_get.json()
+
+        missing_nonce = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id),
+        )
+        assert missing_nonce.status_code == 401, missing_nonce.json()
+        assert missing_nonce.json()["error_code"] == "auth.nonce_required"
+        with get_session(database_url) as session:
+            scopes = set(session.scalars(select(RuntimeGuardEvent.scope_kind)))
+        assert scopes == {"public_pull_site", "public_pull_key", "public_pull_ip"}
+        assert not any(scope.startswith("public_post") for scope in scopes)
+
+        secret_query = "token=supersecret"
+        rejected_query = client.get(
+            f"{_download_path(artifact_id)}?{secret_query}",
+            headers=_pull_headers(artifact_id, query=secret_query),
+        )
+        assert rejected_query.status_code == 401, rejected_query.json()
+        with get_session(database_url) as session:
+            guard_payloads = list(session.scalars(select(RuntimeGuardEvent.payload_json)))
+        serialized_guard_payloads = json.dumps(guard_payloads, sort_keys=True)
+        assert "supersecret" not in serialized_guard_payloads
+        assert '"query"' not in serialized_guard_payloads
+        assert any(payload and payload.get("has_query") is True for payload in guard_payloads)
+
+        replay_headers = _pull_headers(artifact_id, nonce="pull-security-replay")
+        first = client.get(_download_path(artifact_id), headers=replay_headers)
+        assert first.status_code == 200, first.json()
+        replay = client.get(_download_path(artifact_id), headers=replay_headers)
+        assert replay.status_code == 409, replay.json()
+        assert replay.json()["error_code"] == "auth.replay_blocked"
+
+        cross_site = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(
+                artifact_id,
+                nonce="pull-security-cross-site",
+                site_id="site_beta",
+                key_id="key_beta",
+            ),
+        )
+        assert cross_site.status_code == 404, cross_site.json()
+
+        ranged_headers = _pull_headers(artifact_id, nonce="pull-security-range")
+        ranged_headers["Range"] = "bytes=0-9"
+        ranged = client.get(_download_path(artifact_id), headers=ranged_headers)
+        assert ranged.status_code == 416, ranged.json()
+        assert ranged.headers["accept-ranges"] == "none"
+
+        query = "credential=forbidden"
+        queried = client.get(
+            f"{_download_path(artifact_id)}?{query}",
+            headers=_pull_headers(
+                artifact_id,
+                nonce="pull-security-query",
+                query=query,
+            ),
+        )
+        assert queried.status_code == 400, queried.json()
+        assert queried.json()["error_code"] == "media_artifact.query_not_allowed"
+
+        keyed = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(
+                artifact_id,
+                nonce="pull-security-keyed",
+                idempotency_key="not-allowed",
+            ),
+        )
+        assert keyed.status_code == 400, keyed.json()
+        assert keyed.json()["error_code"] == "media_artifact.idempotency_key_not_allowed"
+    finally:
+        dispose_engine(database_url)
+
+
+def test_signed_pull_uses_distinct_client_ip_replay_scopes(tmp_path: Path) -> None:
+    database_url, _, _, seed_client = _client(tmp_path)
+    first_client = TestClient(seed_client.app, client=("198.51.100.10", 50000))
+    second_client = TestClient(seed_client.app, client=("198.51.100.11", 50000))
+    try:
+        artifact_id = _artifact_id(
+            _upload(seed_client, _png(), key="pull-ip-source", nonce="pull-ip-source")
+        )
+        first = first_client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce="pull-ip-first"),
+        )
+        second = second_client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce="pull-ip-second"),
+        )
+        assert first.status_code == 200, first.json()
+        assert second.status_code == 200, second.json()
+        with get_session(database_url) as session:
+            pull_ip_scopes = set(
+                session.scalars(
+                    select(ReplayReceipt.scope_id).where(
+                        ReplayReceipt.scope_kind == "public_pull_ip"
+                    )
+                )
+            )
+        assert pull_ip_scopes == {"198.51.100.10", "198.51.100.11"}
+    finally:
+        first_client.close()
+        second_client.close()
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize(
+    ("artifact_mutation", "expected_status", "expected_code"),
+    [
+        ("pending", 409, "media_artifact.not_available"),
+        ("expired", 410, "media_artifact.expired"),
+        ("storage_mismatch", 503, "media_artifact.bytes_unavailable"),
+    ],
+)
+def test_signed_pull_fails_closed_for_unavailable_artifact_or_bytes(
+    tmp_path: Path,
+    artifact_mutation: str,
+    expected_status: int,
+    expected_code: str,
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client,
+                _png(),
+                key=f"pull-fail-{artifact_mutation}",
+                nonce=f"pull-fail-{artifact_mutation}",
+            )
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            if artifact_mutation == "pending":
+                artifact.status = "pending"
+            elif artifact_mutation == "expired":
+                artifact.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            else:
+                artifact.byte_size += 1
+            session.commit()
+
+        response = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce=f"pull-fail-{artifact_mutation}"),
+        )
+        assert response.status_code == expected_status, response.json()
+        assert response.json()["error_code"] == expected_code
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize("failure_mode", ["interrupted", "checksum_mismatch", "oversize"])
+def test_delivery_is_not_completed_for_interrupted_or_mismatched_stream(
+    tmp_path: Path,
+    failure_mode: str,
+) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, _png(), key="stream-evidence", nonce="stream-evidence")
+        )
+        with get_session(database_url) as session:
+            prepared = prepare_media_artifact_delivery(
+                session=session,
+                artifact_store=build_artifact_store(settings),
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id="stream-evidence-trace",
+            )
+            delivery_id = prepared.delivery.delivery_id
+            expected_byte_size = prepared.delivery.expected_byte_size
+            expected_checksum = prepared.delivery.expected_checksum
+            session.commit()
+
+        chunks = iter_verified_delivery_chunks(
+            prepared.stream,
+            database_url=database_url,
+            delivery_id=delivery_id,
+            expected_byte_size=(
+                expected_byte_size - 1 if failure_mode == "oversize" else expected_byte_size
+            ),
+            expected_checksum=(
+                "sha256:" + ("0" * 64)
+                if failure_mode == "checksum_mismatch"
+                else expected_checksum
+            ),
+            chunk_size=prepared.chunk_size,
+        )
+        if failure_mode == "interrupted":
+            next(chunks)
+            chunks.close()
+        else:
+            delivered = b"".join(chunks)
+            if failure_mode == "oversize":
+                assert len(delivered) <= expected_byte_size - 1
+
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            assert delivery.completed_at is None
+            assert delivery.completed_byte_size is None
+            assert delivery.completed_checksum is None
+    finally:
+        dispose_engine(database_url)
 
 
 def test_upload_replay_and_conflict_do_not_duplicate_artifacts(tmp_path: Path) -> None:

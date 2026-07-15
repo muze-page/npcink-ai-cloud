@@ -191,7 +191,6 @@ def test_materializes_clean_platform_neutral_artifacts_and_commits(
             assert artifact_result == {
                 "artifact_id": artifact.artifact_id,
                 "artifact_reference": {"artifact_id": artifact.artifact_id},
-                "download_url": f"/v1/runtime/artifacts/{artifact.artifact_id}/download",
                 "status": "available",
                 "media_kind": "image",
                 "operation": "image.generate.v1",

@@ -23,6 +23,7 @@ from app.core.models import (
     MediaDerivativeJobMetric,
     RunRecord,
 )
+from app.domain.audio_generation.artifacts import AudioArtifactMaterializationError
 from app.domain.image_generation.materialization import (
     ImageGenerationArtifactMaterializationError,
 )
@@ -155,9 +156,13 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-def _create_audio_run(repository: RuntimeRepository) -> RunRecord:
+def _create_audio_run(
+    repository: RuntimeRepository,
+    *,
+    run_id: str = "run_audio_artifact_characterization",
+) -> RunRecord:
     return repository.create_run(
-        run_id="run_audio_artifact_characterization",
+        run_id=run_id,
         site_id="site_alpha",
         account_id=None,
         subscription_id=None,
@@ -175,9 +180,9 @@ def _create_audio_run(repository: RuntimeRepository) -> RunRecord:
         profile_id="audio.narration.default",
         canonical_run_id=None,
         status="running",
-        idempotency_key="idem-audio-artifact-characterization",
-        request_fingerprint="fingerprint-audio-artifact-characterization",
-        trace_id="trace-audio-artifact-characterization",
+        idempotency_key=f"idem-{run_id}",
+        request_fingerprint=f"fingerprint-{run_id}",
+        trace_id=f"trace-{run_id}",
         input_json={},
         execution_input_ciphertext=None,
         policy_json={"storage_mode": "result_only"},
@@ -520,11 +525,16 @@ def test_audio_materialization_correlates_short_ttl_artifact_and_output_referenc
         assert artifact.media_kind == "audio"
         assert audio["artifact"]["artifact_id"] == artifact.artifact_id
         assert audio["artifact"]["artifact_reference"] == {"artifact_id": artifact.artifact_id}
-        assert audio["url"] == audio["audio_url"] == audio["download_url"]
-        assert audio["artifact"]["download_url"] == audio["url"]
-        assert audio["artifact"]["authenticated_download_url"] == (
-            f"/v1/runtime/artifacts/{artifact.artifact_id}/download"
-        )
+        assert result["provider_response_format"] == "artifact_reference"
+        assert {
+            "url",
+            "audio_url",
+            "download_url",
+            "authenticated_download_url",
+            "subtitle_url",
+            "b64_json",
+        }.isdisjoint(audio)
+        assert {"download_url", "authenticated_download_url"}.isdisjoint(audio["artifact"])
         assert result["audio_materialization"] == {
             "status": "materialized",
             "artifact_count": 1,
@@ -534,6 +544,42 @@ def test_audio_materialization_correlates_short_ttl_artifact_and_output_referenc
         expires_at = _as_utc(artifact.expires_at)
         assert started_at + timedelta(minutes=2, seconds=50) <= expires_at
         assert expires_at <= datetime.now(UTC) + timedelta(minutes=3, seconds=10)
+
+
+@pytest.mark.parametrize(
+    "audios",
+    [
+        [],
+        [{}],
+        ["invalid"],
+        [{"url": "relative-provider-path"}],
+        [{"b64_json": ""}, {"b64_json": ""}],
+    ],
+)
+def test_audio_materialization_fails_closed_without_one_materializable_candidate(
+    runtime_context: RuntimeContext,
+    audios: list[object],
+) -> None:
+    with get_session(runtime_context.database_url) as session:
+        repository = RuntimeRepository(session)
+        candidate_kind = type(audios[0]).__name__ if audios else "empty"
+        run = _create_audio_run(
+            repository,
+            run_id=f"run_audio_invalid_{len(audios)}_{candidate_kind}",
+        )
+        with pytest.raises(AudioArtifactMaterializationError):
+            runtime_context.service._materialize_audio_generation_output(
+                run,
+                repository=repository,
+                provider_output={
+                    "artifact_type": "audio_generation_candidates",
+                    "contract_version": "audio_generation_result.v1",
+                    "audios": audios,
+                },
+            )
+        assert session.scalar(
+            select(MediaArtifact).where(MediaArtifact.run_id == run.run_id)
+        ) is None
 
 
 def test_image_generation_materialization_returns_only_artifact_references(
@@ -568,7 +614,6 @@ def test_image_generation_materialization_returns_only_artifact_references(
             {
                 "artifact_id": artifact.artifact_id,
                 "artifact_reference": {"artifact_id": artifact.artifact_id},
-                "download_url": f"/v1/runtime/artifacts/{artifact.artifact_id}/download",
                 "status": "available",
                 "media_kind": "image",
                 "operation": "image.generate.v1",

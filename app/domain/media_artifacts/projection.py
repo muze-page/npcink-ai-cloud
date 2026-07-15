@@ -28,6 +28,16 @@ _PRIVATE_ARTIFACT_FIELDS = frozenset(
         "purge_last_attempt_at",
         "purge_next_attempt_at",
         "purge_last_error_code",
+        "url",
+        "audio_url",
+        "download_url",
+        "authenticated_download_url",
+        "subtitle_url",
+        "public_download_token",
+        "token",
+        "b64_json",
+        "base64",
+        "data_url",
     }
 )
 
@@ -47,10 +57,11 @@ def project_media_artifact_lifecycle(
     recursively scans arbitrary result JSON.
     """
 
-    if not _known_artifact_references(result):
+    if not _is_known_artifact_envelope(result):
         return result
 
     projected = deepcopy(result)
+    _strip_known_delivery_credentials(projected)
     references = _known_artifact_references(projected)
 
     artifact_ids = _bounded_unique_artifact_ids(references)
@@ -75,6 +86,39 @@ def project_media_artifact_lifecycle(
         _project_current_lifecycle(reference, artifact=artifact, now=current_time)
 
     return projected
+
+
+def _is_known_artifact_envelope(result: dict[str, Any]) -> bool:
+    artifact_type = str(result.get("artifact_type") or "")
+    contract_version = str(result.get("contract_version") or "")
+    return (artifact_type, contract_version) in {
+        (MEDIA_UPLOAD_ARTIFACT_TYPE, MEDIA_UPLOAD_RESULT_CONTRACT),
+        (MEDIA_DERIVATIVE_ARTIFACT_TYPE, MEDIA_DERIVATIVE_RESULT_CONTRACT),
+        (_IMAGE_GENERATION_ARTIFACT_TYPE, IMAGE_GENERATION_RESULT_CONTRACT),
+        (_AUDIO_GENERATION_ARTIFACT_TYPE, AUDIO_GENERATION_RESULT_CONTRACT),
+    }
+
+
+def _strip_known_delivery_credentials(result: dict[str, Any]) -> None:
+    artifact = result.get("artifact")
+    if isinstance(artifact, dict):
+        _strip_private_fields(artifact)
+    artifacts = result.get("artifacts")
+    if isinstance(artifacts, list):
+        for item in artifacts:
+            if isinstance(item, dict):
+                _strip_private_fields(item)
+    for collection_name in ("audios", "items"):
+        items = result.get(collection_name)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            _strip_private_fields(item)
+            nested_artifact = item.get("artifact")
+            if isinstance(nested_artifact, dict):
+                _strip_private_fields(nested_artifact)
 
 
 def _known_artifact_references(result: dict[str, Any]) -> list[dict[str, Any]]:

@@ -562,7 +562,6 @@ def _artifact_result(artifact: MediaArtifact) -> dict[str, Any]:
     return {
         "artifact_id": artifact.artifact_id,
         "artifact_reference": {"artifact_id": artifact.artifact_id},
-        "download_url": f"/v1/runtime/artifacts/{artifact.artifact_id}/download",
         "status": artifact.status,
         "media_kind": artifact.media_kind,
         "operation": artifact.operation,

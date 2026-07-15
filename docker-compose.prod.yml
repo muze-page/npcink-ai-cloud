@@ -65,7 +65,12 @@ services:
         PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
     image: npcink-ai-cloud-api:prod
     restart: unless-stopped
-    command: gunicorn -k uvicorn.workers.UvicornWorker -w ${NPCINK_CLOUD_API_WORKERS:-2} -b 0.0.0.0:8000 app.api.main:app
+    command: >-
+      gunicorn -k uvicorn.workers.UvicornWorker
+      --forwarded-allow-ips ${NPCINK_CLOUD_PROXY_SUBNET:-172.28.0.0/24}
+      -w ${NPCINK_CLOUD_API_WORKERS:-2}
+      -b 0.0.0.0:8000
+      app.api.main:app
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -412,3 +417,9 @@ volumes:
   cloud-artifacts-prod:
   cloud-postgres-prod:
   cloud-redis-prod:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${NPCINK_CLOUD_PROXY_SUBNET:-172.28.0.0/24}

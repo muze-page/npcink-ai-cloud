@@ -130,14 +130,12 @@ def test_connector_contract_freezes_one_suggestion_only_runtime() -> None:
         assert required in connector
 
 
-def test_media_contract_tracks_p3_b4a_projection_and_remaining_targets() -> None:
+def test_media_contract_tracks_p3_b4b1_delivery_and_remaining_targets() -> None:
     media = _read("docs/media-runtime-boundary-v1.md")
 
     for required in (
-        (
-            "Status: P3-B4A dynamic artifact lifecycle projection implemented; "
-            "B4B-B5 remain target work."
-        ),
+        "Status: P3-B4B1 signed pull and delivery ACK implemented;",
+        "B4B2 legacy-route",
         "P3-B3A atomically replaces that pre-GA public POST route with two resources",
         "P3-B3B1 atomically replaces provider-media image-generation results",
         "P3-B3B2 atomically replaces URL/data-URL WordPress alt-text vision input",
@@ -155,6 +153,8 @@ def test_media_contract_tracks_p3_b4a_projection_and_remaining_targets() -> None
         "image.generate.v1",
         "GET /v1/runtime/media/artifacts/{artifact_id}/download",
         "POST /v1/runtime/media/artifacts/{artifact_id}/delivery-ack",
+        "independent `MediaArtifactDelivery` evidence",
+        "`public_pull_*` replay/rate/rejection scopes",
         "## 7. ArtifactStore Boundary",
         "delivery acknowledgement is never proof of local application",
     ):

@@ -303,6 +303,7 @@ def cleanup_expired_artifacts(
                 MediaArtifact.artifact_id,
             )
             .limit(success_limit)
+            .with_for_update(skip_locked=True)
         )
         artifacts = list(s.scalars(statement))
         purged = 0
@@ -351,7 +352,6 @@ def build_artifact_result_json(artifact: MediaArtifact) -> dict[str, object]:
         "artifact": {
             "artifact_id": artifact.artifact_id,
             "artifact_reference": {"artifact_id": artifact.artifact_id},
-            "download_url": f"/v1/runtime/artifacts/{artifact.artifact_id}/download",
             "expires_at": artifact.expires_at.isoformat() if artifact.expires_at else None,
             "suggested_filename": suggested_filename,
             "filename_basis": {

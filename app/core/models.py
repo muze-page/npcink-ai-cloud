@@ -1747,6 +1747,50 @@ class MediaArtifact(Base):
     )
 
 
+class MediaArtifactDelivery(Base):
+    __tablename__ = "media_artifact_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "site_id",
+            "ack_idempotency_key",
+            name="uq_media_artifact_deliveries_site_ack_key",
+        ),
+    )
+
+    delivery_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("media_artifacts.artifact_id"), index=True
+    )
+    site_id: Mapped[str] = mapped_column(String(191), index=True)
+    expected_byte_size: Mapped[int] = mapped_column(Integer)
+    expected_checksum: Mapped[str] = mapped_column(String(128))
+    pull_trace_id: Mapped[str] = mapped_column(String(64), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_byte_size: Mapped[int | None] = mapped_column(Integer)
+    completed_checksum: Mapped[str | None] = mapped_column(String(128))
+    ack_deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ack_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    ack_request_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    ack_trace_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    received_byte_size: Mapped[int | None] = mapped_column(Integer)
+    received_checksum: Mapped[str | None] = mapped_column(String(128))
+    byte_size_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    checksum_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    retention_expires_at_before: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    retention_expires_at_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class AudioAsset(Base):
     __tablename__ = "audio_assets"
 

@@ -132,6 +132,21 @@ def test_delete_is_idempotent_and_metadata_never_exposes_path(tmp_path: Path) ->
     store.delete(result.storage_key)
 
 
+def test_metadata_normalizes_stream_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingReader(io.BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            raise OSError("volume read failed")
+
+    store = LocalVolumeArtifactStore(tmp_path / "artifacts")
+    monkeypatch.setattr(store, "open", lambda storage_key: FailingReader(b"payload"))
+
+    with pytest.raises(ArtifactStoreError, match="metadata read failed"):
+        store.metadata("obj_" + ("a" * 32))
+
+
 def test_example_environment_keys_match_settings_contract() -> None:
     example = (Path(__file__).resolve().parents[2] / ".env.example").read_text()
     assert "NPCINK_CLOUD_ARTIFACT_STORE_ROOT=" in example
