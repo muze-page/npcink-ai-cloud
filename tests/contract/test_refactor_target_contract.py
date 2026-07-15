@@ -130,11 +130,14 @@ def test_connector_contract_freezes_one_suggestion_only_runtime() -> None:
         assert required in connector
 
 
-def test_media_contract_tracks_p3_b4b3_delivery_and_remaining_targets() -> None:
+def test_media_contract_tracks_p3_b4c1a_publication_and_remaining_targets() -> None:
     media = _read("docs/media-runtime-boundary-v1.md")
 
     for required in (
-        "Status: P3-B4B3 unified media delivery observability implemented;",
+        "Status: P3-B4C1a transaction-tracked artifact publication implemented;",
+        "P3-B4C1a routes all",
+        "Session-local in-memory no-delete quarantine",
+        "bounded artifact-store inventory versus database inventory scan",
         "B4B2 legacy-route",
         "B4B2 removes the legacy routes, token helpers",
         "Summary v2 reports started, stream-completed",

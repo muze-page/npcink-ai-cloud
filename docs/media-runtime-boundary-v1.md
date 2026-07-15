@@ -1,6 +1,6 @@
 # Media Runtime Boundary v1
 
-Status: P3-B4B3 unified media delivery observability implemented;
+Status: P3-B4C1a transaction-tracked artifact publication implemented;
 orphan/lifecycle reconciliation and B5 remain target work.
 
 ## 1. Purpose
@@ -17,8 +17,10 @@ This document began as the P0 target contract. Section 3 records the implemented
 P3-B1 byte-store foundation, P3-B2 streamed ingress, P3-B3A upload/image-job
 resource split, P3-B3B1 image-generation artifact convergence, and P3-B3B2
 artifact-referenced vision input, P3-B4A lifecycle projection, P3-B4B1 signed
-pull/delivery ACK, and P3-B4B2 legacy-route/permanent-audio-asset removal. The
-remaining orphan/lifecycle work described for B4-B5 is still target work.
+pull/delivery ACK, P3-B4B2 legacy-route/permanent-audio-asset removal, P3-B4B3
+unified delivery observability, and P3-B4C1a publication compensation. The
+remaining orphan/lifecycle reconciliation described for B4-B5 is still target
+work.
 
 ## 2. Stable Markers
 
@@ -165,8 +167,17 @@ artifact-only results:
 - sanitized output creates `MediaArtifact(operation=image.generate.v1)` under
   the current run/site with verified storage facts and a 30-minute TTL. A batch
   is all-or-nothing. Ordinary savepoint, outer transaction, normalization, and
-  run-finalization rollback cleans published objects; hard crashes and
-  uncertain commit outcomes remain B4 orphan-reconciliation work;
+  run-finalization rollback cleans published objects. P3-B4C1a routes all
+  active artifact producers through one transaction tracker; a DBAPI commit
+  whose outcome cannot be proven moves its publications out of active rollback
+  cleanup and into a deduplicated Session-local in-memory no-delete quarantine.
+  Rollback-cleanup delete failures quarantine only the failed keys before
+  raising. This tuple is not persistent evidence and has no production
+  consumer. A future P3-B4C2 reconciler must instead use a
+  bounded artifact-store inventory versus database inventory scan after a
+  safety window. The generic tracker resolves only the outer transaction;
+  image generation is the only current nested-savepoint producer and retains
+  explicit cleanup, successful-delete forgetting, and failed-delete quarantine;
 - `image_generation_result.v1` contains artifact references, validated media
   facts, `suggestion_only=true`, and `requires_local_review=true`. Download URL,
   provider URL, Base64, raw response, `storage_key`, and WordPress write fields

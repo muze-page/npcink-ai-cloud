@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import sqlalchemy as sa
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.domain.media_artifacts import (
@@ -156,14 +158,11 @@ def test_example_environment_keys_match_settings_contract() -> None:
     assert "artifact_store_chunk_bytes" in fields
 
 
-def test_metadata_flush_failure_removes_new_store_object(tmp_path: Path) -> None:
-    class FailingSession:
-        def add(self, value: object) -> None:
-            pass
-
-        def flush(self) -> None:
-            raise RuntimeError("database unavailable")
-
+def test_metadata_flush_failure_rollback_removes_new_store_object(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
     store = LocalVolumeArtifactStore(tmp_path / "artifacts")
     result = SimpleNamespace(
         output_bytes=b"result",
@@ -175,13 +174,20 @@ def test_metadata_flush_failure_removes_new_store_object(tmp_path: Path) -> None
         checksum="sha256:ignored",
         processing_warnings=[],
     )
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        create_artifact(
-            session=cast(Any, FailingSession()),
-            artifact_store=store,
-            run_id="run_test",
-            site_id="site_test",
-            result=cast(Any, result),
-            source_media_type="image",
-        )
+    with Session(engine) as session:
+        def fail_flush() -> None:
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(session, "flush", fail_flush)
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            create_artifact(
+                session=session,
+                artifact_store=store,
+                run_id="run_test",
+                site_id="site_test",
+                result=cast(Any, result),
+                source_media_type="image",
+            )
+        session.rollback()
+    engine.dispose()
     assert not [path for path in (tmp_path / "artifacts").rglob("obj_*") if path.is_file()]

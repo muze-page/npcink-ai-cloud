@@ -26,6 +26,10 @@ from app.domain.media_artifacts import (
     ArtifactStoreError,
     LocalVolumeArtifactStore,
 )
+from app.domain.media_artifacts.publication import (
+    tracked_artifact_storage_keys,
+    uncertain_artifact_storage_keys,
+)
 
 
 @pytest.fixture
@@ -320,6 +324,12 @@ def test_batch_failure_rolls_back_rows_and_deletes_earlier_objects(
             session.scalars(select(MediaArtifact).where(MediaArtifact.run_id == run.run_id))
         ) == []
         assert _stored_paths(artifact_root) == []
+        assert tracked_artifact_storage_keys(session) == ()
+        assert uncertain_artifact_storage_keys(session) == ()
+        run.status = "failed"
+        session.commit()
+        assert tracked_artifact_storage_keys(session) == ()
+        assert uncertain_artifact_storage_keys(session) == ()
 
 
 def test_rejects_mime_mismatch_before_publication(
@@ -488,8 +498,10 @@ def test_storage_metadata_mismatch_is_cleaned_up(
     assert _stored_paths(artifact_root) == []
 
 
-def test_delete_failure_surfaces_cleanup_uncertainty(
+@pytest.mark.parametrize("persistent_delete_failure", [False, True])
+def test_delete_failure_is_quarantined_across_failed_run_commit(
     artifact_context: tuple[str, Path],
+    persistent_delete_failure: bool,
 ) -> None:
     database_url, artifact_root = artifact_context
     delegate = LocalVolumeArtifactStore(artifact_root)
@@ -503,7 +515,7 @@ def test_delete_failure_surfaces_cleanup_uncertainty(
 
         def delete(self, storage_key: str) -> None:
             self.delete_calls += 1
-            if self.delete_calls == 1:
+            if persistent_delete_failure or self.delete_calls == 1:
                 raise ArtifactStoreError("injected delete failure")
             delegate.delete(storage_key)
 
@@ -531,6 +543,20 @@ def test_delete_failure_surfaces_cleanup_uncertainty(
             )
         assert error.value.error_code == "image_generation.artifact_cleanup_uncertain"
         assert len(error.value.storage_keys) == 1
-        session.rollback()
-    assert store.delete_calls == 2
-    assert _stored_paths(artifact_root) == []
+        storage_key = error.value.storage_keys[0]
+        assert tracked_artifact_storage_keys(session) == ()
+        assert uncertain_artifact_storage_keys(session) == (storage_key,)
+        assert list(
+            session.scalars(select(MediaArtifact).where(MediaArtifact.run_id == run.run_id))
+        ) == []
+
+        run.status = "failed"
+        session.commit()
+
+        assert tracked_artifact_storage_keys(session) == ()
+        assert uncertain_artifact_storage_keys(session) == (storage_key,)
+        assert list(
+            session.scalars(select(MediaArtifact).where(MediaArtifact.run_id == run.run_id))
+        ) == []
+    assert store.delete_calls == 1
+    assert len(_stored_paths(artifact_root)) == 1

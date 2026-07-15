@@ -18,6 +18,7 @@ from app.domain.agent_workflow_metadata import (
     metadata_projection_tokens,
 )
 from app.domain.media_artifacts import ArtifactStorageMetadata, ArtifactStore, ArtifactStoreError
+from app.domain.media_artifacts.publication import publish_and_track_artifact
 from app.domain.media_derivatives.contracts import (
     ARTIFACT_DEFAULT_TTL_MINUTES,
     MAX_IMAGE_DIMENSION,
@@ -215,8 +216,10 @@ def create_artifact(
 ) -> MediaArtifact:
     artifact_id = f"art_{uuid4().hex}"
     now = datetime.now(UTC)
-    stored = artifact_store.put(
-        BytesIO(result.output_bytes),
+    stored = publish_and_track_artifact(
+        session,
+        store=artifact_store,
+        stream=BytesIO(result.output_bytes),
         max_bytes=max(1, result.filesize_bytes),
         metadata={"media_kind": source_media_type},
     )
@@ -237,12 +240,8 @@ def create_artifact(
         processing_warnings_json={"warnings": result.processing_warnings},
         expires_at=now + timedelta(minutes=ttl_minutes),
     )
-    try:
-        session.add(artifact)
-        session.flush()
-    except Exception:
-        artifact_store.delete(stored.storage_key)
-        raise
+    session.add(artifact)
+    session.flush()
     return artifact
 
 

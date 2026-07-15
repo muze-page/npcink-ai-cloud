@@ -28,7 +28,8 @@ from app.domain.media_artifacts import (
 )
 from app.domain.media_artifacts.publication import (
     forget_artifact_publications,
-    track_artifact_publication,
+    publish_and_track_artifact,
+    quarantine_artifact_publications,
 )
 from app.domain.media_derivatives.contracts import (
     MAX_DECODED_IMAGE_BYTES,
@@ -209,30 +210,21 @@ def materialize_image_generation_candidates(
                             "generated artifacts exceed the run byte limit"
                         )
                     try:
-                        stored = artifact_store.put(
-                            cleaned.stream,
+                        stored = publish_and_track_artifact(
+                            session,
+                            store=artifact_store,
+                            stream=cleaned.stream,
                             max_bytes=min(
                                 max_image_bytes,
                                 max_run_bytes - (run_io_bytes - cleaned.byte_size),
                             ),
                             metadata={"operation": IMAGE_GENERATION_OPERATION},
+                            cleanup_error_factory=_cleanup_error,
                         )
                     except ArtifactStorePublicationUncertainError as error:
                         stored_batch.append(error.storage_metadata)
-                        track_artifact_publication(
-                            session,
-                            store=artifact_store,
-                            storage_key=error.storage_metadata.storage_key,
-                            cleanup_error_factory=_cleanup_error,
-                        )
                         raise
                     stored_batch.append(stored)
-                    track_artifact_publication(
-                        session,
-                        store=artifact_store,
-                        storage_key=stored.storage_key,
-                        cleanup_error_factory=_cleanup_error,
-                    )
                     if (
                         stored.byte_size != cleaned.byte_size
                         or stored.byte_size <= 0
@@ -589,8 +581,17 @@ def _cleanup_failed_batch(
             deleted.append(stored.storage_key)
         except Exception:
             failed.append(stored.storage_key)
-    forget_artifact_publications(session, storage_keys=deleted)
+    forget_artifact_publications(
+        session,
+        store=artifact_store,
+        storage_keys=deleted,
+    )
     if failed:
+        quarantine_artifact_publications(
+            session,
+            store=artifact_store,
+            storage_keys=failed,
+        )
         raise ImageGenerationArtifactCleanupUncertainError(tuple(failed))
 
 

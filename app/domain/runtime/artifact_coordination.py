@@ -32,12 +32,11 @@ from app.domain.image_generation.provider_fetch import (
     PROVIDER_IMAGE_DEFAULT_TIMEOUT_SECONDS,
 )
 from app.domain.media_artifacts import (
-    ArtifactStorageMetadata,
     ArtifactStore,
     ArtifactStoreError,
-    ArtifactStorePublicationUncertainError,
     read_artifact_bytes,
 )
+from app.domain.media_artifacts.publication import publish_and_track_artifact
 from app.domain.media_derivatives.artifacts import (
     ValidatedImageUpload,
     build_artifact_result_json,
@@ -369,14 +368,15 @@ class RuntimeArtifactCoordinationService:
                     "task_backend": {"enabled": False},
                 },
             }
-            stored: ArtifactStorageMetadata | None = None
             try:
                 try:
                     stream.seek(0)
                 except OSError as error:
                     raise ArtifactStoreError("upload spool seek failed") from error
-                stored = self.dependencies.artifact_store.put(
-                    stream,
+                stored = publish_and_track_artifact(
+                    session,
+                    store=self.dependencies.artifact_store,
+                    stream=stream,
                     max_bytes=MAX_UPLOAD_BYTES_IMAGE,
                     metadata={"media_kind": "image"},
                 )
@@ -439,8 +439,6 @@ class RuntimeArtifactCoordinationService:
                 session.commit()
             except IntegrityError:
                 session.rollback()
-                if stored is not None:
-                    self._delete_upload_or_raise(stored)
                 return self._load_upload_replay_after_race(
                     site_id=site_id,
                     idempotency_key=resolved_idempotency_key,
@@ -449,8 +447,6 @@ class RuntimeArtifactCoordinationService:
                 )
             except BaseException:
                 session.rollback()
-                if stored is not None:
-                    self._delete_upload_or_raise(stored)
                 raise
             return self.dependencies.execution_response_builder(
                 run,
@@ -502,12 +498,6 @@ class RuntimeArtifactCoordinationService:
                 repository=repository,
                 idempotent_replay=True,
             )
-
-    def _delete_upload_or_raise(self, stored: Any) -> None:
-        try:
-            self.dependencies.artifact_store.delete(stored.storage_key)
-        except ArtifactStoreError as error:
-            raise ArtifactStorePublicationUncertainError(stored) from error
 
     def enqueue_media_job_run(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import io
 import json
 from collections.abc import Iterator
@@ -26,6 +27,7 @@ from app.core.models import (
 from app.domain.audio_generation.artifacts import AudioArtifactMaterializationConfig
 from app.domain.image_generation.materialization import ImageGenerationMaterializationConfig
 from app.domain.media_artifacts import LocalVolumeArtifactStore
+from app.domain.media_derivatives.artifacts import ValidatedImageUpload
 from app.domain.media_derivatives.errors import MediaDerivativeSourceDecodeFailedError
 from app.domain.media_derivatives.processor import MediaDerivativeResult
 from app.domain.runtime import artifact_coordination
@@ -684,6 +686,86 @@ def test_enqueue_media_job_unique_race_reloads_winner_without_loser_side_effects
             )
         )
         assert [run.run_id for run in persisted] == [winner_run_id]
+
+
+def test_media_upload_integrity_race_rolls_back_object_before_loading_replay(
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedUploadRaceController(RecordingRunController):
+        def create_durable_run(
+            self,
+            *,
+            repository: RuntimeRepository,
+            command: RuntimeRunCreationCommand,
+        ) -> RunRecord:
+            del repository
+            self.creation_commands.append(command)
+            raise IntegrityError(
+                "INSERT INTO run_records",
+                {"site_id": command.site_id, "idempotency_key": command.idempotency_key},
+                Exception("uq_run_records_site_idempotency"),
+            )
+
+    controller = SimulatedUploadRaceController()
+    recording_dependencies = RecordingCoordinationDependencies(database_url)
+    dependencies = recording_dependencies.build()
+    service = RuntimeArtifactCoordinationService(
+        config=RuntimeArtifactCoordinationConfig(),
+        dependencies=dependencies,
+        run_controller=controller,
+        execution_input_loader=lambda run: {},
+    )
+    artifact_root = Path(database_url.removeprefix("sqlite+pysqlite:///")).parent / "artifacts"
+    replay_calls: list[dict[str, str]] = []
+
+    def load_replay_after_race(**kwargs: str) -> RuntimeExecutionResponse:
+        assert not [path for path in artifact_root.rglob("obj_*") if path.is_file()]
+        replay_calls.append(dict(kwargs))
+        return cast(
+            RuntimeExecutionResponse,
+            SimpleNamespace(
+                run_id="run_upload_race_winner",
+                status="succeeded",
+                idempotent_replay=True,
+            ),
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_load_upload_replay_after_race",
+        load_replay_after_race,
+    )
+    payload = b"validated-upload-payload"
+    checksum = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+    response = service.create_media_upload(
+        site_id="site_alpha",
+        request_payload={"request_contract_version": "media_upload_request.v1"},
+        stream=io.BytesIO(payload),
+        upload=ValidatedImageUpload(
+            byte_size=len(payload),
+            checksum=checksum,
+            content_type="image/png",
+            format="png",
+            width=1,
+            height=1,
+        ),
+        ttl_minutes=10,
+        idempotency_key="idem-upload-race",
+        trace_id="trace-upload-race",
+    )
+
+    assert response.run_id == "run_upload_race_winner"
+    assert response.idempotent_replay is True
+    assert replay_calls == [
+        {
+            "site_id": "site_alpha",
+            "idempotency_key": "idem-upload-race",
+            "request_fingerprint": f"fingerprint:site_alpha:{checksum}:",
+            "upload_checksum": checksum,
+        }
+    ]
 
 
 def test_execute_media_derivative_success_records_artifact_metric_and_terminal_evidence(

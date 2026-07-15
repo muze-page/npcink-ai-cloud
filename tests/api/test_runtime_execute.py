@@ -9,7 +9,8 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.orm import Session
 
 from app.adapters.callbacks.base import RuntimeCallbackDispatcher
 from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
@@ -20,9 +21,10 @@ from app.adapters.providers.base import (
     ProviderExecutionError,
     ProviderExecutionRequest,
     ProviderExecutionResult,
+    ProviderMediaCandidate,
 )
 from app.adapters.providers.minimax import MiniMaxProviderAdapter
-from app.adapters.providers.openai import OpenAIProviderAdapter
+from app.adapters.providers.openai import SAMPLE_IMAGE_PNG, OpenAIProviderAdapter
 from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.api.main import create_app
 from app.core import security as security_module
@@ -57,6 +59,11 @@ from app.domain.hosted_model_defaults import (
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
 )
+from app.domain.media_artifacts.publication import (
+    tracked_artifact_storage_keys,
+    uncertain_artifact_storage_keys,
+)
+from app.domain.media_artifacts.store import ArtifactStoreError, LocalVolumeArtifactStore
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
 from app.domain.web_search.service import (
@@ -818,6 +825,117 @@ def test_execute_route_defaults_image_generation_to_grok_imagine(
         assert artifact.height == 1
         assert artifact.byte_size == artifact_result["filesize_bytes"]
         assert artifact.checksum == artifact_result["checksum"]
+
+    dispose_engine(database_url)
+
+
+def test_inline_image_cleanup_failure_is_quarantined_before_failed_run_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InvalidSecondImageProvider(OpenAIProviderAdapter):
+        def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+            return ProviderExecutionResult(
+                output={"model_id": request.model_id, "candidate_count": 2},
+                latency_ms=200,
+                tokens_in=8,
+                tokens_out=0,
+                cost=0.0,
+                media_candidates=(
+                    ProviderMediaCandidate(
+                        index=1,
+                        content_bytes=SAMPLE_IMAGE_PNG,
+                        claimed_mime_type="image/png",
+                        claimed_width=1,
+                        claimed_height=1,
+                    ),
+                    ProviderMediaCandidate(
+                        index=2,
+                        content_bytes=b"not-an-image",
+                        claimed_mime_type="image/png",
+                    ),
+                ),
+            )
+
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"openai": InvalidSecondImageProvider()},
+    )
+    delete_calls: list[str] = []
+
+    def fail_delete(self: LocalVolumeArtifactStore, storage_key: str) -> None:
+        del self
+        delete_calls.append(storage_key)
+        raise ArtifactStoreError("injected delete failure")
+
+    monkeypatch.setattr(LocalVolumeArtifactStore, "delete", fail_delete)
+    committed_publication_states: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+
+    def capture_publication_state(session: Session) -> None:
+        quarantine = uncertain_artifact_storage_keys(session)
+        if quarantine:
+            committed_publication_states.append(
+                (tracked_artifact_storage_keys(session), quarantine)
+            )
+
+    event.listen(Session, "after_commit", capture_publication_state)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-image",
+        "contract_version": "image_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "input": {
+            "contract_version": "image_generation_request.v1",
+            "prompt": "A clean product photo of a blue running shoe",
+            "aspect_ratio": "1:1",
+            "resolution": "high",
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    try:
+        response = client.post(
+            "/v1/runtime/execute",
+            content=body,
+            headers=merge_json_headers(
+                build_auth_headers(
+                    "POST",
+                    "/v1/runtime/execute",
+                    site_id="site_alpha",
+                    idempotency_key="idem-image-cleanup-quarantine-001",
+                    nonce="nonce-image-cleanup-quarantine-001",
+                    trace_id="traceimagecleanupquarantine001",
+                    body=body,
+                )
+            ),
+        )
+    finally:
+        event.remove(Session, "after_commit", capture_publication_state)
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert response.json()["status"] == "error"
+    assert data["status"] == "failed"
+    assert data["error_code"] == "image_generation.artifact_cleanup_uncertain"
+    assert len(delete_calls) == 1
+    storage_key = delete_calls[0]
+    assert committed_publication_states == [((), (storage_key,))]
+
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, data["run_id"])
+        assert run is not None
+        assert run.status == "failed"
+        assert run.error_code == "image_generation.artifact_cleanup_uncertain"
+        assert list(
+            session.scalars(select(MediaArtifact).where(MediaArtifact.run_id == run.run_id))
+        ) == []
+    stored_paths = [
+        path for path in (tmp_path / "artifacts").rglob("obj_*") if path.is_file()
+    ]
+    assert len(stored_paths) == 1
+    assert stored_paths[0].name == storage_key
 
     dispose_engine(database_url)
 

@@ -32,6 +32,9 @@ from app.domain.media_artifacts.delivery import (
     iter_verified_delivery_chunks,
     prepare_media_artifact_delivery,
 )
+from app.domain.media_artifacts.publication import (
+    ArtifactPublicationCleanupUncertainError,
+)
 from app.domain.media_derivatives.artifacts import cleanup_expired_artifacts
 from app.domain.media_derivatives.contracts import BLOCKED_RESPONSE_FIELDS, MediaJobRequest
 from app.domain.runtime.service import RuntimeService
@@ -190,6 +193,33 @@ def _upload(
     )
     headers["content-type"] = content_type
     return client.post(UPLOAD_PATH, content=body, headers=headers)
+
+
+def test_upload_publication_cleanup_uncertain_remains_storage_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+
+    def fail_cleanup(self: RuntimeService, **kwargs: object) -> object:
+        del self, kwargs
+        raise ArtifactPublicationCleanupUncertainError(
+            ("obj_00000000000000000000000000000011",)
+        )
+
+    monkeypatch.setattr(RuntimeService, "create_media_upload", fail_cleanup)
+    try:
+        response = _upload(
+            client,
+            _png(),
+            key="upload-cleanup-uncertain",
+            nonce="upload-cleanup-uncertain",
+        )
+
+        assert response.status_code == 503
+        assert response.json()["error_code"] == "media_upload.storage_unavailable"
+    finally:
+        dispose_engine(database_url)
 
 
 def _job_payload(source_artifact_id: str) -> dict[str, object]:

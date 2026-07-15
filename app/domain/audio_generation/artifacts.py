@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.models import MediaArtifact, RunRecord
 from app.domain.media_artifacts import ArtifactStore
+from app.domain.media_artifacts.publication import publish_and_track_artifact
 
 AUDIO_ARTIFACT_DEFAULT_TTL_MINUTES = 60
 AUDIO_ARTIFACT_DEFAULT_MAX_BYTES = 24 * 1024 * 1024
@@ -216,8 +217,12 @@ def _create_audio_artifact(
     artifact_store: ArtifactStore,
 ) -> MediaArtifact:
     artifact_id = f"art_{uuid4().hex}"
-    stored = artifact_store.put(
-        BytesIO(audio_bytes), max_bytes=len(audio_bytes), metadata={"media_kind": "audio"}
+    stored = publish_and_track_artifact(
+        session,
+        store=artifact_store,
+        stream=BytesIO(audio_bytes),
+        max_bytes=len(audio_bytes),
+        metadata={"media_kind": "audio"},
     )
     now = datetime.now(UTC)
     artifact = MediaArtifact(
@@ -241,12 +246,8 @@ def _create_audio_artifact(
         },
         expires_at=now + timedelta(minutes=max(1, int(ttl_minutes))),
     )
-    try:
-        session.add(artifact)
-        session.flush()
-    except Exception:
-        artifact_store.delete(stored.storage_key)
-        raise
+    session.add(artifact)
+    session.flush()
     return artifact
 
 
