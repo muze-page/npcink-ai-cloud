@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from app.adapters.providers.registry import resolve_execution_provider_adapters
 from app.api.auth import authorize_public_request, get_cloud_services
 from app.api.envelope import build_envelope
-from app.api.media_ingress import MediaIngress, MediaIngressError, receive_media_ingress
+from app.api.media_ingress import MediaIngressError, receive_media_ingress
 from app.core.db import get_session
 from app.core.logging import get_logger
 from app.core.security import extract_trace_id
@@ -21,15 +21,16 @@ from app.domain.media_artifacts import (
     ArtifactStoreError,
     build_artifact_store,
     iter_open_artifact_chunks,
-    read_artifact_bytes,
 )
 from app.domain.media_derivatives.artifacts import (
     get_artifact,
     is_artifact_expired,
+    validate_image_upload_stream,
 )
 from app.domain.media_derivatives.contracts import (
     MAX_UPLOAD_BYTES_IMAGE,
-    MediaDerivativeRequest,
+    MediaJobRequest,
+    MediaUploadRequest,
 )
 from app.domain.media_derivatives.errors import MediaDerivativeErrorBase
 from app.domain.media_derivatives.metrics import record_media_derivative_artifact_download
@@ -38,7 +39,7 @@ from app.domain.runtime.service import RuntimeService
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/v1/runtime", tags=["media-derivatives"])
+router = APIRouter(prefix="/v1/runtime", tags=["media-runtime"])
 
 
 def _get_runtime_service(request: Request) -> RuntimeService:
@@ -77,9 +78,8 @@ def _media_error_response(
     )
 
 
-def _parse_request_json(request_str: str) -> MediaDerivativeRequest:
-    data = json.loads(request_str)
-    return MediaDerivativeRequest.model_validate(data)
+def _parse_request_json(request_str: str, model: Any) -> Any:
+    return model.model_validate(json.loads(request_str))
 
 
 def _remaining_artifact_seconds(artifact: Any) -> int:
@@ -125,299 +125,33 @@ def _public_download_token_valid(artifact: Any, token: str) -> bool:
     return hmac.compare_digest(expected, actual)
 
 
-async def _create_media_derivative_from_ingress(
-    request: Request,
-    ingress: MediaIngress,
-) -> Any:
-    services = get_cloud_services(request)
-    artifact_store = build_artifact_store(services.settings)
-    auth = ingress.auth
-    request_json_str = ingress.request_json
-    source_bytes: bytes | None = None
-    watermark_bytes: bytes | None = None
-
-    if not request_json_str:
-        return _media_error_response(
-            status_code=400,
-            error_code="media_derivative.invalid_request",
-            message="request JSON is missing",
-            trace_id=auth.trace_id,
-        )
-
-    try:
-        derivative_request = _parse_request_json(request_json_str)
-    except json.JSONDecodeError:
-        return _media_error_response(
-            status_code=400,
-            error_code="media_derivative.invalid_request",
-            message="request JSON is invalid",
-            trace_id=auth.trace_id,
-        )
-    except ValueError as exc:
-        error_message = str(exc)
-        status_code = 422
-        error_code = "media_derivative.validation_error"
-
-        if "target_format" in error_message:
-            error_code = "media_derivative.invalid_format"
-        elif "source_media_type" in error_message:
-            error_code = "media_derivative.source_media_type_unavailable"
-        elif "watermark" in error_message:
-            error_code = "media_derivative.invalid_watermark"
-        elif "crop" in error_message:
-            error_code = "media_derivative.invalid_crop"
-        elif "ttl_minutes" in error_message:
-            error_code = "media_derivative.validation_error"
-        elif "quality" in error_message or "max_width" in error_message:
-            error_code = "media_derivative.validation_error"
-
-        return _media_error_response(
-            status_code=status_code,
-            error_code=error_code,
-            message=error_message,
-            trace_id=auth.trace_id,
-        )
-
-    try:
-        source_bytes = await ingress.read_upload_once(
-            ingress.source_file,
-            max_bytes=MAX_UPLOAD_BYTES_IMAGE,
-            too_large_message="uploaded file exceeds the size limit",
-        )
-        watermark_bytes = await ingress.read_upload_once(
-            ingress.watermark_file,
-            max_bytes=MAX_UPLOAD_BYTES_IMAGE,
-            too_large_message="uploaded watermark file exceeds the size limit",
-        )
-    except MediaIngressError as error:
-        return _media_error_response(
-            status_code=error.status_code,
-            error_code=error.error_code,
-            message=error.message,
-            trace_id=auth.trace_id,
-        )
-
-    source_artifact_id: str | None = None
-    watermark_artifact_id: str | None = None
-
-    if source_bytes is not None:
-        if len(source_bytes) > MAX_UPLOAD_BYTES_IMAGE:
-            return _media_error_response(
-                status_code=413,
-                error_code="media_derivative.upload_too_large",
-                message="uploaded file exceeds the size limit",
-                trace_id=auth.trace_id,
-            )
-    elif derivative_request.source is not None and derivative_request.source.artifact_id:
-        source_artifact_id = derivative_request.source.artifact_id
-    else:
-        return _media_error_response(
-            status_code=400,
-            error_code="media_derivative.invalid_source",
-            message="exactly one source mode is required",
-            trace_id=auth.trace_id,
-        )
-
-    watermark = derivative_request.cloud_job_payload.watermark
-    if watermark is None:
-        if watermark_bytes is not None:
-            return _media_error_response(
-                status_code=400,
-                error_code="media_derivative.invalid_watermark",
-                message="watermark options are required when watermark_file is provided",
-                trace_id=auth.trace_id,
-            )
-    elif watermark.type == "text":
-        if watermark_bytes is not None or watermark.artifact_id:
-            return _media_error_response(
-                status_code=400,
-                error_code="media_derivative.invalid_watermark",
-                message="text watermark must not include watermark_file or watermark.artifact_id",
-                trace_id=auth.trace_id,
-            )
-    elif watermark_bytes is not None:
-        if watermark.artifact_id:
-            return _media_error_response(
-                status_code=400,
-                error_code="media_derivative.invalid_watermark",
-                message="exactly one watermark source mode is required",
-                trace_id=auth.trace_id,
-            )
-        if len(watermark_bytes) > MAX_UPLOAD_BYTES_IMAGE:
-            return _media_error_response(
-                status_code=413,
-                error_code="media_derivative.upload_too_large",
-                message="uploaded watermark file exceeds the size limit",
-                trace_id=auth.trace_id,
-            )
-    elif watermark is not None and watermark.artifact_id:
-        watermark_artifact_id = watermark.artifact_id
-    elif watermark is not None:
-        return _media_error_response(
-            status_code=400,
-            error_code="media_derivative.invalid_watermark",
-            message="watermark requires watermark_file or watermark.artifact_id",
-            trace_id=auth.trace_id,
-        )
-
-    if source_artifact_id:
-        with get_session(services.settings.database_url) as session:
-            artifact = get_artifact(
-                session,
-                source_artifact_id,
-                site_id=auth.site_id,
-            )
-            if artifact is None or is_artifact_expired(artifact):
-                return _media_error_response(
-                    status_code=404,
-                    error_code="media_derivative.source_artifact_not_found",
-                    message="referenced source artifact not found",
-                    trace_id=auth.trace_id,
-                )
-            try:
-                source_bytes = read_artifact_bytes(artifact_store, artifact.storage_key)
-            except ArtifactStoreError:
-                return _media_error_response(
-                    status_code=503,
-                    error_code="media_derivative.source_artifact_unavailable",
-                    message="referenced source artifact bytes are unavailable",
-                    trace_id=auth.trace_id,
-                )
-            session.commit()
-
-    if watermark_artifact_id:
-        with get_session(services.settings.database_url) as session:
-            artifact = get_artifact(
-                session,
-                watermark_artifact_id,
-                site_id=auth.site_id,
-            )
-            if artifact is None or is_artifact_expired(artifact):
-                return _media_error_response(
-                    status_code=404,
-                    error_code="media_derivative.watermark_artifact_not_found",
-                    message="referenced watermark artifact not found",
-                    trace_id=auth.trace_id,
-                )
-            try:
-                watermark_bytes = read_artifact_bytes(artifact_store, artifact.storage_key)
-            except ArtifactStoreError:
-                return _media_error_response(
-                    status_code=503,
-                    error_code="media_derivative.watermark_artifact_unavailable",
-                    message="referenced watermark artifact bytes are unavailable",
-                    trace_id=auth.trace_id,
-                )
-            session.commit()
-
-    if not source_bytes:
-        return _media_error_response(
-            status_code=400,
-            error_code="media_derivative.invalid_source",
-            message="no source data available",
-            trace_id=auth.trace_id,
-        )
-
-    input_payload = {
-        "cloud_job_payload": derivative_request.cloud_job_payload.model_dump(),
-        "source_media_type": derivative_request.cloud_job_payload.source_media_type,
-        "ttl_minutes": derivative_request.ttl_minutes,
-    }
-    if derivative_request.batch_context is not None:
-        input_payload["batch_context"] = derivative_request.batch_context.model_dump()
-
-    service = _get_runtime_service(request)
-    queue_pressure_before = service.get_media_derivative_queue_pressure(site_id=auth.site_id)
-    if str(queue_pressure_before.get("pressure_state") or "") == "rejecting":
-        return _media_error_response(
-            status_code=429,
-            error_code="media_derivative.site_queue_full",
-            message="site media derivative queue is full; retry after current chunks finish",
-            trace_id=auth.trace_id,
-        )
-
-    try:
-        result = await run_in_threadpool(
-            service.enqueue_media_derivative_run,
-            site_id=auth.site_id,
-            input_payload=input_payload,
-            source_bytes=source_bytes,
-            watermark_bytes=watermark_bytes,
-            ttl_minutes=derivative_request.ttl_minutes,
-            idempotency_key=auth.idempotency_key,
-            trace_id=auth.trace_id,
-        )
-    except MediaDerivativeErrorBase as error:
-        return _media_error_response(
-            status_code=error.status_code,
-            error_code=error.error_code,
-            message=error.message,
-            trace_id=auth.trace_id,
-        )
-    except RuntimeErrorBase as error:
-        return _media_error_response(
-            status_code=error.status_code,
-            error_code=error.error_code,
-            message=error.message,
-            trace_id=auth.trace_id,
-        )
-
-    success_statuses = {"queued", "running", "succeeded"}
-    status = "ok" if result.status in success_statuses else "error"
-    error_code = "" if result.status in success_statuses else result.error_code
-    queue_pressure_after = service.get_media_derivative_queue_pressure(site_id=auth.site_id)
-    batch_context = (
-        derivative_request.batch_context.model_dump()
-        if derivative_request.batch_context is not None
-        else {}
-    )
+def _execution_response(result: Any, *, message: str) -> JSONResponse:
+    success = result.status in {"queued", "running", "succeeded"}
     return JSONResponse(
         content=build_envelope(
-            status=status,
-            error_code=error_code,
-            message=(
-                "media derivative queued"
-                if result.status == "queued"
-                else "media derivative processed"
-            ),
+            status="ok" if success else "error",
+            error_code="" if success else result.error_code,
+            message=message,
             data={
                 "run_id": result.run_id,
                 "status": result.status,
                 "trace_id": result.trace_id,
-                "execution_context": {
-                    "skill_id": result.execution_context.skill_id,
-                    "ability_family": result.execution_context.ability_family,
-                    "execution_pattern": result.execution_context.execution_pattern,
-                },
+                "idempotent_replay": result.idempotent_replay,
                 "result": result.result,
-                "batch": {
-                    "context": batch_context,
-                    "chunking": {
-                        "recommended_chunk_size": queue_pressure_after.get(
-                            "recommended_chunk_size",
-                            services.settings.media_derivative_batch_default_chunk_size,
-                        ),
-                        "max_chunk_size": services.settings.media_derivative_batch_max_chunk_size,
-                    },
-                    "avif_policy": {
-                        "batch_requires_explicit_opt_in": True,
-                    },
-                },
-                "queue_pressure": queue_pressure_after,
             },
             trace_id=result.trace_id,
-            revision="md1",
-        ),
+            revision="media1",
+        )
     )
 
 
-@router.post("/media-derivatives")
-async def create_media_derivative(request: Request) -> Any:
+@router.post("/media/uploads")
+async def create_media_upload(request: Request) -> Any:
     services = get_cloud_services(request)
     try:
         ingress = await receive_media_ingress(
             request,
-            max_body_bytes=services.settings.media_derivative_max_body_bytes,
+            max_body_bytes=services.settings.media_upload_max_body_bytes,
         )
     except MediaIngressError as error:
         return _media_error_response(
@@ -430,9 +164,101 @@ async def create_media_derivative(request: Request) -> Any:
     if isinstance(ingress, JSONResponse):
         return ingress
     try:
-        return await _create_media_derivative_from_ingress(request, ingress)
+        if not ingress.request_json or ingress.file is None:
+            return _media_error_response(
+                status_code=400,
+                error_code="media_upload.invalid_request",
+                message="multipart request and file parts are required",
+                trace_id=ingress.auth.trace_id,
+            )
+        try:
+            upload_request = _parse_request_json(
+                ingress.request_json,
+                MediaUploadRequest,
+            )
+            if ingress.file.size is not None and ingress.file.size > MAX_UPLOAD_BYTES_IMAGE:
+                return _media_error_response(
+                    status_code=413,
+                    error_code="media_upload.upload_too_large",
+                    message="uploaded file exceeds the size limit",
+                    trace_id=ingress.auth.trace_id,
+                )
+            upload = await run_in_threadpool(
+                validate_image_upload_stream,
+                ingress.file.file,
+                declared_content_type=ingress.file.content_type or "",
+            )
+            result = await run_in_threadpool(
+                _get_runtime_service(request).create_media_upload,
+                site_id=ingress.auth.site_id,
+                request_payload=upload_request.model_dump(),
+                stream=ingress.file.file,
+                upload=upload,
+                ttl_minutes=upload_request.ttl_minutes,
+                idempotency_key=ingress.auth.idempotency_key,
+                trace_id=ingress.auth.trace_id,
+            )
+            return _execution_response(result, message="media upload accepted")
+        except (json.JSONDecodeError, ValueError) as error:
+            return _media_error_response(
+                status_code=422,
+                error_code="media_upload.validation_error",
+                message=str(error),
+                trace_id=ingress.auth.trace_id,
+            )
+        except (MediaDerivativeErrorBase, RuntimeErrorBase) as error:
+            return _media_error_response(
+                status_code=error.status_code,
+                error_code=error.error_code,
+                message=error.message,
+                trace_id=ingress.auth.trace_id,
+            )
+        except ArtifactStoreError:
+            return _media_error_response(
+                status_code=503,
+                error_code="media_upload.storage_unavailable",
+                message="media artifact storage is unavailable",
+                trace_id=ingress.auth.trace_id,
+            )
     finally:
         await ingress.close()
+
+
+@router.post("/media/jobs")
+async def create_media_job(request: Request) -> Any:
+    auth = await authorize_public_request(
+        request,
+        require_idempotency=True,
+        required_scope="runtime:execute",
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        payload = MediaJobRequest.model_validate(await request.json())
+    except (json.JSONDecodeError, ValueError) as error:
+        return _media_error_response(
+            status_code=422,
+            error_code="media_job.validation_error",
+            message=str(error),
+            trace_id=auth.trace_id,
+        )
+    service = _get_runtime_service(request)
+    try:
+        result = await run_in_threadpool(
+            service.enqueue_media_job_run,
+            site_id=auth.site_id,
+            input_payload=payload.model_dump(),
+            idempotency_key=auth.idempotency_key,
+            trace_id=auth.trace_id,
+        )
+    except (MediaDerivativeErrorBase, RuntimeErrorBase) as error:
+        return _media_error_response(
+            status_code=error.status_code,
+            error_code=error.error_code,
+            message=error.message,
+            trace_id=auth.trace_id,
+        )
+    return _execution_response(result, message="media job queued")
 
 
 @router.get("/artifacts/{artifact_id}/download")

@@ -30,7 +30,7 @@ def _nginx_location_block(text: str, location: str) -> str:
     return text.split(f"location {location} {{", 1)[1].split("\n    }", 1)[0]
 
 
-def test_media_derivative_proxy_overrides_are_exact_and_bounded() -> None:
+def test_media_upload_proxy_overrides_are_exact_and_bounded() -> None:
     cloud_root = _cloud_root()
     dev = (cloud_root / "deploy" / "nginx.dev.conf").read_text()
     prod = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
@@ -39,34 +39,34 @@ def test_media_derivative_proxy_overrides_are_exact_and_bounded() -> None:
     runtime_compose = (cloud_root / "docker-compose.runtime.yml").read_text()
 
     for text in (dev, prod, domain):
-        assert text.count("location = /v1/runtime/media-derivatives {") == 1
+        assert text.count("location = /v1/runtime/media/uploads {") == 1
         assert text.count("client_max_body_size 52m;") == 1
         assert (
             "limit_req_zone $binary_remote_addr "
-            "zone=media_derivative_rate:10m rate=2r/s;"
+            "zone=media_upload_rate:10m rate=2r/s;"
         ) in text
-        assert "limit_conn_zone $binary_remote_addr zone=media_derivative_conn:10m;" in text
-        assert "limit_conn_zone $server_name zone=media_derivative_global_conn:1m;" in text
+        assert "limit_conn_zone $binary_remote_addr zone=media_upload_conn:10m;" in text
+        assert "limit_conn_zone $server_name zone=media_upload_global_conn:1m;" in text
         assert "limit_req_status 429;" in text
         assert "limit_conn_status 429;" in text
-        block = _nginx_location_block(text, "= /v1/runtime/media-derivatives")
+        block = _nginx_location_block(text, "= /v1/runtime/media/uploads")
         assert "client_max_body_size 52m;" in block
         assert "client_body_timeout 60s;" in block
-        assert "limit_conn media_derivative_conn 2;" in block
-        assert "limit_conn media_derivative_global_conn 8;" in block
-        assert "limit_req zone=media_derivative_rate burst=4 nodelay;" in block
+        assert "limit_conn media_upload_conn 2;" in block
+        assert "limit_conn media_upload_global_conn 8;" in block
+        assert "limit_req zone=media_upload_rate burst=4 nodelay;" in block
 
     assert dev.count("client_max_body_size 2m;") == 1
     assert prod.count("client_max_body_size 1m;") == 1
     assert domain.count("client_max_body_size 2m;") == 1
 
-    dev_media = _nginx_location_block(dev, "= /v1/runtime/media-derivatives")
+    dev_media = _nginx_location_block(dev, "= /v1/runtime/media/uploads")
     dev_v1 = _nginx_location_block(dev, "/v1/")
     assert "proxy_pass http://$npcink_ai_cloud_api;" in dev_media
     assert "proxy_pass http://$npcink_ai_cloud_api;" in dev_v1
     assert "client_max_body_size" not in dev_v1
 
-    prod_media = _nginx_location_block(prod, "= /v1/runtime/media-derivatives")
+    prod_media = _nginx_location_block(prod, "= /v1/runtime/media/uploads")
     prod_v1 = _nginx_location_block(prod, "/v1/")
     for directive in (
         "limit_req zone=public_runtime burst=40 nodelay;",
@@ -79,7 +79,7 @@ def test_media_derivative_proxy_overrides_are_exact_and_bounded() -> None:
         assert directive in prod_v1
     assert "client_max_body_size" not in prod_v1
 
-    domain_media = _nginx_location_block(domain, "= /v1/runtime/media-derivatives")
+    domain_media = _nginx_location_block(domain, "= /v1/runtime/media/uploads")
     domain_default = _nginx_location_block(domain, "/")
     assert "proxy_pass __UPSTREAM__;" in domain_media
     assert "proxy_pass __UPSTREAM__;" in domain_default

@@ -18,14 +18,13 @@ from app.core.security import PrehashedRequestBody, RequestAuthContext, RequestA
 MEDIA_INGRESS_CHUNK_BYTES = 64 * 1024
 MEDIA_INGRESS_MAX_REQUEST_BYTES = 64 * 1024
 MEDIA_INGRESS_MAX_FIELDS = 1
-MEDIA_INGRESS_MAX_FILES = 2
+MEDIA_INGRESS_MAX_FILES = 1
 MEDIA_INGRESS_MAX_PART_HEADER_BYTES = 16 * 1024
 MEDIA_INGRESS_MAX_CONTENT_LENGTH_DIGITS = 32
 MEDIA_INGRESS_ALLOWED_PARTS = frozenset(
     {
         "request",
-        "source_file",
-        "watermark_file",
+        "file",
     }
 )
 
@@ -187,40 +186,11 @@ class BoundedMultiPartParser(MultiPartParser):
 class MediaIngress:
     auth: RequestAuthContext
     request_json: str
-    source_file: UploadFile | None
-    watermark_file: UploadFile | None
+    file: UploadFile | None
     _capture: SealedRequestBodyCapture
     _form_data: FormData | None = None
     _tracked_files: tuple[tempfile.SpooledTemporaryFile[bytes], ...] = ()
     _closed: bool = False
-
-    async def read_upload_once(
-        self,
-        upload: UploadFile | None,
-        *,
-        max_bytes: int,
-        too_large_message: str,
-    ) -> bytes | None:
-        if upload is None:
-            return None
-        if upload.size is not None and upload.size > max_bytes:
-            raise MediaIngressError(
-                413,
-                "media_derivative.upload_too_large",
-                too_large_message,
-            )
-
-        try:
-            payload = await upload.read(max_bytes + 1)
-        except OSError as error:
-            raise _ingress_storage_error() from error
-        if len(payload) > max_bytes:
-            raise MediaIngressError(
-                413,
-                "media_derivative.upload_too_large",
-                too_large_message,
-            )
-        return payload
 
     async def close(self) -> None:
         if self._closed:
@@ -258,7 +228,7 @@ def _payload_too_large_error() -> RequestAuthError:
 def _ingress_storage_error() -> MediaIngressError:
     return MediaIngressError(
         503,
-        "media_derivative.ingress_unavailable",
+        "media_upload.ingress_unavailable",
         "temporary media ingress storage is unavailable",
     )
 
@@ -271,20 +241,19 @@ def _validated_content_length(request: Request, *, max_body_bytes: int) -> int |
     if not value or not value.isascii() or not value.isdigit():
         raise MediaIngressError(
             400,
-            "media_derivative.invalid_request",
+            "media_upload.invalid_request",
             "Content-Length header must be a nonnegative decimal",
         )
     normalized_value = value.lstrip("0") or "0"
     max_body_value = str(max_body_bytes)
     if len(normalized_value) > len(max_body_value) or (
-        len(normalized_value) == len(max_body_value)
-        and normalized_value > max_body_value
+        len(normalized_value) == len(max_body_value) and normalized_value > max_body_value
     ):
         raise _payload_too_large_error()
     if len(value) > MEDIA_INGRESS_MAX_CONTENT_LENGTH_DIGITS:
         raise MediaIngressError(
             400,
-            "media_derivative.invalid_request",
+            "media_upload.invalid_request",
             "Content-Length header exceeds the accepted length",
         )
     return int(normalized_value)
@@ -298,14 +267,14 @@ async def _read_json_body(
     if byte_size > MEDIA_INGRESS_MAX_REQUEST_BYTES:
         raise MediaIngressError(
             400,
-            "media_derivative.invalid_request",
+            "media_upload.invalid_request",
             "request JSON exceeds the accepted size limit",
         )
     payload = await capture.read_once(MEDIA_INGRESS_MAX_REQUEST_BYTES + 1)
     if len(payload) > MEDIA_INGRESS_MAX_REQUEST_BYTES:
         raise MediaIngressError(
             400,
-            "media_derivative.invalid_request",
+            "media_upload.invalid_request",
             "request JSON exceeds the accepted size limit",
         )
     try:
@@ -313,7 +282,7 @@ async def _read_json_body(
     except UnicodeDecodeError as error:
         raise MediaIngressError(
             400,
-            "media_derivative.invalid_request",
+            "media_upload.invalid_request",
             "request JSON must be UTF-8 encoded",
         ) from error
 
@@ -355,7 +324,6 @@ async def _parse_multipart(
 ) -> tuple[
     str,
     UploadFile | None,
-    UploadFile | None,
     FormData,
     tuple[tempfile.SpooledTemporaryFile[bytes], ...],
 ]:
@@ -373,7 +341,7 @@ async def _parse_multipart(
         if not parser.complete:
             raise MediaIngressError(
                 400,
-                "media_derivative.invalid_request",
+                "media_upload.invalid_request",
                 "multipart body is incomplete",
             )
 
@@ -382,13 +350,13 @@ async def _parse_multipart(
             if name not in MEDIA_INGRESS_ALLOWED_PARTS:
                 raise MediaIngressError(
                     400,
-                    "media_derivative.invalid_request",
+                    "media_upload.invalid_request",
                     f"unsupported multipart part: {name}",
                 )
             if name in parts:
                 raise MediaIngressError(
                     400,
-                    "media_derivative.invalid_request",
+                    "media_upload.invalid_request",
                     f"duplicate multipart part: {name}",
                 )
             parts[name] = value
@@ -397,7 +365,7 @@ async def _parse_multipart(
         if request_json is not None and not isinstance(request_json, str):
             raise MediaIngressError(
                 400,
-                "media_derivative.invalid_request",
+                "media_upload.invalid_request",
                 "multipart request part must be a field",
             )
         if isinstance(request_json, str) and len(request_json.encode("utf-8")) > (
@@ -405,29 +373,21 @@ async def _parse_multipart(
         ):
             raise MediaIngressError(
                 400,
-                "media_derivative.invalid_request",
+                "media_upload.invalid_request",
                 "request JSON exceeds the accepted size limit",
             )
 
-        source_file = parts.get("source_file")
-        watermark_file = parts.get("watermark_file")
-        if source_file is not None and not isinstance(source_file, UploadFile):
+        upload_file = parts.get("file")
+        if upload_file is not None and not isinstance(upload_file, UploadFile):
             raise MediaIngressError(
                 400,
-                "media_derivative.invalid_request",
-                "multipart source_file part must be a file",
-            )
-        if watermark_file is not None and not isinstance(watermark_file, UploadFile):
-            raise MediaIngressError(
-                400,
-                "media_derivative.invalid_request",
-                "multipart watermark_file part must be a file",
+                "media_upload.invalid_request",
+                "multipart file part must be a file",
             )
 
         return (
             request_json or "",
-            source_file,
-            watermark_file,
+            upload_file,
             form_data,
             parser.tracked_files,
         )
@@ -447,7 +407,7 @@ async def _parse_multipart(
         _close_parser_uploads(parser)
         raise MediaIngressError(
             400,
-            "media_derivative.invalid_request",
+            "media_upload.invalid_request",
             "multipart body is invalid",
         ) from error
     except BaseException:
@@ -485,15 +445,14 @@ async def receive_media_ingress(
         if len(content_type.encode("utf-8")) > MEDIA_INGRESS_MAX_PART_HEADER_BYTES:
             raise MediaIngressError(
                 400,
-                "media_derivative.invalid_request",
+                "media_upload.invalid_request",
                 "Content-Type header exceeds the accepted size limit",
             )
         media_type = content_type.partition(";")[0].strip().lower()
         if media_type == "multipart/form-data":
             (
                 request_json,
-                source_file,
-                watermark_file,
+                upload_file,
                 form_data,
                 tracked_files,
             ) = await _parse_multipart(
@@ -505,14 +464,12 @@ async def receive_media_ingress(
                 capture,
                 byte_size=evidence.byte_size,
             )
-            source_file = None
-            watermark_file = None
+            upload_file = None
 
         return MediaIngress(
             auth=auth,
             request_json=request_json,
-            source_file=source_file,
-            watermark_file=watermark_file,
+            file=upload_file,
             _capture=capture,
             _form_data=form_data,
             _tracked_files=tracked_files,

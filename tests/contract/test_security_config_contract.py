@@ -7,7 +7,7 @@ from app.core.config import Settings
 
 
 @pytest.mark.parametrize("max_body_bytes", [0, 51 * 1024 * 1024 + 1])
-def test_media_derivative_max_body_bytes_stays_within_proxy_contract(
+def test_media_upload_max_body_bytes_stays_within_proxy_contract(
     max_body_bytes: int,
 ) -> None:
     with pytest.raises(ValidationError):
@@ -16,7 +16,7 @@ def test_media_derivative_max_body_bytes_stays_within_proxy_contract(
             environment="test",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",
-            media_derivative_max_body_bytes=max_body_bytes,
+            media_upload_max_body_bytes=max_body_bytes,
         )
 
 

@@ -119,7 +119,7 @@ class MediaDerivativeObservabilityService:
                 MediaDerivativeJobMetric.created_at <= current_time,
             ]
             artifact_conditions = [
-                MediaArtifact.operation == "media_derivative",
+                MediaArtifact.operation == "image.transform.v1",
                 MediaArtifact.created_at <= current_time,
                 MediaArtifact.expires_at > current_time,
                 MediaArtifact.purged_at.is_(None),

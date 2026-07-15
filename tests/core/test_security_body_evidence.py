@@ -34,8 +34,8 @@ def _build_request(headers: dict[str, str]) -> Request:
         "http_version": "1.1",
         "method": "POST",
         "scheme": "https",
-        "path": "/v1/runtime/media-derivatives",
-        "raw_path": b"/v1/runtime/media-derivatives",
+        "path": "/v1/runtime/media/uploads",
+        "raw_path": b"/v1/runtime/media/uploads",
         "query_string": b"",
         "headers": [
             (name.lower().encode("latin-1"), value.encode("latin-1"))
@@ -97,7 +97,7 @@ async def test_body_evidence_loader_bypasses_request_body_and_preserves_digest(
     payload = b"sealed-media-body"
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=payload,
         idempotency_key="evidence-valid",
@@ -132,7 +132,7 @@ async def test_body_evidence_rejects_invalid_digest_without_calling_request_body
     seed_site_auth(database_url, site_id="site_alpha", scopes=["runtime:execute"])
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=b"payload",
         idempotency_key="evidence-invalid",
@@ -163,7 +163,7 @@ async def test_body_evidence_validates_oversize_before_digest_format(tmp_path: P
     seed_site_auth(database_url, site_id="site_alpha", scopes=["runtime:execute"])
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=b"payload",
         idempotency_key="evidence-oversize",
@@ -190,7 +190,7 @@ async def test_body_evidence_rejects_negative_byte_size(tmp_path: Path) -> None:
     seed_site_auth(database_url, site_id="site_alpha", scopes=["runtime:execute"])
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=b"",
         idempotency_key="evidence-negative",
@@ -218,7 +218,7 @@ async def test_signature_prefix_is_accepted_with_body_evidence(tmp_path: Path) -
     payload = b"payload"
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=payload,
         idempotency_key="evidence-prefix",
@@ -249,7 +249,7 @@ async def test_malformed_signature_is_rejected_before_body_evidence_loader(
     seed_site_auth(database_url, site_id="site_alpha", scopes=["runtime:execute"])
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=b"payload",
         idempotency_key="evidence-signature",
@@ -282,7 +282,7 @@ async def test_stale_timestamp_is_rejected_before_body_evidence_loader(tmp_path:
     payload = b"payload"
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=payload,
         idempotency_key="evidence-stale",
@@ -330,7 +330,7 @@ async def test_invalid_site_key_or_scope_is_rejected_before_body_evidence_loader
     payload = b"payload"
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id=site_id,
         key_id=key_id,
         body=payload,
@@ -366,7 +366,7 @@ async def test_key_revoked_during_body_load_is_rejected_by_final_revalidation(
     payload = b"payload"
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=payload,
         idempotency_key="evidence-revoked-during-load",
@@ -401,7 +401,7 @@ async def test_valid_format_invalid_hmac_loads_body_before_rejection(tmp_path: P
     payload = b"payload"
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=payload,
         idempotency_key="evidence-invalid-hmac",
@@ -439,7 +439,7 @@ async def test_timestamp_is_revalidated_after_body_load(
     sent_at = datetime.now(UTC).replace(microsecond=0)
     headers = build_auth_headers(
         "POST",
-        "/v1/runtime/media-derivatives",
+        "/v1/runtime/media/uploads",
         site_id="site_alpha",
         body=payload,
         idempotency_key="evidence-final-timestamp",

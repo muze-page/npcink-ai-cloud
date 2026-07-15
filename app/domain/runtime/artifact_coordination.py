@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any, Protocol
+from datetime import UTC, datetime, timedelta
+from typing import Any, BinaryIO, Protocol
 from uuid import uuid4
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.adapters.repositories.runtime_repository import RuntimeRepository
 from app.core.db import get_session
-from app.core.models import RunRecord
+from app.core.models import MediaArtifact, RunRecord
 from app.domain.audio_generation.artifacts import (
     AUDIO_ARTIFACT_DEFAULT_MAX_BYTES,
     AUDIO_ARTIFACT_DEFAULT_TIMEOUT_SECONDS,
@@ -25,18 +25,37 @@ from app.domain.image_generation.inline_images import (
     InlineImageMaterializationConfig,
     materialize_inline_image_candidates_from_urls,
 )
-from app.domain.media_artifacts import ArtifactStore
-from app.domain.media_derivatives.artifacts import (
-    build_artifact_result_json,
-    create_artifact,
+from app.domain.media_artifacts import (
+    ArtifactStorageMetadata,
+    ArtifactStore,
+    ArtifactStoreError,
+    ArtifactStorePublicationUncertainError,
+    read_artifact_bytes,
 )
-from app.domain.media_derivatives.contracts import ARTIFACT_DEFAULT_TTL_MINUTES
+from app.domain.media_derivatives.artifacts import (
+    ValidatedImageUpload,
+    build_artifact_result_json,
+    build_upload_artifact_result_json,
+    create_artifact,
+    create_uploaded_artifact,
+    is_artifact_expired,
+)
+from app.domain.media_derivatives.contracts import (
+    ARTIFACT_DEFAULT_TTL_MINUTES,
+    MAX_UPLOAD_BYTES_IMAGE,
+)
 from app.domain.media_derivatives.errors import (
     MediaDerivativeAnimatedSourceUnavailableError,
+    MediaDerivativeErrorBase,
     MediaDerivativeFormatUnavailableError,
     MediaDerivativeProcessingFailedError,
     MediaDerivativeSourceDecodeFailedError,
     MediaDerivativeSourceTooLargeError,
+    MediaJobArtifactExpiredError,
+    MediaJobArtifactNotFoundError,
+    MediaJobArtifactUnavailableError,
+    MediaJobQueueFullError,
+    MediaUploadReplayUnavailableError,
 )
 from app.domain.media_derivatives.metrics import record_media_derivative_job_metric
 from app.domain.media_derivatives.processor import process_media_derivative
@@ -230,34 +249,293 @@ class RuntimeArtifactCoordinationService:
             inline_image_candidate_materializer or materialize_inline_image_candidates_from_urls
         )
 
-    def enqueue_media_derivative_run(
+    def create_media_upload(
         self,
         *,
         site_id: str,
-        input_payload: dict[str, Any],
-        source_bytes: bytes,
-        watermark_bytes: bytes | None = None,
-        ttl_minutes: int = 30,
+        request_payload: dict[str, Any],
+        stream: BinaryIO,
+        upload: ValidatedImageUpload,
+        ttl_minutes: int,
         idempotency_key: str | None = None,
         trace_id: str | None = None,
     ) -> RuntimeExecutionResponse:
         resolved_trace_id = trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
         resolved_idempotency_key = idempotency_key or f"auto_{uuid4().hex}"
-        source_checksum = hashlib.sha256(source_bytes).hexdigest()
-        watermark_checksum = hashlib.sha256(watermark_bytes).hexdigest() if watermark_bytes else ""
-        media_derivative_policy = self._build_media_derivative_policy(input_payload)
+        upload_input = {
+            "request": request_payload,
+            "content": {
+                "media_kind": "image",
+                "content_type": upload.content_type,
+                "format": upload.format,
+                "byte_size": upload.byte_size,
+                "checksum": upload.checksum,
+                "width": upload.width,
+                "height": upload.height,
+            },
+        }
         request_fingerprint = self.run_controller.build_media_derivative_request_fingerprint(
             site_id,
-            input_payload,
-            source_checksum=source_checksum,
-            watermark_checksum=watermark_checksum,
+            upload_input,
+            source_checksum=upload.checksum,
         )
 
         with get_session(self.dependencies.database_url) as session:
             repository = RuntimeRepository(session)
-            self.dependencies.active_site_guard(repository, site_id)
+            site = self.dependencies.active_site_guard(repository, site_id)
 
+            existing = self.run_controller.get_idempotent_replay(
+                repository=repository,
+                site_id=site_id,
+                idempotency_key=resolved_idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is not None:
+                artifact = session.scalar(
+                    select(MediaArtifact).where(
+                        MediaArtifact.run_id == existing.run_id,
+                        MediaArtifact.site_id == site_id,
+                        MediaArtifact.operation == "image.upload.v1",
+                    )
+                )
+                if artifact is None or is_artifact_expired(artifact):
+                    raise MediaUploadReplayUnavailableError()
+                try:
+                    replay_metadata = self.dependencies.artifact_store.metadata(
+                        artifact.storage_key
+                    )
+                except ArtifactStoreError as error:
+                    raise MediaUploadReplayUnavailableError() from error
+                if (
+                    replay_metadata.byte_size != artifact.byte_size
+                    or replay_metadata.checksum != artifact.checksum
+                    or artifact.checksum != upload.checksum
+                ):
+                    raise MediaUploadReplayUnavailableError()
+                session.commit()
+                return self.dependencies.execution_response_builder(
+                    existing,
+                    repository=repository,
+                    idempotent_replay=True,
+                )
+
+            # Resource admission reuses the existing media entitlement boundary, but the
+            # synchronous upload evidence is zero-credit and is not recorded as an AI run.
+            commercial_decision = self.dependencies.commercial_authorizer(
+                session=session,
+                site_id=site_id,
+                ability_family="vision",
+                channel="openapi",
+                execution_kind="media_derivative",
+                execution_tier="cloud",
+                data_classification="internal",
+                trace_id=resolved_trace_id,
+                idempotency_key=resolved_idempotency_key,
+                request_kind="execute",
+                run_id=run_id,
+                estimated_ai_credits=0.0,
+            )
+
+            policy = {
+                "storage_mode": "full_store_with_ttl",
+                "execution_contract": {
+                    "ability_name": "media_artifact_upload",
+                    "contract_version": "media_upload_request.v1",
+                    "profile_id": "media.upload",
+                    "execution_pattern": "inline",
+                    "data_classification": "internal",
+                    "storage_mode": "full_store_with_ttl",
+                    "timeout_seconds": 60,
+                    "retry_max": 0,
+                    "retention_ttl": ttl_minutes * 60,
+                    "task_backend": {"enabled": False},
+                },
+            }
+            stored: ArtifactStorageMetadata | None = None
+            try:
+                try:
+                    stream.seek(0)
+                except OSError as error:
+                    raise ArtifactStoreError("upload spool seek failed") from error
+                stored = self.dependencies.artifact_store.put(
+                    stream,
+                    max_bytes=MAX_UPLOAD_BYTES_IMAGE,
+                    metadata={"media_kind": "image"},
+                )
+                if stored.byte_size != upload.byte_size or stored.checksum != upload.checksum:
+                    raise ArtifactStoreError("stored upload evidence does not match validation")
+                run = self.run_controller.create_durable_run(
+                    repository=repository,
+                    command=RuntimeRunCreationCommand(
+                        run_id=run_id,
+                        site_id=site_id,
+                        account_id=(
+                            str(commercial_decision.get("account_id") or "")
+                            or str(getattr(site, "account_id", "") or "")
+                            or None
+                        ),
+                        subscription_id=(
+                            str(commercial_decision.get("subscription_id") or "") or None
+                        ),
+                        plan_version_id=(
+                            str(commercial_decision.get("plan_version_id") or "") or None
+                        ),
+                        ability_name="media_artifact_upload",
+                        ability_family="media",
+                        skill_id="",
+                        workflow_id="",
+                        contract_version="media_upload_request.v1",
+                        channel="openapi",
+                        execution_kind="media_upload",
+                        execution_tier="cloud",
+                        execution_pattern="inline",
+                        data_classification="internal",
+                        profile_id="media.upload",
+                        canonical_run_id=None,
+                        status="running",
+                        idempotency_key=resolved_idempotency_key,
+                        request_fingerprint=request_fingerprint,
+                        trace_id=resolved_trace_id,
+                        input_json=upload_input,
+                        execution_input_ciphertext=None,
+                        policy_json=policy,
+                    ),
+                )
+                artifact = create_uploaded_artifact(
+                    session=session,
+                    run_id=run.run_id,
+                    site_id=site_id,
+                    stored=stored,
+                    upload=upload,
+                    ttl_minutes=ttl_minutes,
+                )
+                self.run_controller.succeed_run(
+                    repository,
+                    run,
+                    result_json=build_upload_artifact_result_json(artifact),
+                    provider_id="media_store",
+                    model_id="none",
+                    instance_id="cloud-runtime",
+                    fallback_used=False,
+                )
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                if stored is not None:
+                    self._delete_upload_or_raise(stored)
+                return self._load_upload_replay_after_race(
+                    site_id=site_id,
+                    idempotency_key=resolved_idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    upload_checksum=upload.checksum,
+                )
+            except BaseException:
+                session.rollback()
+                if stored is not None:
+                    self._delete_upload_or_raise(stored)
+                raise
+            return self.dependencies.execution_response_builder(
+                run,
+                repository=repository,
+                idempotent_replay=False,
+            )
+
+    def _load_upload_replay_after_race(
+        self,
+        *,
+        site_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        upload_checksum: str,
+    ) -> RuntimeExecutionResponse:
+        with get_session(self.dependencies.database_url) as session:
+            repository = RuntimeRepository(session)
+            self.dependencies.active_site_guard(repository, site_id)
+            existing = self.run_controller.get_idempotent_replay(
+                repository=repository,
+                site_id=site_id,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is None:
+                raise MediaUploadReplayUnavailableError()
+            artifact = session.scalar(
+                select(MediaArtifact).where(
+                    MediaArtifact.run_id == existing.run_id,
+                    MediaArtifact.site_id == site_id,
+                    MediaArtifact.operation == "image.upload.v1",
+                )
+            )
+            if (
+                artifact is None
+                or is_artifact_expired(artifact)
+                or artifact.checksum != upload_checksum
+            ):
+                raise MediaUploadReplayUnavailableError()
+            try:
+                stored = self.dependencies.artifact_store.metadata(artifact.storage_key)
+            except ArtifactStoreError as error:
+                raise MediaUploadReplayUnavailableError() from error
+            if stored.byte_size != artifact.byte_size or stored.checksum != artifact.checksum:
+                raise MediaUploadReplayUnavailableError()
+            session.commit()
+            return self.dependencies.execution_response_builder(
+                existing,
+                repository=repository,
+                idempotent_replay=True,
+            )
+
+    def _delete_upload_or_raise(self, stored: Any) -> None:
+        try:
+            self.dependencies.artifact_store.delete(stored.storage_key)
+        except ArtifactStoreError as error:
+            raise ArtifactStorePublicationUncertainError(stored) from error
+
+    def enqueue_media_job_run(
+        self,
+        *,
+        site_id: str,
+        input_payload: dict[str, Any],
+        idempotency_key: str | None = None,
+        trace_id: str | None = None,
+    ) -> RuntimeExecutionResponse:
+        resolved_trace_id = trace_id or uuid4().hex
+        run_id = f"run_{uuid4().hex}"
+        resolved_idempotency_key = idempotency_key or f"auto_{uuid4().hex}"
+
+        with get_session(self.dependencies.database_url) as session:
+            repository = RuntimeRepository(session)
+            self.dependencies.active_site_guard(repository, site_id)
+            source = self._find_job_artifact(
+                session,
+                site_id=site_id,
+                artifact_id=str(input_payload["source_artifact_id"]),
+                role="source",
+            )
+            watermark_id = str(input_payload.get("watermark_artifact_id") or "")
+            watermark = (
+                self._find_job_artifact(
+                    session, site_id=site_id, artifact_id=watermark_id, role="watermark"
+                )
+                if watermark_id
+                else None
+            )
+            fingerprint_input = {
+                "request_contract_version": input_payload["request_contract_version"],
+                "operation": input_payload["operation"],
+                "source_artifact_id": input_payload["source_artifact_id"],
+                "watermark_artifact_id": input_payload.get("watermark_artifact_id"),
+                "params": input_payload["params"],
+                "batch_context": input_payload.get("batch_context"),
+                "result_ttl_minutes": input_payload["result_ttl_minutes"],
+            }
+            request_fingerprint = self.run_controller.build_media_derivative_request_fingerprint(
+                site_id,
+                fingerprint_input,
+                source_checksum=source.checksum,
+                watermark_checksum=watermark.checksum if watermark else "",
+            )
             existing = self.run_controller.get_idempotent_replay(
                 repository=repository,
                 site_id=site_id,
@@ -267,10 +545,26 @@ class RuntimeArtifactCoordinationService:
             if existing is not None:
                 session.commit()
                 return self.dependencies.execution_response_builder(
-                    existing,
-                    repository=repository,
-                    idempotent_replay=True,
+                    existing, repository=repository, idempotent_replay=True
                 )
+            self._require_job_artifact(
+                session,
+                site_id=site_id,
+                artifact_id=source.artifact_id,
+                role="source",
+            )
+            if watermark is not None:
+                self._require_job_artifact(
+                    session,
+                    site_id=site_id,
+                    artifact_id=watermark.artifact_id,
+                    role="watermark",
+                )
+            queue_counts = repository.summarize_media_derivative_queue_pressure(site_id)
+            if int(queue_counts.get("queued") or 0) >= int(
+                self.config.media_derivative_site_queued_limit
+            ):
+                raise MediaJobQueueFullError()
 
             commercial_decision = self.dependencies.commercial_authorizer(
                 session=session,
@@ -290,85 +584,112 @@ class RuntimeArtifactCoordinationService:
                     payload_json=input_payload,
                 ),
             )
-
-            media_input: dict[str, object] = {
-                **input_payload,
-                "_source_bytes_b64": base64.b64encode(source_bytes).decode("ascii"),
-            }
-            if watermark_bytes:
-                media_input["_watermark_bytes_b64"] = base64.b64encode(watermark_bytes).decode(
-                    "ascii"
-                )
-
             policy = {
                 "storage_mode": "result_only",
-                "media_derivative": media_derivative_policy,
+                "media_derivative": self._build_media_derivative_policy(input_payload),
                 "execution_contract": {
-                    "ability_name": "generate_optimized_media_derivative",
-                    "contract_version": "media_derivative_cloud_request.v1",
-                    "profile_id": "media_derivative.worker",
+                    "ability_name": "media_image_transform",
+                    "contract_version": "media_job_request.v1",
+                    "profile_id": "media.transform.worker",
                     "execution_pattern": "whole_run_offload",
                     "data_classification": "internal",
                     "storage_mode": "result_only",
                     "timeout_seconds": 300,
                     "retry_max": 0,
-                    "retention_ttl": 3600,
+                    "retention_ttl": int(input_payload["result_ttl_minutes"]) * 60,
                     "task_backend": {"enabled": True},
                 },
             }
-
-            run = self.run_controller.create_durable_run(
-                repository=repository,
-                command=RuntimeRunCreationCommand(
-                    run_id=run_id,
+            try:
+                run = self.run_controller.create_durable_run(
+                    repository=repository,
+                    command=RuntimeRunCreationCommand(
+                        run_id=run_id,
+                        site_id=site_id,
+                        account_id=str(commercial_decision.get("account_id") or "") or None,
+                        subscription_id=(
+                            str(commercial_decision.get("subscription_id") or "") or None
+                        ),
+                        plan_version_id=(
+                            str(commercial_decision.get("plan_version_id") or "") or None
+                        ),
+                        ability_name="media_image_transform",
+                        ability_family="vision",
+                        skill_id="",
+                        workflow_id="",
+                        contract_version="media_job_request.v1",
+                        channel="openapi",
+                        execution_kind="media_derivative",
+                        execution_tier="cloud",
+                        execution_pattern="whole_run_offload",
+                        data_classification="internal",
+                        profile_id="media.transform.worker",
+                        canonical_run_id=None,
+                        status="queued",
+                        idempotency_key=resolved_idempotency_key,
+                        request_fingerprint=request_fingerprint,
+                        trace_id=resolved_trace_id,
+                        input_json=input_payload,
+                        execution_input_ciphertext=(
+                            self.dependencies.execution_input_encryptor(input_payload)
+                        ),
+                        policy_json=policy,
+                        selected_provider_id="media_processor",
+                        selected_model_id="pillow",
+                        selected_instance_id="cloud-worker",
+                    ),
+                )
+            except IntegrityError:
+                session.rollback()
+                replay = self._load_media_job_replay_after_race(
                     site_id=site_id,
-                    account_id=str(commercial_decision.get("account_id") or "") or None,
-                    subscription_id=(str(commercial_decision.get("subscription_id") or "") or None),
-                    plan_version_id=(str(commercial_decision.get("plan_version_id") or "") or None),
-                    ability_name="generate_optimized_media_derivative",
-                    ability_family="vision",
-                    skill_id="",
-                    workflow_id="",
-                    contract_version="media_derivative_cloud_request.v1",
-                    channel="openapi",
-                    execution_kind="media_derivative",
-                    execution_tier="cloud",
-                    execution_pattern="whole_run_offload",
-                    data_classification="internal",
-                    profile_id="media_derivative.worker",
-                    canonical_run_id=None,
-                    status="queued",
                     idempotency_key=resolved_idempotency_key,
                     request_fingerprint=request_fingerprint,
-                    trace_id=resolved_trace_id,
-                    input_json={},
-                    execution_input_ciphertext=(
-                        self.dependencies.execution_input_encryptor(media_input)
-                    ),
-                    policy_json=policy,
-                    selected_provider_id="media_derivative",
-                    selected_model_id="pillow",
-                    selected_instance_id="cloud-worker",
-                ),
-            )
+                )
+                if replay is None:
+                    raise
+                return replay
             self.dependencies.commercial_acceptance_recorder(session=session, run=run)
             self.run_controller.publish_queue_signal(run.run_id)
             session.commit()
             return self.dependencies.execution_response_builder(
-                run,
+                run, repository=repository, idempotent_replay=False
+            )
+
+    def _load_media_job_replay_after_race(
+        self,
+        *,
+        site_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> RuntimeExecutionResponse | None:
+        with get_session(self.dependencies.database_url) as session:
+            repository = RuntimeRepository(session)
+            self.dependencies.active_site_guard(repository, site_id)
+            existing = self.run_controller.get_idempotent_replay(
                 repository=repository,
-                idempotent_replay=False,
+                site_id=site_id,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is None:
+                return None
+            session.commit()
+            return self.dependencies.execution_response_builder(
+                existing,
+                repository=repository,
+                idempotent_replay=True,
             )
 
     def _build_media_derivative_policy(
         self,
         input_payload: dict[str, Any],
     ) -> dict[str, object]:
-        cloud_job_payload = self._dict_or_empty(input_payload.get("cloud_job_payload"))
+        transform_params = self._dict_or_empty(input_payload.get("params"))
         batch_context = self._dict_or_empty(input_payload.get("batch_context"))
         return {
-            "target_format": str(cloud_job_payload.get("target_format") or "webp"),
-            "source_media_type": str(cloud_job_payload.get("source_media_type") or "image"),
+            "target_format": str(transform_params.get("target_format") or "webp"),
+            "source_media_type": str(transform_params.get("source_media_type") or "image"),
             "batch_context": {
                 "batch_id": str(batch_context.get("batch_id") or ""),
                 "item_index": self._coerce_int(batch_context.get("item_index"), default=1),
@@ -416,49 +737,79 @@ class RuntimeArtifactCoordinationService:
         repository: RuntimeRepository,
     ) -> None:
         media_input = self.execution_input_loader(run)
-        cloud_job_payload = media_input.get("cloud_job_payload", {})
-        source_media_type = cloud_job_payload.get("source_media_type", "image")
-        target_format = cloud_job_payload.get("target_format", "webp")
-        max_width = int(cloud_job_payload.get("max_width", 1200))
-        quality = int(cloud_job_payload.get("quality", 82))
-        crop_options = cloud_job_payload.get("crop")
+        transform_params = media_input.get("params", {})
+        source_media_type = transform_params.get("source_media_type", "image")
+        target_format = transform_params.get("target_format", "webp")
+        max_width = int(transform_params.get("max_width", 1200))
+        quality = int(transform_params.get("quality", 82))
+        crop_options = transform_params.get("crop")
         crop_options = crop_options if isinstance(crop_options, dict) else None
-        watermark_options = cloud_job_payload.get("watermark")
+        watermark_options = transform_params.get("watermark")
         watermark_options = watermark_options if isinstance(watermark_options, dict) else None
-        ttl_minutes = int(media_input.get("ttl_minutes", ARTIFACT_DEFAULT_TTL_MINUTES))
-
-        source_b64 = media_input.get("_source_bytes_b64", "")
-        source_bytes = base64.b64decode(source_b64) if source_b64 else b""
-        watermark_b64 = media_input.get("_watermark_bytes_b64", "")
-        watermark_bytes = base64.b64decode(watermark_b64) if watermark_b64 else None
+        ttl_minutes = int(media_input.get("result_ttl_minutes", ARTIFACT_DEFAULT_TTL_MINUTES))
         processing_started_at = datetime.now(UTC)
+        source_artifact_id = str(media_input.get("source_artifact_id") or "")
+        watermark_artifact_id = str(media_input.get("watermark_artifact_id") or "")
+        try:
+            source_artifact = self._require_job_artifact(
+                repository.session,
+                site_id=run.site_id,
+                artifact_id=source_artifact_id,
+                role="source",
+                minimum_remaining_seconds=0,
+            )
+        except (MediaJobArtifactNotFoundError, MediaJobArtifactExpiredError) as error:
+            self._fail_media_job_input(repository, run, error, media_input=media_input)
+            return
+        try:
+            source_bytes = read_artifact_bytes(
+                self.dependencies.artifact_store,
+                source_artifact.storage_key,
+                max_bytes=MAX_UPLOAD_BYTES_IMAGE,
+                expected_bytes=source_artifact.byte_size,
+                expected_checksum=source_artifact.checksum,
+            )
+        except ArtifactStoreError:
+            self._fail_media_job_input(
+                repository,
+                run,
+                MediaJobArtifactUnavailableError("source"),
+                media_input=media_input,
+            )
+            return
+        watermark_bytes = None
+        if watermark_artifact_id:
+            try:
+                watermark_artifact = self._require_job_artifact(
+                    repository.session,
+                    site_id=run.site_id,
+                    artifact_id=watermark_artifact_id,
+                    role="watermark",
+                    minimum_remaining_seconds=0,
+                )
+            except (MediaJobArtifactNotFoundError, MediaJobArtifactExpiredError) as error:
+                self._fail_media_job_input(repository, run, error, media_input=media_input)
+                return
+            try:
+                watermark_bytes = read_artifact_bytes(
+                    self.dependencies.artifact_store,
+                    watermark_artifact.storage_key,
+                    max_bytes=MAX_UPLOAD_BYTES_IMAGE,
+                    expected_bytes=watermark_artifact.byte_size,
+                    expected_checksum=watermark_artifact.checksum,
+                )
+            except ArtifactStoreError:
+                self._fail_media_job_input(
+                    repository,
+                    run,
+                    MediaJobArtifactUnavailableError("watermark"),
+                    media_input=media_input,
+                )
+                return
+
         watermark_applied = bool(watermark_bytes) or bool(
             watermark_options and watermark_options.get("type") == "text"
         )
-
-        if not source_bytes:
-            self.run_controller.fail_run(
-                repository,
-                run,
-                error_code="media_derivative.source_decode_failed",
-                error_message="no source bytes found in media derivative run",
-            )
-            run.result_json = {
-                "status": "failed",
-                "error_code": "media_derivative.source_decode_failed",
-                "error_message": "no source bytes found in media derivative run",
-            }
-            record_media_derivative_job_metric(
-                session=repository.session,
-                run=run,
-                target_format=target_format,
-                source_media_type=source_media_type,
-                source_bytes=0,
-                processing_started_at=processing_started_at,
-                error_code="media_derivative.source_decode_failed",
-                watermark_applied=watermark_applied,
-            )
-            return
 
         try:
             result = process_media_derivative(
@@ -530,6 +881,81 @@ class RuntimeArtifactCoordinationService:
             result=result,
             artifact=artifact,
             watermark_applied=watermark_applied,
+        )
+
+    @staticmethod
+    def _find_job_artifact(
+        session: Session,
+        *,
+        site_id: str,
+        artifact_id: str,
+        role: str,
+    ) -> MediaArtifact:
+        artifact = session.scalar(
+            select(MediaArtifact).where(
+                MediaArtifact.artifact_id == artifact_id,
+                MediaArtifact.site_id == site_id,
+                MediaArtifact.media_kind == "image",
+            )
+        )
+        if artifact is None:
+            raise MediaJobArtifactNotFoundError(role)
+        return artifact
+
+    @staticmethod
+    def _require_job_artifact(
+        session: Session,
+        *,
+        site_id: str,
+        artifact_id: str,
+        role: str,
+        minimum_remaining_seconds: int = 330,
+    ) -> MediaArtifact:
+        artifact = RuntimeArtifactCoordinationService._find_job_artifact(
+            session,
+            site_id=site_id,
+            artifact_id=artifact_id,
+            role=role,
+        )
+        now = datetime.now(UTC)
+        if is_artifact_expired(artifact, now=now):
+            raise MediaJobArtifactExpiredError(role)
+        expires_at = artifact.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at <= now + timedelta(seconds=max(0, minimum_remaining_seconds)):
+            raise MediaJobArtifactExpiredError(role)
+        return artifact
+
+    def _fail_media_job_input(
+        self,
+        repository: RuntimeRepository,
+        run: RunRecord,
+        error: MediaDerivativeErrorBase,
+        *,
+        media_input: dict[str, Any] | None = None,
+    ) -> None:
+        self.run_controller.fail_run(
+            repository,
+            run,
+            error_code=error.error_code,
+            error_message=error.message,
+        )
+        run.result_json = {
+            "status": "failed",
+            "error_code": error.error_code,
+            "error_message": error.message,
+        }
+        payload = self._dict_or_empty((media_input or {}).get("params"))
+        record_media_derivative_job_metric(
+            session=repository.session,
+            run=run,
+            target_format=str(payload.get("target_format") or "unknown"),
+            source_media_type=str(payload.get("source_media_type") or "image"),
+            source_bytes=0,
+            processing_started_at=datetime.now(UTC),
+            error_code=error.error_code,
+            watermark_applied=False,
         )
 
     def materialize_audio_generation_output(

@@ -1,6 +1,6 @@
 # Media Runtime Boundary v1
 
-Status: P3-B2 streamed signed ingress implemented; B3-B5 remain target work.
+Status: P3-B3A upload and image-job resources implemented; B3B-B5 remain target work.
 
 ## 1. Purpose
 
@@ -13,10 +13,9 @@ permissions, verification, review, approval, media-library writes, object
 assignment, publication, and local audit.
 
 This document began as the P0 target contract. Section 3 records the implemented
-P3-B1 byte-store foundation and P3-B2 streamed ingress on the existing media
-derivative route. Unified media resources, Base64 removal from other runtime
-paths, signed pull/ack, and the remaining lifecycle described for B3-B5 are
-still target work.
+P3-B1 byte-store foundation, P3-B2 streamed ingress, and P3-B3A upload/image-job
+resource split. Signed pull/ack, broader provider-output convergence, and the
+remaining lifecycle described for B3B-B5 are still target work.
 
 ## 2. Stable Markers
 
@@ -52,7 +51,7 @@ P3-B1 provides the metadata-only `MediaArtifact`, a local-volume
 `ArtifactStore`, bounded artifact downloads, independent AudioAsset objects,
 and byte-first purge. It deliberately preserves the existing artifact routes.
 
-P3-B2 converts `POST /v1/runtime/media-derivatives` from whole-body buffering
+P3-B2 converted the former `POST /v1/runtime/media-derivatives` seam from whole-body buffering
 and one-shot multipart parsing to a bounded signed ingress:
 
 - required auth headers, nonce, idempotency key, signature syntax, and timestamp
@@ -93,9 +92,44 @@ This deliberately performs two disk I/O passes for multipart requests:
 network to the sealed raw spool, then raw spool to bounded multipart file
 spools. The extra pass preserves auth-before-parse error ordering, binds the
 signature to the bytes that are parsed, and keeps application memory bounded.
-It does not create a new media runtime, artifact route, CMS write path, or
-control-plane truth. Unified media API resources, Base64 removal from other
-runtime paths, signed pull/ack, and broader operations remain B3-B5 work.
+It did not create a second runtime, CMS write path, or control-plane truth.
+
+P3-B3A atomically replaces that pre-GA public POST route with two resources:
+
+- `POST /v1/runtime/media/uploads` accepts exactly one `request` field and one
+  `file`. It preserves P3-B2 auth-before-parse, sealed body evidence, 52 MiB
+  proxy/51 MiB application limits, 50 MiB file limit, disk spooling, stable
+  429/503 behavior, and cleanup ownership. It validates declared MIME against
+  detected format, Pillow verification and decode, an 8,192-pixel per-axis
+  ceiling, a 16,777,216-pixel/64 MiB RGBA decode budget, frame count, server
+  byte count, and SHA-256 without materializing the whole upload as Python
+  `bytes`. The accepted stream is stored once and creates a
+  synchronous, zero-credit `media_upload_request.v1` run plus an available
+  `image.upload.v1` source artifact;
+- upload runs remain visible in runtime operational totals but are classified
+  as non-AI, zero-credit evidence. Provider-call and usage-meter coverage
+  denominators and alerts include only runs that require AI evidence;
+- `POST /v1/runtime/media/jobs` accepts `media_job_request.v1` with the
+  versioned `image.transform.v1` operation, source/watermark artifact IDs,
+  strict transform parameters, optional batch context, and result TTL. It
+  validates same-site available image artifacts and requires their remaining
+  TTL to cover the execution timeout before queue admission;
+- queued run input contains only artifact references and typed parameters in
+  `input_json` and encrypted execution input. It contains no byte payload,
+  Base64 field, or `storage_key`. The worker revalidates site, type, lifecycle,
+  byte size, checksum, and expiry, then performs one bounded read at the current
+  processor seam. Result metadata uses `image.transform.v1`;
+- upload idempotency verifies the typed request and server checksum before any
+  repeat put. A missing/expired/corrupt replay artifact fails closed. Image-job
+  replay is checked before queue capacity and new-job TTL admission;
+- the former POST route has no compatibility alias. The existing authenticated
+  artifact download and audio public-download remain unchanged and are not
+  evidence of the future signed-pull contract.
+
+P3-B3A still uses two disk I/O passes at ingress and may materialize one bounded
+source plus watermark inside the Pillow worker because the current processor
+accepts `bytes`. Provider-edge Base64 required by external provider protocols,
+signed pull/ack, and broader media kinds remain B3B-B5 work.
 
 ## 4. End-to-End Lifecycle
 
@@ -129,17 +163,20 @@ the artifact.
 
 ## 5. Target Resources And State Model
 
-The following resources are target contracts and are **not currently
-implemented by this document**:
+Resource status is:
 
 - `POST /v1/runtime/media/uploads`
-  - streams one site-scoped source artifact into temporary storage;
+  - **implemented in P3-B3A**; streams one site-scoped source artifact into
+    temporary storage;
 - `POST /v1/runtime/media/jobs`
-  - creates one queue-backed job for one approved typed media operation;
+  - **implemented in P3-B3A**; creates one queue-backed job for one approved
+    typed media operation;
 - `GET /v1/runtime/media/artifacts/{artifact_id}/download`
-  - verifies a signed pull and streams the matching site-scoped artifact;
+  - **target, not implemented**; verifies a signed pull and streams the matching
+    site-scoped artifact;
 - `POST /v1/runtime/media/artifacts/{artifact_id}/delivery-ack`
-  - records delivery completion only and may shorten the artifact TTL.
+  - **target, not implemented**; records delivery completion only and may
+    shorten the artifact TTL.
 
 The logical resource relationships are:
 
@@ -337,12 +374,13 @@ provider URLs, storage keys, or signed pull credentials.
   S3-compatible storage, CDN/gallery behavior, permanent storage, and arbitrary
   media pipelines until measured need.
 
-P3-B2 changes only the transport implementation of the existing signed media
-derivative POST and its exact proxy allowance. It changes no route name,
-canonical HMAC fields, runtime service, artifact model, schema, CMS ownership,
-or stored data. Delete and replacement work still happens only in an atomic
-implementation milestone that updates producers, consumers, migrations,
-fixtures, tests, and obsolete paths together.
+P3-B2 changed only transport for the former combined POST and its exact proxy
+allowance. P3-B3A then performed the atomic replacement: the upload resource
+retains that transport, the JSON job resource uses artifact references, the
+former POST is gone, and active producers, consumers, projections, fixtures,
+tests, and proxy paths use the new contracts. Canonical HMAC fields, CMS
+ownership, and final local write truth remain unchanged. Signed pull/ack and
+the audio-specific delivery special case remain B3B/B4 work.
 
 ## 13. WordPress Acceptance For P0-P5
 
@@ -354,10 +392,14 @@ fixtures, tests, and obsolete paths together.
 - **P2:** The WordPress text loop remains suggestion-only and does not gain a
   media side door around local review, approval, audit, or final write truth.
 - **P3-B1/B2:** Metadata-only `MediaArtifact`, local-volume `ArtifactStore`,
-  bounded download, byte-first purge, and the existing media derivative
+  bounded download, byte-first purge, and the former media derivative
   route's streamed signed ingress are implemented and covered by focused
-  tests. The four unified resources, signed pull/ack, and remaining transfer
-  cleanup are not represented as complete.
+  tests as historical foundations.
+- **P3-B3A:** Two of four unified resources are implemented: streamed upload
+  and artifact-referenced image job. Durable runtime inputs contain references
+  and typed parameters only; the former combined POST and its Base64 queue
+  fields are deleted. Signed pull/ack and remaining transfer convergence are
+  not represented as complete.
 - **P3 target:** The four target resources, typed image contracts, security
   controls, signed pull, delivery acknowledgement, TTL, and purge are
   implemented and covered by focused tests.
@@ -392,8 +434,9 @@ control-plane truth.
 
 ## 15. Non-goals
 
-- Implementing the four target unified routes, new schema, processors, or
-  migrations in P3-B2.
+- P3-B2 did not implement the four target unified routes, new schema,
+  processors, or migrations; P3-B3A implements only upload and image-job
+  resources.
 - Introducing Kafka, Celery, Temporal, RabbitMQ, a second scheduler, or another
   workflow truth.
 - Building a Cloud media library, gallery, DAM, CDN product, or permanent

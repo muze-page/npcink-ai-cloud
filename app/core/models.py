@@ -1723,7 +1723,7 @@ class MediaArtifact(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("run_records.run_id"), index=True)
     site_id: Mapped[str] = mapped_column(String(191), index=True)
     media_kind: Mapped[str] = mapped_column(String(16), default="image")
-    operation: Mapped[str] = mapped_column(String(64), default="media_derivative")
+    operation: Mapped[str] = mapped_column(String(64), default="image.transform.v1")
     content_type: Mapped[str] = mapped_column(String(64))
     byte_size: Mapped[int] = mapped_column(Integer, default=0)
     storage_key: Mapped[str] = mapped_column(String(191))

@@ -1,12 +1,12 @@
 # Media Derivative Operations Runbook v1
 
-Status: active guidance
+Status: active Cloud guidance; WordPress end-to-end smoke pending connector adoption
 Date: 2026-06-03
 
 ## Scope
 
-This runbook covers Cloud-side media derivative processing for
-`generate_optimized_media_derivative`.
+This runbook covers Cloud-side `media_job_request.v1` image processing through
+the versioned `image.transform.v1` operation.
 
 Cloud remains a runtime service only. It produces temporary derivative
 artifacts and bounded processing evidence. WordPress writes, attachment
@@ -15,12 +15,16 @@ and rollback authority stay in the local WordPress/Core path.
 
 ## Runtime Flow
 
-1. A local host/addon submits `media_derivative_cloud_request.v1` to Cloud.
-2. The request provides a source image as `source_file` upload or a same-site
-   temporary artifact reference.
-3. Cloud validates format, dimensions, quality, TTL, source size, source media
-   type, optional aspect-ratio crop intent, and optional watermark source.
-4. Cloud queues a normal runtime worker job using the existing FastAPI,
+1. A local host/addon streams one `media_upload_request.v1` multipart request
+   to `POST /v1/runtime/media/uploads` using one `request` field and one `file`.
+2. Cloud validates the source and returns a same-site temporary source
+   `artifact_id` with operation `image.upload.v1`.
+3. The host submits `media_job_request.v1` to `POST /v1/runtime/media/jobs`
+   with that source ID, optional separately uploaded watermark artifact ID,
+   strict transform parameters, and `operation=image.transform.v1`.
+4. Cloud checks artifact ownership, lifecycle, remaining TTL, format,
+   dimensions, quality, result TTL, crop, and watermark intent, then queues a
+   normal runtime worker job using the existing FastAPI,
    Postgres, Redis, and worker stack.
 5. The worker produces a short-lived derivative artifact and a
    `media_derivative_job_metrics` row.
@@ -53,10 +57,10 @@ Supported options:
 
 - `max_width`: `1..10000`
 - `quality`: `1..100`
-- `ttl_minutes`: `15..60`
+- upload `ttl_minutes` and job `result_ttl_minutes`: `15..60`
 - `crop`: optional aspect-ratio crop, for example
   `{"type":"aspect_ratio","aspect_ratio":"16:9","position":"center"}`
-- watermark image: uploaded `watermark_file` or same-site temporary artifact
+- watermark image: same-site temporary artifact from a separate upload
 
 Unsupported behavior:
 
@@ -88,13 +92,14 @@ Before enabling the feature:
    docker restart npcink-ai-cloud-worker-1
    ```
 
-5. Run the WordPress smoke:
+5. After the WordPress connector adopts both resources, run the WordPress smoke:
 
    ```bash
    pnpm run smoke:media-derivative:wp
    ```
 
-Expected smoke evidence:
+Until that connector batch lands, this smoke is not current P3-B3A acceptance
+evidence. Expected future smoke evidence:
 
 - local batch planning returns a candidate with Cloud request input and a
   `batch_size_recommendation`;
@@ -106,7 +111,7 @@ Expected smoke evidence:
 - rollback history is present;
 - `media_derivative_job_metrics` contains the succeeded run;
 - `media_artifacts` contains an available short-lived artifact with
-  `operation = 'media_derivative'`; bytes live in the shared ArtifactStore
+  `operation = 'image.transform.v1'`; bytes live in the shared ArtifactStore
   volume rather than PostgreSQL.
 
 ## Observability
@@ -155,15 +160,17 @@ Common request-time errors:
 
 | Error code | Meaning | Operator action |
 | --- | --- | --- |
-| `media_derivative.invalid_request` | Missing or invalid request JSON | Check host/addon request builder |
-| `media_derivative.invalid_format` | Unsupported target format | Use `webp`, `avif`, `jpeg`, `png`, or `original` |
-| `media_derivative.source_media_type_unavailable` | Unsupported media type | Send images only |
-| `media_derivative.invalid_source` | No source or conflicting source mode | Send exactly one source mode |
-| `media_derivative.invalid_crop` | Invalid crop type, aspect ratio, or position | Use bounded aspect-ratio crop options |
-| `media_derivative.invalid_watermark` | Missing/conflicting watermark source or invalid watermark options | Send options plus exactly one watermark source |
-| `media_derivative.upload_too_large` | Source or watermark exceeds upload byte limit | Let local flow skip or downscale before upload |
-| `media_derivative.source_artifact_not_found` | Referenced source artifact missing, expired, or cross-site | Regenerate source artifact |
-| `media_derivative.watermark_artifact_not_found` | Referenced watermark artifact missing, expired, or cross-site | Regenerate watermark artifact |
+| `media_upload.invalid_request` | Missing or invalid upload multipart/JSON | Check host/addon request builder |
+| `media_upload.ingress_unavailable` | Temporary ingress storage failed | Check local disk capacity and I/O |
+| `media_upload.upload_too_large` | Upload exceeds byte limits | Downscale locally before upload |
+| `media_job.validation_error` | Invalid versioned job contract or parameters | Check host/addon job builder |
+| `media_job.source_artifact_not_found` | Source is missing or cross-site | Upload the source for this site |
+| `media_job.source_artifact_expired` | Source has insufficient remaining TTL | Upload the source again |
+| `media_job.source_artifact_unavailable` | Stored source bytes failed verification/read | Regenerate the source and inspect storage |
+| `media_job.watermark_artifact_not_found` | Watermark is missing or cross-site | Upload the watermark for this site |
+| `media_job.watermark_artifact_expired` | Watermark has insufficient remaining TTL | Upload the watermark again |
+| `media_job.watermark_artifact_unavailable` | Stored watermark bytes failed verification/read | Regenerate the watermark and inspect storage |
+| `media_derivative.site_queue_full` | Site queue admission is saturated | Retry after current jobs finish |
 
 Common worker-result errors:
 
@@ -192,9 +199,12 @@ Expected behavior:
 - CMYK or palette-like inputs are converted to web-safe output modes when
   needed.
 - JPEG output flattens alpha and records a warning.
-- `original` without crop or watermark preserves source bytes and dimensions.
-- `original` with crop or watermark re-encodes through a supported still-image
-  format.
+- Every output, including `original`, always re-encodes through Pillow so
+  EXIF/GPS/ICC metadata is not passed through. `original` preserves a supported
+  still-image format when possible.
+- Upload and worker decode admission is capped at 8,192 pixels per axis and
+  16,777,216 pixels total, equivalent to one 64 MiB RGBA decode surface before
+  crop, resize, watermark, and encoder buffers.
 - Animated sources are rejected instead of silently flattening the first frame.
 
 ## Production Guardrails

@@ -5,7 +5,8 @@ import io
 from unittest.mock import patch
 
 import pytest
-from PIL import Image
+from PIL import ExifTags, Image
+from PIL.TiffImagePlugin import IFDRational
 
 from app.domain.media_derivatives.errors import (
     MediaDerivativeAnimatedSourceUnavailableError,
@@ -45,6 +46,24 @@ def _make_animated_gif_bytes() -> bytes:
     buf = io.BytesIO()
     frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
     return buf.getvalue()
+
+
+def _make_private_metadata_png_bytes(width: int = 32, height: int = 24) -> bytes:
+    image = Image.new("RGB", (width, height), color="blue")
+    exif = image.getexif()
+    exif[270] = "private description"
+    exif[int(ExifTags.IFD.GPSInfo)] = {
+        1: "N",
+        2: (IFDRational(1), IFDRational(2), IFDRational(3)),
+    }
+    output = io.BytesIO()
+    image.save(
+        output,
+        format="PNG",
+        exif=exif.tobytes(),
+        icc_profile=b"private-icc-profile",
+    )
+    return output.getvalue()
 
 
 def test_process_webp_success() -> None:
@@ -110,7 +129,7 @@ def test_process_applies_exif_orientation_before_output() -> None:
     assert result.height == 40
 
 
-def test_process_original_preserves_bytes() -> None:
+def test_process_original_returns_valid_same_format() -> None:
     source = _make_png_bytes(50, 50)
     result = process_media_derivative(
         source_bytes=source,
@@ -119,9 +138,57 @@ def test_process_original_preserves_bytes() -> None:
         max_width=100,
         quality=80,
     )
-    assert result.output_bytes == source
+    assert result.format == "png"
     assert result.width == 50
     assert result.height == 50
+    with Image.open(io.BytesIO(result.output_bytes)) as output:
+        output.verify()
+
+
+def test_process_original_strips_exif_metadata() -> None:
+    image = Image.new("RGB", (40, 20), color="blue")
+    exif = image.getexif()
+    exif[270] = "private description"
+    exif[315] = "private author"
+    source = io.BytesIO()
+    image.save(source, format="JPEG", exif=exif.tobytes())
+
+    result = process_media_derivative(
+        source_bytes=source.getvalue(),
+        source_media_type="image",
+        target_format="original",
+        max_width=100,
+        quality=80,
+    )
+
+    with Image.open(io.BytesIO(result.output_bytes)) as output:
+        assert not output.getexif()
+        assert "exif" not in output.info
+
+
+@pytest.mark.parametrize(
+    ("target_format", "max_width"),
+    [("original", 64), ("png", 64), ("png", 16)],
+)
+def test_process_png_strips_private_icc_exif_and_gps_metadata(
+    target_format: str,
+    max_width: int,
+) -> None:
+    source = _make_private_metadata_png_bytes()
+
+    result = process_media_derivative(
+        source_bytes=source,
+        source_media_type="image",
+        target_format=target_format,
+        max_width=max_width,
+        quality=80,
+    )
+
+    with Image.open(io.BytesIO(result.output_bytes)) as output:
+        assert "icc_profile" not in output.info
+        assert "exif" not in output.info
+        assert not output.getexif()
+        assert not output.getexif().get_ifd(ExifTags.IFD.GPSInfo)
 
 
 def test_process_png_applies_image_watermark() -> None:

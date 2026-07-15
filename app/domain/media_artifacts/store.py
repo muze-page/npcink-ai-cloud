@@ -183,5 +183,33 @@ def iter_open_artifact_chunks(stream: BinaryIO, *, chunk_size: int) -> Iterator[
             yield chunk
 
 
-def read_artifact_bytes(store: ArtifactStore, storage_key: str) -> bytes:
-    return b"".join(iter_artifact_chunks(store, storage_key))
+def read_artifact_bytes(
+    store: ArtifactStore,
+    storage_key: str,
+    *,
+    max_bytes: int | None = None,
+    expected_bytes: int | None = None,
+    expected_checksum: str | None = None,
+) -> bytes:
+    payload = bytearray()
+    digest = hashlib.sha256()
+    try:
+        with store.open(storage_key) as stream:
+            while True:
+                chunk = stream.read(store.chunk_size)
+                if not chunk:
+                    break
+                payload.extend(chunk)
+                digest.update(chunk)
+                if max_bytes is not None and len(payload) > max_bytes:
+                    raise ArtifactStoreError("artifact exceeds size limit")
+    except ArtifactStoreError:
+        raise
+    except OSError as error:
+        raise ArtifactStoreError("artifact read failed") from error
+    if expected_bytes is not None and len(payload) != int(expected_bytes):
+        raise ArtifactStoreError("artifact byte size does not match metadata")
+    checksum = f"sha256:{digest.hexdigest()}"
+    if expected_checksum is not None and checksum != expected_checksum:
+        raise ArtifactStoreError("artifact checksum does not match metadata")
+    return bytes(payload)

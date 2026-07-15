@@ -95,7 +95,7 @@ class MediaBatchPlanService:
             "exclusions": exclusions,
             "execution_plan": {
                 "mode": "chunked_single_derivative_runs",
-                "runtime_endpoint": "/v1/runtime/media-derivatives",
+                "runtime_endpoint": "/v1/runtime/media/jobs",
                 "recommended_chunk_size": recommended_chunk_size,
                 "max_chunk_size": int(self.settings.media_derivative_batch_max_chunk_size),
                 "batch_context_template": {
@@ -105,7 +105,7 @@ class MediaBatchPlanService:
                     "chunk_size": recommended_chunk_size,
                     "explicit_avif": bool(operation["target_format"] == "avif"),
                 },
-                "queue_pressure_source": "media_derivative_response.queue_pressure",
+                "queue_pressure_source": "media_job_admission",
             },
             "confirmation": {
                 "requires_operator_confirmation": True,
@@ -116,7 +116,8 @@ class MediaBatchPlanService:
             },
             "handoff": {
                 "plan_contract": MEDIA_BATCH_PLAN_OUTPUT_CONTRACT,
-                "derivative_request_contract": "media_derivative_cloud_request.v1",
+                "derivative_request_contract": "media_job_request.v1",
+                "operation": "image.transform.v1",
                 "final_writes": "core_proposal_required",
                 "direct_wordpress_write": False,
                 "wordpress_write_owner": "core_proposal_approval",

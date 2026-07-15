@@ -673,8 +673,8 @@ def test_lifecycle_dependency_boundary_and_runtime_service_facades() -> None:
     assert ".get_run_by_idempotency(" not in artifact_coordination_source
     service_idempotent_replay_calls = service_source.count(".get_idempotent_replay(")
     artifact_idempotent_replay_calls = artifact_coordination_source.count(".get_idempotent_replay(")
-    assert (service_idempotent_replay_calls, artifact_idempotent_replay_calls) == (8, 1)
-    assert service_idempotent_replay_calls + artifact_idempotent_replay_calls == 9
+    assert (service_idempotent_replay_calls, artifact_idempotent_replay_calls) == (8, 4)
+    assert service_idempotent_replay_calls + artifact_idempotent_replay_calls == 12
     assert service_source.count(".build_request_fingerprint(") == 8
     service_media_fingerprint_calls = service_source.count(
         ".build_media_derivative_request_fingerprint("
@@ -682,8 +682,8 @@ def test_lifecycle_dependency_boundary_and_runtime_service_facades() -> None:
     artifact_media_fingerprint_calls = artifact_coordination_source.count(
         ".build_media_derivative_request_fingerprint("
     )
-    assert (service_media_fingerprint_calls, artifact_media_fingerprint_calls) == (0, 1)
-    assert service_media_fingerprint_calls + artifact_media_fingerprint_calls == 1
+    assert (service_media_fingerprint_calls, artifact_media_fingerprint_calls) == (0, 2)
+    assert service_media_fingerprint_calls + artifact_media_fingerprint_calls == 2
     service_publish_queue_calls = service_source.count(".publish_queue_signal(")
     artifact_publish_queue_calls = artifact_coordination_source.count(".publish_queue_signal(")
     assert (service_publish_queue_calls, artifact_publish_queue_calls) == (5, 1)

@@ -27,6 +27,7 @@ from app.domain.media_artifacts import ArtifactStoreError
 from app.domain.media_derivatives.artifacts import (
     cleanup_expired_artifacts,
     get_artifact,
+    validate_image_upload_stream,
 )
 from app.domain.runtime.errors import RuntimeRunNotFoundError
 from app.domain.runtime.service import RuntimeService
@@ -79,18 +80,45 @@ def _png_bytes(*, width: int = 64, height: int = 48) -> bytes:
     return output.getvalue()
 
 
-def _media_input(*, ttl_minutes: int = 7) -> dict[str, Any]:
+def _media_input(source_artifact_id: str, *, ttl_minutes: int = 7) -> dict[str, Any]:
     return {
-        "cloud_job_payload": {
-            "job_type": "generate_optimized_media_derivative",
+        "request_contract_version": "media_job_request.v1",
+        "operation": "image.transform.v1",
+        "source_artifact_id": source_artifact_id,
+        "params": {
             "target_format": "png",
             "max_width": 32,
             "quality": 80,
             "source_media_type": "image",
         },
-        "source_media_type": "image",
-        "ttl_minutes": ttl_minutes,
+        "result_ttl_minutes": ttl_minutes,
     }
+
+
+def _upload_source(
+    context: RuntimeContext,
+    *,
+    source_bytes: bytes,
+    idempotency_key: str,
+    ttl_minutes: int = 7,
+) -> str:
+    stream = io.BytesIO(source_bytes)
+    upload = validate_image_upload_stream(stream, declared_content_type="image/png")
+    response = context.service.create_media_upload(
+        site_id="site_alpha",
+        request_payload={
+            "request_contract_version": "media_upload_request.v1",
+            "media_kind": "image",
+            "ttl_minutes": ttl_minutes,
+        },
+        stream=stream,
+        upload=upload,
+        ttl_minutes=ttl_minutes,
+        idempotency_key=f"{idempotency_key}-upload",
+        trace_id=f"trace-{idempotency_key}-upload",
+    )
+    assert response.status == "succeeded"
+    return str(response.result["artifact"]["artifact_id"])
 
 
 def _enqueue_and_process(
@@ -100,11 +128,15 @@ def _enqueue_and_process(
     idempotency_key: str,
     ttl_minutes: int = 7,
 ) -> str:
-    response = context.service.enqueue_media_derivative_run(
-        site_id="site_alpha",
-        input_payload=_media_input(ttl_minutes=ttl_minutes),
+    source_artifact_id = _upload_source(
+        context,
         source_bytes=source_bytes,
+        idempotency_key=idempotency_key,
         ttl_minutes=ttl_minutes,
+    )
+    response = context.service.enqueue_media_job_run(
+        site_id="site_alpha",
+        input_payload=_media_input(source_artifact_id, ttl_minutes=ttl_minutes),
         idempotency_key=idempotency_key,
         trace_id=f"trace-{idempotency_key}",
     )
@@ -205,7 +237,7 @@ def test_media_derivative_artifact_correlation_scope_ttl_and_cleanup_handoff(
                 now=retry_at,
                 session=session,
             )
-            == 1
+            == 2
         )
         assert artifact.purged_at is not None
         assert _as_utc(artifact.purged_at) == retry_at
@@ -365,24 +397,37 @@ def test_cleanup_retry_backoff_prevents_failed_prefix_starvation(
         assert sum(artifact.purge_attempt_count == 2 for artifact in failed) == 100
 
 
-@pytest.mark.parametrize(
-    ("source_bytes", "expected_source_bytes", "idempotency_key"),
-    [
-        (b"", 0, "idem-artifact-no-source"),
-        (b"not-an-image", len(b"not-an-image"), "idem-artifact-bad-source"),
-    ],
-)
 def test_media_derivative_source_failures_map_to_run_result_and_metric(
     runtime_context: RuntimeContext,
-    source_bytes: bytes,
-    expected_source_bytes: int,
-    idempotency_key: str,
 ) -> None:
-    run_id = _enqueue_and_process(
+    source_artifact_id = _upload_source(
         runtime_context,
-        source_bytes=source_bytes,
-        idempotency_key=idempotency_key,
+        source_bytes=_png_bytes(),
+        idempotency_key="idem-artifact-bad-source",
     )
+    invalid_bytes = b"not-an-image"
+    stored = runtime_context.service.artifact_store.put(
+        io.BytesIO(invalid_bytes),
+        max_bytes=len(invalid_bytes),
+        metadata={"media_kind": "image"},
+    )
+    with get_session(runtime_context.database_url) as session:
+        source = session.get(MediaArtifact, source_artifact_id)
+        assert source is not None
+        source.storage_key = stored.storage_key
+        source.byte_size = stored.byte_size
+        source.checksum = stored.checksum
+        session.commit()
+
+    response = runtime_context.service.enqueue_media_job_run(
+        site_id="site_alpha",
+        input_payload=_media_input(source_artifact_id),
+        idempotency_key="idem-artifact-bad-source",
+        trace_id="trace-idem-artifact-bad-source",
+    )
+    processed = runtime_context.service.process_queued_runs(max_runs=1, timeout_seconds=0)
+    assert [item["run_id"] for item in processed] == [response.run_id]
+    run_id = response.run_id
 
     with get_session(runtime_context.database_url) as session:
         run = session.get(RunRecord, run_id)
@@ -395,18 +440,14 @@ def test_media_derivative_source_failures_map_to_run_result_and_metric(
         assert run.result_json == {
             "status": "failed",
             "error_code": "media_derivative.source_decode_failed",
-            "error_message": (
-                "no source bytes found in media derivative run"
-                if not source_bytes
-                else "source image could not be decoded"
-            ),
+            "error_message": "source image could not be decoded",
         }
         assert metric is not None
         assert metric.run_id == run.run_id
         assert metric.site_id == run.site_id
         assert metric.status == "failed"
         assert metric.error_code == run.error_code
-        assert metric.source_bytes == expected_source_bytes
+        assert metric.source_bytes == len(invalid_bytes)
         assert metric.output_bytes == 0
         assert metric.artifact_id is None
 
@@ -519,9 +560,8 @@ def test_runtime_facade_retains_run_04_entrypoints_with_extracted_delegation() -
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
     expected_calls = {
-        "enqueue_media_derivative_run": (
-            "artifact_coordination_service.enqueue_media_derivative_run"
-        ),
+        "create_media_upload": ("artifact_coordination_service.create_media_upload"),
+        "enqueue_media_job_run": ("artifact_coordination_service.enqueue_media_job_run"),
         "_execute_media_derivative_run": (
             "artifact_coordination_service.execute_media_derivative_run"
         ),

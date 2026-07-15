@@ -130,11 +130,12 @@ def test_connector_contract_freezes_one_suggestion_only_runtime() -> None:
         assert required in connector
 
 
-def test_media_contract_tracks_p3_b2_ingress_and_remaining_targets() -> None:
+def test_media_contract_tracks_p3_b3a_resources_and_remaining_targets() -> None:
     media = _read("docs/media-runtime-boundary-v1.md")
 
     for required in (
-        "Status: P3-B2 streamed signed ingress implemented; B3-B5 remain target work.",
+        "Status: P3-B3A upload and image-job resources implemented; B3B-B5 remain target work.",
+        "P3-B3A atomically replaces that pre-GA public POST route with two resources",
         "metadata-only `MediaArtifact`",
         "exact same sealed temporary file",
         "two disk I/O passes",

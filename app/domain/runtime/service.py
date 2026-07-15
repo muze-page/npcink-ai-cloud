@@ -198,6 +198,7 @@ logger = get_logger(__name__)
 
 OPERATOR_REPAIR_REASON_MIN_LENGTH = 12
 OPERATOR_REPAIR_EVIDENCE_MIN_LENGTH = 24
+NON_AI_ZERO_CREDIT_EXECUTION_KINDS = frozenset({"media_upload"})
 
 
 class RuntimeService:
@@ -811,23 +812,38 @@ class RuntimeService:
                 idempotent_replay=False,
             )
 
-    def enqueue_media_derivative_run(
+    def create_media_upload(
+        self,
+        *,
+        site_id: str,
+        request_payload: dict[str, Any],
+        stream: Any,
+        upload: Any,
+        ttl_minutes: int,
+        idempotency_key: str | None = None,
+        trace_id: str | None = None,
+    ) -> RuntimeExecutionResponse:
+        return self.artifact_coordination_service.create_media_upload(
+            site_id=site_id,
+            request_payload=request_payload,
+            stream=stream,
+            upload=upload,
+            ttl_minutes=ttl_minutes,
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
+        )
+
+    def enqueue_media_job_run(
         self,
         *,
         site_id: str,
         input_payload: dict[str, Any],
-        source_bytes: bytes,
-        watermark_bytes: bytes | None = None,
-        ttl_minutes: int = 30,
         idempotency_key: str | None = None,
         trace_id: str | None = None,
     ) -> RuntimeExecutionResponse:
-        return self.artifact_coordination_service.enqueue_media_derivative_run(
+        return self.artifact_coordination_service.enqueue_media_job_run(
             site_id=site_id,
             input_payload=input_payload,
-            source_bytes=source_bytes,
-            watermark_bytes=watermark_bytes,
-            ttl_minutes=ttl_minutes,
             idempotency_key=idempotency_key,
             trace_id=trace_id,
         )
@@ -1329,6 +1345,11 @@ class RuntimeService:
             )
 
         run_ids = {run.run_id for run in runs}
+        ai_evidence_required_run_ids = {
+            run.run_id
+            for run in runs
+            if str(run.execution_kind or "").strip() not in NON_AI_ZERO_CREDIT_EXECUTION_KINDS
+        }
         provider_call_run_ids = {
             call.run_id for call, _run in provider_call_rows if call.run_id in run_ids
         }
@@ -1438,28 +1459,32 @@ class RuntimeService:
             limit=max_items,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
         )
         profile_items = self._finalize_hosted_governance_groups(
             profile_groups.values(),
             limit=max_items,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
         )
         execution_kind_items = self._finalize_hosted_governance_groups(
             execution_kind_groups.values(),
             limit=max_items,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
         )
         provider_model_items = self._finalize_hosted_governance_groups(
             provider_model_groups.values(),
             limit=max_items,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
         )
         governance_gaps = self._build_hosted_governance_gap_summary(
             capability_items=capability_items,
-            runs_total=len(runs),
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
         )
@@ -1476,13 +1501,18 @@ class RuntimeService:
             },
             "totals": {
                 "runs": len(runs),
+                "ai_evidence_required_runs": len(ai_evidence_required_run_ids),
+                "non_ai_zero_credit_runs": len(runs) - len(ai_evidence_required_run_ids),
                 "provider_calls": len(provider_call_rows),
                 "usage_meter_events": len(meter_events),
-                "provider_call_run_coverage_rate": self._safe_ratio(
-                    len(provider_call_run_ids),
-                    len(runs),
+                "provider_call_run_coverage_rate": self._safe_coverage_ratio(
+                    len(provider_call_run_ids & ai_evidence_required_run_ids),
+                    len(ai_evidence_required_run_ids),
                 ),
-                "metered_run_coverage_rate": self._safe_ratio(len(meter_run_ids), len(runs)),
+                "metered_run_coverage_rate": self._safe_coverage_ratio(
+                    len(meter_run_ids & ai_evidence_required_run_ids),
+                    len(ai_evidence_required_run_ids),
+                ),
             },
             "capability_groups": capability_items,
             "profile_groups": profile_items,
@@ -1787,16 +1817,14 @@ class RuntimeService:
         limit: int,
         provider_call_run_ids: set[str],
         meter_run_ids: set[str],
+        ai_evidence_required_run_ids: set[str],
     ) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         for raw_group in groups:
             group = dict(raw_group)
             run_ids = cast(set[str], group.pop("run_ids", set()))
-            group_provider_call_run_ids = cast(
-                set[str],
-                group.pop("provider_call_run_ids", set()),
-            )
-            group_meter_run_ids = cast(set[str], group.pop("meter_run_ids", set()))
+            group.pop("provider_call_run_ids", set())
+            group.pop("meter_run_ids", set())
             runs_total = max(
                 self._coerce_int(group.get("runs_total"), default=0),
                 len(run_ids),
@@ -1807,18 +1835,20 @@ class RuntimeService:
             tokens_in = self._coerce_int(group.get("tokens_in"), default=0)
             tokens_out = self._coerce_int(group.get("tokens_out"), default=0)
             group["runs_total"] = runs_total
+            group_ai_evidence_required_run_ids = run_ids & ai_evidence_required_run_ids
+            group["ai_evidence_required_runs"] = len(group_ai_evidence_required_run_ids)
             group["tokens_total"] = tokens_in + tokens_out
             group["avg_latency_ms"] = (
                 round(latency_total / provider_calls, 2) if provider_calls else 0.0
             )
             group["provider_error_rate"] = self._safe_ratio(provider_errors, provider_calls)
-            group["provider_call_run_coverage_rate"] = self._safe_ratio(
-                len(run_ids & provider_call_run_ids) or len(group_provider_call_run_ids),
-                runs_total,
+            group["provider_call_run_coverage_rate"] = self._safe_coverage_ratio(
+                len(group_ai_evidence_required_run_ids & provider_call_run_ids),
+                len(group_ai_evidence_required_run_ids),
             )
-            group["metered_run_coverage_rate"] = self._safe_ratio(
-                len(run_ids & meter_run_ids) or len(group_meter_run_ids),
-                runs_total,
+            group["metered_run_coverage_rate"] = self._safe_coverage_ratio(
+                len(group_ai_evidence_required_run_ids & meter_run_ids),
+                len(group_ai_evidence_required_run_ids),
             )
             group["profile_ids"] = sorted(cast(set[str], group["profile_ids"]))[:10]
             group["execution_kinds"] = sorted(cast(set[str], group["execution_kinds"]))[:10]
@@ -1844,28 +1874,35 @@ class RuntimeService:
         self,
         *,
         capability_items: list[dict[str, object]],
-        runs_total: int,
+        ai_evidence_required_run_ids: set[str],
         provider_call_run_ids: set[str],
         meter_run_ids: set[str],
     ) -> dict[str, object]:
         unmetered_capabilities = [
             str(item.get("group_id") or "")
             for item in capability_items
-            if self._coerce_int(item.get("runs_total"), default=0) > 0
+            if self._coerce_int(item.get("ai_evidence_required_runs"), default=0) > 0
             and (self._coerce_float(item.get("metered_run_coverage_rate")) or 0.0) < 1.0
         ]
         missing_provider_call_capabilities = [
             str(item.get("group_id") or "")
             for item in capability_items
-            if self._coerce_int(item.get("runs_total"), default=0) > 0
+            if self._coerce_int(item.get("ai_evidence_required_runs"), default=0) > 0
             and self._coerce_int(item.get("provider_calls"), default=0) <= 0
             and str(item.get("group_id") or "") not in {"vision"}
         ]
+        ai_runs_total = len(ai_evidence_required_run_ids)
         return {
             "unmetered_capabilities": unmetered_capabilities,
             "missing_provider_call_capabilities": missing_provider_call_capabilities,
-            "unmetered_run_count": max(0, runs_total - len(meter_run_ids)),
-            "runs_without_provider_call_count": max(0, runs_total - len(provider_call_run_ids)),
+            "unmetered_run_count": max(
+                0,
+                ai_runs_total - len(meter_run_ids & ai_evidence_required_run_ids),
+            ),
+            "runs_without_provider_call_count": max(
+                0,
+                ai_runs_total - len(provider_call_run_ids & ai_evidence_required_run_ids),
+            ),
             "review_guidance": (
                 "Inspect capabilities below full metering coverage before enabling "
                 "new runtime providers at higher traffic."
@@ -1888,6 +1925,14 @@ class RuntimeService:
             self._dict_or_empty(item) for item in raw_capability_items if isinstance(item, dict)
         ]
         runs_total = self._coerce_int(totals.get("runs"), default=0)
+        ai_evidence_required_runs = self._coerce_int(
+            totals.get("ai_evidence_required_runs"),
+            default=runs_total,
+        )
+        non_ai_zero_credit_runs = self._coerce_int(
+            totals.get("non_ai_zero_credit_runs"),
+            default=0,
+        )
         provider_calls = self._coerce_int(totals.get("provider_calls"), default=0)
         meter_events = self._coerce_int(totals.get("usage_meter_events"), default=0)
         metered_rate = self._coerce_float(totals.get("metered_run_coverage_rate")) or 0.0
@@ -1943,7 +1988,7 @@ class RuntimeService:
             str(item.get("group_id") or "")
             for item in capability_items
             if isinstance(item, dict)
-            and self._coerce_int(item.get("runs_total"), default=0) > 0
+            and self._coerce_int(item.get("ai_evidence_required_runs"), default=0) > 0
             and (self._coerce_float(item.get("provider_call_run_coverage_rate")) or 0.0) < 1.0
         ]
         if runs_without_provider_call_count > 0 or provider_gap_capabilities:
@@ -2038,6 +2083,8 @@ class RuntimeService:
             "alert_count": len(alerts),
             "daily_digest": {
                 "runs": runs_total,
+                "ai_evidence_required_runs": ai_evidence_required_runs,
+                "non_ai_zero_credit_runs": non_ai_zero_credit_runs,
                 "provider_calls": provider_calls,
                 "meter_events": meter_events,
                 "metered_run_coverage_rate": metered_rate,
@@ -2063,6 +2110,11 @@ class RuntimeService:
         if denominator <= 0:
             return 0.0
         return round(max(0, numerator) / denominator, 4)
+
+    def _safe_coverage_ratio(self, numerator: int, denominator: int) -> float:
+        if denominator <= 0:
+            return 1.0
+        return self._safe_ratio(numerator, denominator)
 
     def list_runtime_diagnostic_runs(
         self,
