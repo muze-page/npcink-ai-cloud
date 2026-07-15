@@ -166,8 +166,8 @@ database finalize fence.
 
 ## Deferred
 
-- P3-B4C2 bounded artifact-store inventory versus database inventory
-  reconciliation, including orphan safety windows;
+- P3-B4C2b persistent, fenced orphan deletion after the read-only bounded
+  inventory reconciliation and safety-window evidence accepted by ADR-014;
 - P3-B4C3 PostgreSQL real-concurrency tests and PostgreSQL 16 migration
   validation;
 - P3-B4D WordPress local verification/import/audit evidence;

@@ -1,4 +1,9 @@
 from app.domain.media_artifacts.store import (
+    ArtifactInventoryItem,
+    ArtifactInventoryPage,
+    ArtifactInventoryStore,
+    ArtifactPublicationFenceStore,
+    ArtifactPublicationGuard,
     ArtifactStorageMetadata,
     ArtifactStore,
     ArtifactStoreError,
@@ -10,6 +15,11 @@ from app.domain.media_artifacts.store import (
 )
 
 __all__ = [
+    "ArtifactInventoryItem",
+    "ArtifactInventoryPage",
+    "ArtifactInventoryStore",
+    "ArtifactPublicationFenceStore",
+    "ArtifactPublicationGuard",
     "ArtifactStorageMetadata",
     "ArtifactStore",
     "ArtifactStoreError",

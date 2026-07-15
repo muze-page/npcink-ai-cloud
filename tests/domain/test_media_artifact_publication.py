@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import io
+import multiprocessing
 from collections.abc import Mapping
 from pathlib import Path
 from typing import BinaryIO
@@ -23,6 +24,7 @@ from app.domain.media_artifacts.store import (
     ArtifactStorageMetadata,
     ArtifactStoreError,
     ArtifactStorePublicationUncertainError,
+    LocalVolumeArtifactStore,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,6 +82,64 @@ class _RecordingStore:
         self.delete_calls.append(storage_key)
         if self.delete_fails:
             raise ArtifactStoreError("injected delete failure")
+
+
+class _RecordingGuard:
+    def __init__(self) -> None:
+        self.release_count = 0
+
+    @property
+    def released(self) -> bool:
+        return self.release_count > 0
+
+    def release(self) -> None:
+        self.release_count += 1
+
+
+class _FencedRecordingStore(_RecordingStore):
+    def __init__(self, *storage_keys: str, **kwargs: object) -> None:
+        super().__init__(*storage_keys, **kwargs)  # type: ignore[arg-type]
+        self.guards: list[_RecordingGuard] = []
+        self.guard_state_during_delete: list[bool] = []
+
+    def acquire_publication_guard(self) -> _RecordingGuard:
+        guard = _RecordingGuard()
+        self.guards.append(guard)
+        return guard
+
+    def try_acquire_reconciliation_guard(self) -> _RecordingGuard | None:
+        return None
+
+    def delete(self, storage_key: str) -> None:
+        self.guard_state_during_delete.append(self.guards[-1].released)
+        super().delete(storage_key)
+
+
+def _try_local_volume_exclusive(root: str, result_queue: object) -> None:
+    store = LocalVolumeArtifactStore(root)
+    guard = store.try_acquire_reconciliation_guard()
+    result_queue.put(guard is not None)  # type: ignore[attr-defined]
+    if guard is not None:
+        guard.release()
+
+
+def _exclusive_is_available(root: Path) -> bool:
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=_try_local_volume_exclusive,
+        args=(str(root), result_queue),
+    )
+    process.start()
+    try:
+        result = bool(result_queue.get(timeout=10))
+    finally:
+        process.join(timeout=10)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=10)
+    assert process.exitcode == 0
+    return result
 
 
 def _publish(session: Session, store: _RecordingStore) -> ArtifactStorageMetadata:
@@ -141,6 +201,274 @@ def test_ordinary_rollback_deletes_published_object() -> None:
         assert store.delete_calls == [stored.storage_key]
         assert tracked_artifact_storage_keys(session) == ()
         assert uncertain_artifact_storage_keys(session) == ()
+    engine.dispose()
+
+
+def test_publication_fence_releases_after_definitive_commit() -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    store = _FencedRecordingStore("obj_00000000000000000000000000000021")
+    with Session(engine) as session:
+        _publish(session, store)
+        assert store.guards[0].released is False
+
+        session.commit()
+
+        assert store.guards[0].release_count == 1
+        assert store.delete_calls == []
+    engine.dispose()
+
+
+def test_real_local_volume_fence_covers_commit_until_outcome(
+    tmp_path: Path,
+) -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    root = tmp_path / "commit-artifacts"
+    store = LocalVolumeArtifactStore(root)
+    with Session(engine) as session:
+        _publish(session, store)  # type: ignore[arg-type]
+        assert _exclusive_is_available(root) is False
+
+        session.commit()
+
+        assert _exclusive_is_available(root) is True
+    engine.dispose()
+
+
+def test_publication_fence_covers_rollback_delete_then_releases() -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    store = _FencedRecordingStore("obj_00000000000000000000000000000022")
+    with Session(engine) as session:
+        _publish(session, store)
+
+        session.rollback()
+
+        assert store.guard_state_during_delete == [False]
+        assert store.guards[0].release_count == 1
+        assert uncertain_artifact_storage_keys(session) == ()
+    engine.dispose()
+
+
+def test_real_local_volume_fence_covers_rollback_delete_until_outcome(
+    tmp_path: Path,
+) -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    root = tmp_path / "rollback-artifacts"
+    store = LocalVolumeArtifactStore(root)
+    with Session(engine) as session:
+        stored = _publish(session, store)  # type: ignore[arg-type]
+        assert _exclusive_is_available(root) is False
+
+        session.rollback()
+
+        assert store.contains(stored.storage_key) is False
+        assert _exclusive_is_available(root) is True
+    engine.dispose()
+
+
+def test_publication_fence_releases_when_uncertain_commit_is_quarantined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    _commit_then_lose_acknowledgement(monkeypatch, engine)
+    storage_key = "obj_00000000000000000000000000000023"
+    store = _FencedRecordingStore(storage_key)
+    with Session(engine) as session:
+        _publish(session, store)
+        with pytest.raises(OSError, match="commit acknowledgement lost"):
+            session.commit()
+
+        assert store.guards[0].released is False
+        session.rollback()
+
+        assert store.guards[0].release_count == 1
+        assert uncertain_artifact_storage_keys(session) == (storage_key,)
+        assert store.delete_calls == []
+    engine.dispose()
+
+
+def test_real_local_volume_fence_holds_through_uncertain_commit_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    _commit_then_lose_acknowledgement(monkeypatch, engine)
+    root = tmp_path / "uncertain-commit-artifacts"
+    store = LocalVolumeArtifactStore(root)
+    with Session(engine) as session:
+        stored = _publish(session, store)  # type: ignore[arg-type]
+        assert _exclusive_is_available(root) is False
+        with pytest.raises(OSError, match="commit acknowledgement lost"):
+            session.commit()
+
+        assert _exclusive_is_available(root) is False
+        session.rollback()
+
+        assert uncertain_artifact_storage_keys(session) == (stored.storage_key,)
+        assert store.contains(stored.storage_key) is True
+        assert _exclusive_is_available(root) is True
+    engine.dispose()
+
+
+def test_publication_fence_releases_after_uncertain_publication_rollback() -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    storage_key = "obj_00000000000000000000000000000024"
+    store = _FencedRecordingStore(storage_key, publication_uncertain=True)
+    with Session(engine) as session:
+        with pytest.raises(ArtifactStorePublicationUncertainError):
+            _publish(session, store)
+        assert store.guards[0].released is False
+
+        session.rollback()
+
+        assert store.guard_state_during_delete == [False]
+        assert store.guards[0].release_count == 1
+    engine.dispose()
+
+
+def test_publication_fence_releases_when_rollback_delete_is_quarantined() -> None:
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    storage_key = "obj_00000000000000000000000000000025"
+    store = _FencedRecordingStore(storage_key, delete_fails=True)
+    with Session(engine) as session:
+        _publish(session, store)
+
+        with pytest.raises(ArtifactPublicationCleanupUncertainError):
+            session.rollback()
+
+        assert store.guard_state_during_delete == [False]
+        assert store.guards[0].release_count == 1
+        assert uncertain_artifact_storage_keys(session) == (storage_key,)
+    engine.dispose()
+
+
+def test_publication_fence_releases_and_preserves_exact_base_exception() -> None:
+    class FatalDelete(BaseException):
+        pass
+
+    fatal = FatalDelete("fatal delete")
+
+    class FatalDeleteStore(_FencedRecordingStore):
+        def delete(self, storage_key: str) -> None:
+            self.guard_state_during_delete.append(self.guards[-1].released)
+            self.delete_calls.append(storage_key)
+            raise fatal
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    storage_key = "obj_00000000000000000000000000000026"
+    store = FatalDeleteStore(storage_key)
+    with Session(engine) as session:
+        _publish(session, store)
+
+        with pytest.raises(FatalDelete) as caught:
+            session.rollback()
+
+        assert caught.value is fatal
+        assert store.guard_state_during_delete == [False]
+        assert store.guards[0].release_count == 1
+        assert uncertain_artifact_storage_keys(session) == (storage_key,)
+    engine.dispose()
+
+
+def test_real_local_volume_fence_releases_after_delete_base_exception(
+    tmp_path: Path,
+) -> None:
+    class FatalDelete(BaseException):
+        pass
+
+    failure = FatalDelete("fatal local delete")
+
+    class FatalLocalVolumeStore(LocalVolumeArtifactStore):
+        def delete(self, storage_key: str) -> None:
+            del storage_key
+            raise failure
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    root = tmp_path / "fatal-delete-artifacts"
+    store = FatalLocalVolumeStore(root)
+    with Session(engine) as session:
+        stored = _publish(session, store)  # type: ignore[arg-type]
+        assert _exclusive_is_available(root) is False
+
+        with pytest.raises(FatalDelete) as caught:
+            session.rollback()
+
+        assert caught.value is failure
+        assert uncertain_artifact_storage_keys(session) == (stored.storage_key,)
+        assert _exclusive_is_available(root) is True
+    engine.dispose()
+
+
+def test_low_level_tracking_releases_guard_when_listener_install_escapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ListenerFailure(BaseException):
+        pass
+
+    failure = ListenerFailure("listener failure")
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    store = _RecordingStore()
+    guard = _RecordingGuard()
+    monkeypatch.setattr(
+        publication_tracker,
+        "_install_session_listeners",
+        lambda _session: (_ for _ in ()).throw(failure),
+    )
+    with Session(engine) as session:
+        with pytest.raises(ListenerFailure) as caught:
+            track_artifact_publication(
+                session,
+                store=store,  # type: ignore[arg-type]
+                storage_key="obj_00000000000000000000000000000027",
+                publication_guard=guard,
+            )
+
+        assert caught.value is failure
+        assert guard.release_count == 1
+        assert tracked_artifact_storage_keys(session) == ()
+        session.rollback()
+    engine.dispose()
+
+
+def test_publish_helper_releases_non_idempotent_guard_once_on_listener_escape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ListenerFailure(BaseException):
+        pass
+
+    class StrictGuard:
+        def __init__(self) -> None:
+            self.release_count = 0
+
+        def release(self) -> None:
+            self.release_count += 1
+            if self.release_count > 1:
+                raise AssertionError("guard released more than once")
+
+    failure = ListenerFailure("listener failure")
+    guard = StrictGuard()
+
+    class StrictFenceStore(_RecordingStore):
+        def acquire_publication_guard(self) -> StrictGuard:
+            return guard
+
+        def try_acquire_reconciliation_guard(self) -> StrictGuard | None:
+            return None
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    store = StrictFenceStore("obj_00000000000000000000000000000028")
+    monkeypatch.setattr(
+        publication_tracker,
+        "_install_session_listeners",
+        lambda _session: (_ for _ in ()).throw(failure),
+    )
+    with Session(engine) as session:
+        with pytest.raises(ListenerFailure) as caught:
+            _publish(session, store)
+
+        assert caught.value is failure
+        assert guard.release_count == 1
+        assert tracked_artifact_storage_keys(session) == ()
+        session.rollback()
     engine.dispose()
 
 

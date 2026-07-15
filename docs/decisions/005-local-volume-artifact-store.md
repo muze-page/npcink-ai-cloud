@@ -62,8 +62,9 @@ keeps this replacement possible without branching business services.
 - API, runtime-worker, and ops-worker must mount the same volume and root.
 - Database backups no longer contain artifact bytes; volume backup/monitoring
   becomes a separate operator responsibility.
-- A database commit failure after atomic publication can leave an orphan; a
-  future reconciliation batch may remove unreferenced keys.
+- A database commit failure after atomic publication can leave an orphan.
+  ADR-014/P3-B4C2a now reports bounded store-versus-database mismatch evidence;
+  it never removes an unreferenced key. Destructive cleanup remains B4C2b work.
 - Local-volume loss makes metadata unavailable for download but does not move
   WordPress approval, writes, or audit truth into Cloud.
 

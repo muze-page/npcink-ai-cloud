@@ -1,8 +1,8 @@
 # Media Runtime Boundary v1
 
-Status: P3-B4C1b fenced TTL purge and delivery coordination implemented;
-inventory reconciliation, PostgreSQL concurrency proof, WordPress local import,
-and B5 remain target work.
+Status: P3-B4C2a read-only inventory reconciliation and publication fencing
+implemented; automatic orphan deletion, PostgreSQL concurrency proof,
+WordPress local import, and B5 remain target work.
 
 ## 1. Purpose
 
@@ -19,8 +19,9 @@ P3-B1 byte-store foundation, P3-B2 streamed ingress, P3-B3A upload/image-job
 resource split, P3-B3B1 image-generation artifact convergence, and P3-B3B2
 artifact-referenced vision input, P3-B4A lifecycle projection, P3-B4B1 signed
 pull/delivery ACK, P3-B4B2 legacy-route/permanent-audio-asset removal, P3-B4B3
-unified delivery observability, P3-B4C1a publication compensation, and
-P3-B4C1b fenced TTL purge/delivery coordination. Inventory reconciliation and
+unified delivery observability, P3-B4C1a publication compensation,
+P3-B4C1b fenced TTL purge/delivery coordination, and P3-B4C2a read-only
+inventory reconciliation/publication fencing. Automatic orphan deletion and
 the remaining WordPress delivery closeout described for B4-B5 are still target
 work.
 
@@ -47,8 +48,10 @@ P3-B4B2 removed the legacy authenticated derivative download, public-token
 download, permanent audio-asset model/router/configuration, and their dead
 derivative download counter writer. P3-B4C1b replaces the old in-transaction
 cleanup helper with one leased `MediaArtifact` TTL purge and coordinates purge,
-stream completion, and ACK on one artifact-first lock order. Inventory
-reconciliation remains pending. Historical database blob paths,
+stream completion, and ACK on one artifact-first lock order. P3-B4C2a adds
+bounded, read-only store-versus-database inventory evidence and holds a shared
+local-volume publication fence through the owning transaction outcome.
+Automatic orphan deletion remains pending. Historical database blob paths,
 request/result Base64 media payloads, and audio-specific download-token shapes
 are migration history, not contracts to preserve.
 
@@ -176,9 +179,9 @@ artifact-only results:
   cleanup and into a deduplicated Session-local in-memory no-delete quarantine.
   Rollback-cleanup delete failures quarantine only the failed keys before
   raising. This tuple is not persistent evidence and has no production
-  consumer. A future P3-B4C2 reconciler must instead use a
-  bounded artifact-store inventory versus database inventory scan after a
-  safety window. The generic tracker resolves only the outer transaction;
+  consumer. P3-B4C2a instead uses a bounded artifact-store inventory versus
+  database inventory scan after a safety window, without deleting observations.
+  The generic tracker resolves only the outer transaction;
   image generation is the only current nested-savepoint producer and retains
   explicit cleanup, successful-delete forgetting, and failed-delete quarantine;
 - `image_generation_result.v1` contains artifact references, validated media
@@ -222,8 +225,9 @@ and strict idempotent transfer ACK that may shorten but never extend retention.
 Known media projections remove historical URL/token/Base64 fields without
 rewriting durable results. P3-B4B2 removes the legacy routes, token helpers,
 permanent audio-asset surface, and active table. P3-B4C1b implements fenced TTL
-purge and delivery coordination without adding an inventory scanner. Orphan
-inventory reconciliation and broader media kinds remain later work.
+purge and delivery coordination. P3-B4C2a adds the independent read-only
+inventory scanner and aggregate cadence evidence. Persistent orphan deletion
+and broader media kinds remain later work.
 
 The three B4A public projection outlets are run-result reads; initial,
 transient, and idempotent execution responses; and delayed terminal callback
@@ -449,8 +453,9 @@ Cleanup requirements are:
   cancellation, worker failure, or store failure;
 - purge expired bytes through idempotent `ArtifactStore.delete` and retain only
   the minimum tombstone or runtime evidence required by policy;
-- reconcile metadata without bytes and bytes without metadata, then clean
-  site-scoped orphans after a bounded safety window;
+- reconcile metadata without bytes and bytes without metadata; C2a reports
+  aggregate mismatch evidence after a bounded safety window but does not clean
+  observed orphans;
 - shorten the remaining TTL after delivery acknowledgement while preserving a
   small retry grace period;
 - retry failed deletion without restoring artifact availability;
@@ -540,9 +545,10 @@ original migration exception. A successful FK check is not commit-ready until
 strict `PRAGMA defer_foreign_keys=OFF` succeeds; a `BaseException` from that
 restore escapes unchanged, rolls back schema and version state, and permits a
 direct retry. It is not a claim of PostgreSQL production concurrency behavior.
-P3-B4C2 inventory reconciliation, P3-B4C3 PostgreSQL real-concurrency and PG16
-migration validation, and P3-B4D WordPress local import remain explicit future
-work.
+P3-B4C2a now provides read-only inventory reconciliation. P3-B4C2b persistent
+two-pass orphan claims/fenced deletion, P3-B4C3 PostgreSQL real-concurrency and
+PG16 migration validation, and P3-B4D WordPress local import remain explicit
+future work.
 
 Metrics and redacted diagnostics must cover upload/download byte counts and
 duration, validation rejects, queue age, processing latency, success/failure,
@@ -609,12 +615,14 @@ capability.
   converge on artifact references. Provider URL/data-URL transport is private,
   transient, and absent from public and durable contracts. Addon upload handoff
   and real WordPress evidence remain P5 work.
-- **P3-B4A/B4B1/B4B2/B4C1:** Current lifecycle is projected at exact public
+- **P3-B4A/B4B1/B4B2/B4C1/B4C2a:** Current lifecycle is projected at exact public
   envelopes; signed pull, verified stream completion, independent delivery
   evidence, credential stripping, and strict transfer ACK are implemented.
   Legacy delivery routes and the permanent audio-asset playback surface are
-  deleted. Transaction-tracked publication and fenced TTL purge/delivery
-  coordination are implemented. Inventory reconciliation remains pending.
+  deleted. Transaction-tracked publication, fenced TTL purge/delivery
+  coordination, shared publication fencing, and read-only two-direction
+  inventory reconciliation are implemented. Automatic orphan deletion remains
+  pending.
 - **P3 target:** The four target resources, typed image contracts, security
   controls, signed pull, delivery acknowledgement, TTL, and purge are
   implemented and covered by focused tests.
@@ -649,8 +657,9 @@ control-plane truth.
 
 ## 15. Non-goals
 
-- B4B2 does not implement orphan reconciliation or infer filesystem paths from
-  dropped audio-asset rows; pre-GA operators must explicitly reset that data
+- B4C2a does not automatically delete inventory observations, consume the
+  Session-local quarantine, or infer sites/filesystem paths from opaque keys.
+  Pre-GA operators must still explicitly reset dropped historical audio data
   and its old volume before the destructive migration can proceed.
 - Introducing Kafka, Celery, Temporal, RabbitMQ, a second scheduler, or another
   workflow truth.

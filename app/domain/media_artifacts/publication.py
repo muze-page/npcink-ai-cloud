@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.session import SessionTransaction
 
 from app.domain.media_artifacts.store import (
+    ArtifactPublicationFenceStore,
+    ArtifactPublicationGuard,
     ArtifactStorageMetadata,
     ArtifactStore,
     ArtifactStoreError,
@@ -46,6 +48,7 @@ class _TrackedPublication:
     store: ArtifactStore
     storage_key: str
     cleanup_error_factory: PublicationCleanupErrorFactory
+    publication_guard: ArtifactPublicationGuard | None = None
 
 
 def publish_and_track_artifact(
@@ -68,6 +71,7 @@ def publish_and_track_artifact(
     """
 
     _ensure_session_transaction(session)
+    publication_guard = _acquire_publication_guard(store)
     try:
         stored = store.put(stream, max_bytes=max_bytes, metadata=metadata)
     except ArtifactStorePublicationUncertainError as error:
@@ -76,13 +80,18 @@ def publish_and_track_artifact(
             store=store,
             storage_key=error.storage_metadata.storage_key,
             cleanup_error_factory=cleanup_error_factory,
+            publication_guard=publication_guard,
         )
+        raise
+    except BaseException:
+        _release_publication_guard(publication_guard)
         raise
     track_artifact_publication(
         session,
         store=store,
         storage_key=stored.storage_key,
         cleanup_error_factory=cleanup_error_factory,
+        publication_guard=publication_guard,
     )
     return stored
 
@@ -95,6 +104,7 @@ def track_artifact_publication(
     cleanup_error_factory: PublicationCleanupErrorFactory = (
         artifact_publication_cleanup_error
     ),
+    publication_guard: ArtifactPublicationGuard | None = None,
 ) -> None:
     """Delete a newly published object if the owning DB transaction rolls back.
 
@@ -103,18 +113,28 @@ def track_artifact_publication(
     the store implementation transaction-aware.
     """
 
-    _ensure_session_transaction(session)
-    tracker = _tracker(session)
-    if not bool(session.info.get(_LISTENERS_KEY)):
-        _install_session_listeners(session)
-        session.info[_LISTENERS_KEY] = True
     publication = _TrackedPublication(
         store=store,
         storage_key=storage_key,
         cleanup_error_factory=cleanup_error_factory,
+        publication_guard=publication_guard,
     )
-    if not _contains_publication(tracker, publication):
+    handed_off = False
+    try:
+        _ensure_session_transaction(session)
+        tracker = _tracker(session)
+        if not bool(session.info.get(_LISTENERS_KEY)):
+            _install_session_listeners(session)
+            session.info[_LISTENERS_KEY] = True
+        if _contains_publication(tracker, publication):
+            _release_publication_guard(publication_guard)
+            return
         tracker.append(publication)
+        handed_off = True
+    except BaseException:
+        if not handed_off:
+            _release_publication_guard(publication_guard)
+        raise
 
 
 def forget_artifact_publications(
@@ -167,6 +187,7 @@ def _forget_publications(
     forgotten = tuple(publications)
     if not forgotten:
         return
+    _release_publication_guards(forgotten)
     session.info[_TRACKER_KEY] = [
         item for item in _tracker(session) if not _contains_publication(forgotten, item)
     ]
@@ -186,6 +207,7 @@ def _quarantine_publications(
     )
     if not moving:
         return ()
+    _release_publication_guards(moving)
     uncertain = list(_quarantined_publications(session))
     for publication in moving:
         if not _contains_publication(uncertain, publication):
@@ -229,6 +251,22 @@ def _contains_publication(
         item.store is candidate.store and item.storage_key == candidate.storage_key
         for item in publications
     )
+
+
+def _acquire_publication_guard(store: ArtifactStore) -> ArtifactPublicationGuard | None:
+    if not isinstance(store, ArtifactPublicationFenceStore):
+        return None
+    return store.acquire_publication_guard()
+
+
+def _release_publication_guard(guard: ArtifactPublicationGuard | None) -> None:
+    if guard is not None:
+        guard.release()
+
+
+def _release_publication_guards(publications: Iterable[_TrackedPublication]) -> None:
+    for publication in publications:
+        _release_publication_guard(publication.publication_guard)
 
 
 def _ensure_session_transaction(session: Session) -> None:
@@ -289,47 +327,60 @@ def _after_transaction_end(
 ) -> None:
     if transaction.parent is not None:
         return
-
-    _remove_connection_commit_listener(session)
     publications = tuple(_tracker(session))
-    if not publications:
-        session.info.pop(_OUTCOME_KEY, None)
-        return
-    outcome = str(session.info.pop(_OUTCOME_KEY, ""))
-    if outcome == "committed":
-        session.info[_TRACKER_KEY] = []
-        return
-    if outcome == "commit_started":
-        # The DBAPI commit call began but SQLAlchemy never observed a definitive
-        # outcome. A recovery rollback cannot prove that the database did not
-        # commit, so these objects must leave the active cleanup tracker.
-        _quarantine_publications(
-            session,
-            publications=publications,
-        )
-        _LOGGER.critical(
-            "artifact publication commit outcome is uncertain; orphan reconciliation required",
-            extra={"artifact_count": len(_quarantined_publications(session))},
-        )
-        return
+    try:
+        _remove_connection_commit_listener(session)
+        if not publications:
+            session.info.pop(_OUTCOME_KEY, None)
+            return
+        outcome = str(session.info.pop(_OUTCOME_KEY, ""))
+        if outcome == "committed":
+            _forget_publications(session, publications=publications)
+            return
+        if outcome == "commit_started":
+            # The DBAPI commit call began but SQLAlchemy never observed a definitive
+            # outcome. A recovery rollback cannot prove that the database did not
+            # commit, so these objects must leave the active cleanup tracker.
+            _quarantine_publications(
+                session,
+                publications=publications,
+            )
+            _LOGGER.critical(
+                "artifact publication commit outcome is uncertain; orphan reconciliation required",
+                extra={"artifact_count": len(_quarantined_publications(session))},
+            )
+            return
 
-    failed: list[_TrackedPublication] = []
-    deleted: list[_TrackedPublication] = []
-    for publication in publications:
-        try:
-            publication.store.delete(publication.storage_key)
-            deleted.append(publication)
-        except Exception:
-            failed.append(publication)
-    _forget_publications(session, publications=deleted)
-    if failed:
-        storage_keys = tuple(item.storage_key for item in failed)
-        _quarantine_publications(session, publications=failed)
-        _LOGGER.critical(
-            "artifact rollback cleanup is uncertain",
-            extra={"artifact_count": len(failed)},
-        )
-        raise failed[0].cleanup_error_factory(storage_keys)
+        failed: list[_TrackedPublication] = []
+        deleted: list[_TrackedPublication] = []
+        for index, publication in enumerate(publications):
+            try:
+                publication.store.delete(publication.storage_key)
+                deleted.append(publication)
+            except Exception:
+                failed.append(publication)
+            except BaseException:
+                _forget_publications(session, publications=deleted)
+                _quarantine_publications(
+                    session,
+                    publications=publications[index:],
+                )
+                raise
+        _forget_publications(session, publications=deleted)
+        if failed:
+            storage_keys = tuple(item.storage_key for item in failed)
+            _quarantine_publications(session, publications=failed)
+            _LOGGER.critical(
+                "artifact rollback cleanup is uncertain",
+                extra={"artifact_count": len(failed)},
+            )
+            raise failed[0].cleanup_error_factory(storage_keys)
+    except BaseException:
+        # The outer transaction has ended. Any publication still active can no
+        # longer safely retain a process-wide shared fence, so it enters the
+        # no-delete quarantine before the original exception escapes.
+        _quarantine_publications(session, publications=tuple(_tracker(session)))
+        raise
 
 
 def _remove_connection_commit_listener(session: Session) -> None:

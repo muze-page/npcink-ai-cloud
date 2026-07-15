@@ -86,11 +86,11 @@ error, and transaction semantics.
   evidence, and no production consumer reads it.
 - Critical logs retain only an affected-artifact count; storage keys and local
   paths remain absent.
-- A future P3-B4C2 reconciler must discover possible orphans through a bounded
-  artifact-store inventory versus database inventory scan after a safety
-  window. It must not depend on the Session-local quarantine tuple.
-- P3-B4C1a does not implement orphan scanning, database reconciliation,
-  cleanup cadence, or automatic deletion of quarantined publications.
+- ADR-014/P3-B4C2a discovers possible orphans through a bounded artifact-store
+  inventory versus database inventory scan after a safety window. It does not
+  depend on the Session-local quarantine tuple and performs no deletion.
+- Automatic deletion of quarantined or unreferenced publications remains
+  deferred to P3-B4C2b persistent coordination.
 - No schema, migration, media-delivery, WordPress, or CMS-write contract changes.
 
 ## Verification

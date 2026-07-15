@@ -137,6 +137,37 @@ def _run_artifact_cleanup(settings: Settings) -> dict[str, object]:
     return evidence
 
 
+def _run_artifact_inventory_reconciliation(settings: Settings) -> dict[str, object]:
+    from app.domain.media_artifacts import build_artifact_store
+    from app.domain.media_artifacts.reconciliation import (
+        MediaArtifactReconciliationError,
+        MediaArtifactReconciliationService,
+    )
+
+    try:
+        result = MediaArtifactReconciliationService(
+            settings.database_url,
+            artifact_store=build_artifact_store(settings),
+        ).inspect_inventory(
+            safety_window_seconds=settings.artifact_reconciliation_safety_window_seconds,
+            page_size=settings.artifact_reconciliation_page_size,
+        )
+    except Exception:
+        raise MediaArtifactReconciliationError() from None
+    evidence: dict[str, object] = {
+        "store_examined": result.store_examined,
+        "referenced_present": result.referenced_present,
+        "orphan_observed": result.orphan_observed,
+        "orphan_deferred": result.orphan_deferred,
+        "orphan_eligible": result.orphan_eligible,
+        "db_available_examined": result.db_available_examined,
+        "referenced_missing": result.referenced_missing,
+        "deletion_enabled": result.deletion_enabled,
+        "publication_fence_supported": result.publication_fence_supported,
+    }
+    return evidence
+
+
 def _run_payment_order_expiration(settings: Settings) -> dict[str, object]:
     return CommercialService(
         settings.database_url,
@@ -195,6 +226,12 @@ def cadence_task_specs() -> list[CadenceTaskSpec]:
             event_kind="runtime.artifact_cleanup.cadence",
             interval_seconds=lambda s: s.artifact_cleanup_interval_seconds,
             runner=_run_artifact_cleanup,
+        ),
+        CadenceTaskSpec(
+            task_id="artifact_inventory_reconciliation",
+            event_kind="runtime.artifact_inventory_reconciliation.cadence",
+            interval_seconds=lambda s: s.artifact_reconciliation_interval_seconds,
+            runner=_run_artifact_inventory_reconciliation,
         ),
         CadenceTaskSpec(
             task_id="payment_order_expiration",

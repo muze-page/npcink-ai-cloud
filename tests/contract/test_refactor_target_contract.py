@@ -130,19 +130,20 @@ def test_connector_contract_freezes_one_suggestion_only_runtime() -> None:
         assert required in connector
 
 
-def test_media_contract_tracks_p3_b4c1_publication_purge_and_remaining_targets() -> None:
+def test_media_contract_tracks_p3_b4c2a_inventory_and_remaining_targets() -> None:
     media = _read("docs/media-runtime-boundary-v1.md")
 
     for required in (
-        "Status: P3-B4C1b fenced TTL purge and delivery coordination implemented;",
+        "Status: P3-B4C2a read-only inventory reconciliation and publication fencing",
         "P3-B4C1a routes all",
         "full eligibility `UPDATE` compare-and-set",
         "media_artifact.delivery_window_unavailable",
-        "P3-B4C2 inventory reconciliation",
+        "P3-B4C2a instead uses a bounded artifact-store inventory versus",
+        "P3-B4C2b persistent",
         "P3-B4C3 PostgreSQL real-concurrency",
         "P3-B4D WordPress local import",
         "Session-local in-memory no-delete quarantine",
-        "bounded artifact-store inventory versus database inventory scan",
+        "Automatic orphan deletion remains",
         "B4B2 legacy-route",
         "B4B2 removes the legacy routes, token helpers",
         "Summary v2 reports started, stream-completed",
@@ -182,6 +183,22 @@ def test_media_contract_tracks_p3_b4c1_publication_purge_and_remaining_targets()
         "`audio_generation_candidates` / `audio_generation_result.v1`",
     ):
         assert required in normalized_media
+
+    inventory_adr = " ".join(
+        _read(
+            "docs/decisions/014-read-only-media-artifact-inventory-reconciliation.md"
+        ).split()
+    )
+    for required in (
+        "destructive orphan cleanup remains deferred to P3-B4C2b",
+        "ArtifactInventoryStore",
+        "ArtifactPublicationFenceStore",
+        "one pass is never deletion authority",
+        "C2a does not acquire the exclusive deletion fence",
+        "two complete, durable inventory passes",
+        "fd-relative conditional unlink",
+    ):
+        assert required in inventory_adr
 
 
 def test_image_generation_artifact_adr_freezes_provider_and_cms_boundaries() -> None:

@@ -144,6 +144,18 @@ Primary knobs:
   degradation alert cadence.
 - `NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS`: provider health scan
   cadence.
+- `NPCINK_CLOUD_ARTIFACT_RECONCILIATION_INTERVAL_SECONDS`: read-only artifact
+  inventory reconciliation cadence.
+- `NPCINK_CLOUD_ARTIFACT_RECONCILIATION_SAFETY_WINDOW_SECONDS`: minimum object
+  age before an unreferenced object is reported as eligible; C2a never deletes it.
+- `NPCINK_CLOUD_ARTIFACT_RECONCILIATION_PAGE_SIZE`: bounded store and database
+  inventory page size, from 1 through 500.
+
+The artifact volume root must remain stable and writable only by the service
+owner or trusted operators. Do not replace its mount, shard directories, or
+private publication-fence file while API/runtime/ops workers are running.
+C2a reconciliation is read-only and does not authorize manual deletion of an
+`orphan_eligible` observation.
 
 After any resource or cadence change:
 
