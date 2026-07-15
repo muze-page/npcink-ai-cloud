@@ -6,11 +6,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
+from sqlalchemy.orm import Session
+
 from app.adapters.queue.base import RuntimeQueue, RuntimeQueueError
 from app.adapters.repositories.runtime_repository import RuntimeRepository
 from app.core.db import get_session
 from app.core.error_taxonomy import get_error_taxonomy
 from app.core.models import RunRecord
+from app.domain.media_artifacts.projection import project_media_artifact_lifecycle
 from app.domain.runtime.analysis_result import build_analysis_result_envelope
 from app.domain.runtime.errors import (
     RuntimeCancelNotAllowedError,
@@ -30,6 +33,17 @@ class ClaimedRunExecutor(Protocol):
         *,
         repository: RuntimeRepository,
     ) -> None: ...
+
+
+class RuntimeResultProjector(Protocol):
+    def __call__(
+        self,
+        result: dict[str, Any],
+        *,
+        session: Session,
+        site_id: str,
+        run_id: str,
+    ) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,11 +88,13 @@ class RuntimeRunLifecycleService:
         run_projector: RuntimeRunProjector,
         claimed_run_executor: ClaimedRunExecutor,
         media_derivative_site_running_limit: int,
+        result_projector: RuntimeResultProjector | None = None,
     ) -> None:
         self.database_url = database_url
         self.runtime_queue = runtime_queue
         self.run_projector = run_projector
         self.claimed_run_executor = claimed_run_executor
+        self.result_projector = result_projector or project_media_artifact_lifecycle
         self.media_derivative_site_running_limit = max(
             1,
             int(media_derivative_site_running_limit),
@@ -358,9 +374,15 @@ class RuntimeRunLifecycleService:
             if run.result_json is None:
                 raise RuntimeResultNotReadyError(run_id, run.status)
             provider_calls = repository.list_provider_calls(run_id)
+            projected_result = self.result_projector(
+                run.result_json if isinstance(run.result_json, dict) else {},
+                session=repository.session,
+                site_id=run.site_id,
+                run_id=run.run_id,
+            )
 
         result = build_analysis_result_envelope(
-            run.result_json if isinstance(run.result_json, dict) else {},
+            projected_result,
             ability_family=run.ability_family or "text",
             ability_name=run.ability_name or "",
             input_payload=run.input_json if isinstance(run.input_json, dict) else {},

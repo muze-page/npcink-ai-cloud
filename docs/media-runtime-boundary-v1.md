@@ -1,7 +1,6 @@
 # Media Runtime Boundary v1
 
-Status: P3-B3B2 artifact-referenced vision input implemented; B4-B5 remain
-target work.
+Status: P3-B4A dynamic artifact lifecycle projection implemented; B4B-B5 remain target work.
 
 ## 1. Purpose
 
@@ -197,10 +196,22 @@ one required `source_artifact_id`:
 The existing authenticated download is an interim delivery path, not evidence
 of B4 signed pull or acknowledgement. Signed pull/ack, orphan reconciliation,
 audio transport convergence, and broader media kinds remain later work.
-Historical run-result metadata is a
-creation-time snapshot; B4 must project current `expired`/`purged` artifact
-state instead of continuing to display the original `available` value after
-TTL cleanup. The download route already rejects expired artifacts.
+Historical run-result metadata remains a creation-time snapshot. P3-B4A now
+projects current `expired`/`purged` state across run-result reads, execution
+responses, idempotent replay, and delayed callbacks without rewriting that
+snapshot. Signed pull/ack, orphan reconciliation, audio transport convergence,
+and broader media kinds remain B4B+ work. The download route already rejects
+expired artifacts.
+
+The three B4A public projection outlets are run-result reads; initial,
+transient, and idempotent execution responses; and delayed terminal callback
+payloads. The durable creation-time snapshot is never rewritten by projection.
+Projection recognizes only four exact type/version marker pairs:
+`media_upload_artifact` / `media_upload_result.v1`,
+`media_derivative_artifact` / `media_derivative_result.v1`,
+`image_generation_artifacts` / `image_generation_result.v1`, and
+`audio_generation_candidates` / `audio_generation_result.v1`. Missing or
+unknown markers are unrelated result JSON and remain untouched.
 
 ## 4. End-to-End Lifecycle
 

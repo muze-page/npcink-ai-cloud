@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from sqlalchemy.orm import Session
+
 from app.adapters.callbacks.base import (
     RuntimeCallbackDispatcher,
     RuntimeCallbackDispatchError,
@@ -13,6 +15,7 @@ from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import RunRecord
 from app.core.secrets import decrypt_runtime_terminal_callback_secret
+from app.domain.media_artifacts.projection import project_media_artifact_lifecycle
 from app.domain.runtime.errors import RuntimeCallbackConfigurationError
 from app.domain.runtime.models import RUNTIME_CALLBACK_EVENT, RuntimeRequest
 from app.domain.runtime.run_projection import RuntimeRunProjector
@@ -288,7 +291,7 @@ class RuntimeCallbackDeliveryService:
                 session.commit()
                 return None
 
-            payload = self._build_callback_payload(run)
+            payload = self._build_callback_payload(run, session=session)
             session.commit()
             return RuntimeCallbackDispatchRequest(
                 run_id=run.run_id,
@@ -331,7 +334,12 @@ class RuntimeCallbackDeliveryService:
         for run in recovered_runs:
             self.recovery_audit_callback(run, recovered_at=current_time)
 
-    def _build_callback_payload(self, run: RunRecord) -> dict[str, object]:
+    def _build_callback_payload(
+        self,
+        run: RunRecord,
+        *,
+        session: Session,
+    ) -> dict[str, object]:
         return {
             "event": "runtime.run.terminal",
             "run_id": run.run_id,
@@ -344,12 +352,21 @@ class RuntimeCallbackDeliveryService:
             "execution_context": self.run_projector.build_execution_context_payload(run),
             "task_backend": self.run_projector.build_task_backend_payload(run),
             "run_lifecycle": self.run_projector.build_run_lifecycle(run),
-            "result": self._build_callback_result_payload(run),
+            "result": self._build_callback_result_payload(run, session=session),
         }
 
     @staticmethod
-    def _build_callback_result_payload(run: RunRecord) -> dict[str, object]:
-        return run.result_json if isinstance(run.result_json, dict) else {}
+    def _build_callback_result_payload(
+        run: RunRecord,
+        *,
+        session: Session,
+    ) -> dict[str, object]:
+        return project_media_artifact_lifecycle(
+            run.result_json if isinstance(run.result_json, dict) else {},
+            session=session,
+            site_id=run.site_id,
+            run_id=run.run_id,
+        )
 
     def _resolve_callback_retry_at(
         self,

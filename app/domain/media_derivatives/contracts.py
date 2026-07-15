@@ -45,6 +45,11 @@ ARTIFACT_MAX_TTL_MINUTES = 60
 BATCH_CONTEXT_MAX_ITEMS = 1000
 BATCH_CONTEXT_MAX_CHUNK_SIZE = 20
 
+MEDIA_UPLOAD_ARTIFACT_TYPE = "media_upload_artifact"
+MEDIA_UPLOAD_RESULT_CONTRACT = "media_upload_result.v1"
+MEDIA_DERIVATIVE_ARTIFACT_TYPE = "media_derivative_artifact"
+MEDIA_DERIVATIVE_RESULT_CONTRACT = "media_derivative_result.v1"
+
 BLOCKED_RESPONSE_FIELDS = frozenset(
     {
         "wordpress_write_policy",

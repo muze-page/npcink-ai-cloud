@@ -23,6 +23,10 @@ from app.domain.media_derivatives.contracts import (
     MAX_IMAGE_DIMENSION,
     MAX_PIXEL_COUNT,
     MAX_UPLOAD_BYTES_IMAGE,
+    MEDIA_DERIVATIVE_ARTIFACT_TYPE,
+    MEDIA_DERIVATIVE_RESULT_CONTRACT,
+    MEDIA_UPLOAD_ARTIFACT_TYPE,
+    MEDIA_UPLOAD_RESULT_CONTRACT,
 )
 from app.domain.media_derivatives.errors import (
     MediaDerivativeAnimatedSourceUnavailableError,
@@ -181,6 +185,8 @@ def create_uploaded_artifact(
 
 def build_upload_artifact_result_json(artifact: MediaArtifact) -> dict[str, object]:
     return {
+        "artifact_type": MEDIA_UPLOAD_ARTIFACT_TYPE,
+        "contract_version": MEDIA_UPLOAD_RESULT_CONTRACT,
         "artifact": {
             "artifact_id": artifact.artifact_id,
             "media_kind": artifact.media_kind,
@@ -339,6 +345,8 @@ def build_artifact_result_json(artifact: MediaArtifact) -> dict[str, object]:
         warnings = artifact.processing_warnings_json
     suggested_filename = _suggested_artifact_filename(artifact)
     return {
+        "artifact_type": MEDIA_DERIVATIVE_ARTIFACT_TYPE,
+        "contract_version": MEDIA_DERIVATIVE_RESULT_CONTRACT,
         "workflow_metadata": _media_derivative_workflow_metadata(),
         "artifact": {
             "artifact_id": artifact.artifact_id,

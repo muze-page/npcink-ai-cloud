@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.models import MediaArtifact
+from app.domain.audio_generation.contracts import AUDIO_GENERATION_RESULT_CONTRACT
+from app.domain.image_generation.contracts import IMAGE_GENERATION_RESULT_CONTRACT
+from app.domain.media_derivatives.contracts import (
+    MEDIA_DERIVATIVE_ARTIFACT_TYPE,
+    MEDIA_DERIVATIVE_RESULT_CONTRACT,
+    MEDIA_UPLOAD_ARTIFACT_TYPE,
+    MEDIA_UPLOAD_RESULT_CONTRACT,
+)
+
+MEDIA_ARTIFACT_PROJECTION_MAX_IDS = 100
+_AUDIO_GENERATION_ARTIFACT_TYPE = "audio_generation_candidates"
+_IMAGE_GENERATION_ARTIFACT_TYPE = "image_generation_artifacts"
+
+_PRIVATE_ARTIFACT_FIELDS = frozenset(
+    {
+        "storage_key",
+        "purge_attempt_count",
+        "purge_last_attempt_at",
+        "purge_next_attempt_at",
+        "purge_last_error_code",
+    }
+)
+
+
+def project_media_artifact_lifecycle(
+    result: dict[str, Any],
+    *,
+    session: Session,
+    site_id: str,
+    run_id: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Overlay current MediaArtifact lifecycle state onto known result envelopes.
+
+    The durable run result remains a creation-time snapshot. This projection is
+    deliberately limited to the platform-owned media envelopes below and never
+    recursively scans arbitrary result JSON.
+    """
+
+    if not _known_artifact_references(result):
+        return result
+
+    projected = deepcopy(result)
+    references = _known_artifact_references(projected)
+
+    artifact_ids = _bounded_unique_artifact_ids(references)
+    artifacts_by_id: dict[str, MediaArtifact] = {}
+    if artifact_ids:
+        statement = select(MediaArtifact).where(
+            MediaArtifact.site_id == site_id,
+            MediaArtifact.run_id == run_id,
+            MediaArtifact.artifact_id.in_(artifact_ids),
+        )
+        artifacts_by_id = {
+            artifact.artifact_id: artifact for artifact in session.scalars(statement).all()
+        }
+
+    current_time = _as_utc(now or datetime.now(UTC))
+    for reference in references:
+        artifact_id = _artifact_id(reference)
+        artifact = artifacts_by_id.get(artifact_id)
+        if artifact is None:
+            _project_unavailable(reference)
+            continue
+        _project_current_lifecycle(reference, artifact=artifact, now=current_time)
+
+    return projected
+
+
+def _known_artifact_references(result: dict[str, Any]) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    artifact_type = str(result.get("artifact_type") or "")
+    contract_version = str(result.get("contract_version") or "")
+
+    root_artifact = result.get("artifact")
+    if (
+        (artifact_type, contract_version)
+        in {
+            (MEDIA_UPLOAD_ARTIFACT_TYPE, MEDIA_UPLOAD_RESULT_CONTRACT),
+            (MEDIA_DERIVATIVE_ARTIFACT_TYPE, MEDIA_DERIVATIVE_RESULT_CONTRACT),
+        }
+        and isinstance(root_artifact, dict)
+    ):
+        references.append(root_artifact)
+
+    root_artifacts = result.get("artifacts")
+    if (
+        artifact_type == _IMAGE_GENERATION_ARTIFACT_TYPE
+        and contract_version == IMAGE_GENERATION_RESULT_CONTRACT
+        and isinstance(root_artifacts, list)
+    ):
+        references.extend(item for item in root_artifacts if isinstance(item, dict))
+
+    if (
+        artifact_type == _AUDIO_GENERATION_ARTIFACT_TYPE
+        and contract_version == AUDIO_GENERATION_RESULT_CONTRACT
+    ):
+        audios = result.get("audios")
+        if isinstance(audios, list):
+            references.extend(_nested_artifact_references(audios))
+        items = result.get("items")
+        if isinstance(items, list):
+            references.extend(_nested_artifact_references(items))
+
+    return references
+
+
+def _nested_artifact_references(items: list[Any]) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        artifact = item.get("artifact")
+        if isinstance(artifact, dict):
+            references.append(artifact)
+    return references
+
+
+def _bounded_unique_artifact_ids(references: list[dict[str, Any]]) -> list[str]:
+    artifact_ids: list[str] = []
+    seen: set[str] = set()
+    for reference in references:
+        artifact_id = _artifact_id(reference)
+        if not artifact_id or artifact_id in seen:
+            continue
+        if len(artifact_ids) >= MEDIA_ARTIFACT_PROJECTION_MAX_IDS:
+            break
+        seen.add(artifact_id)
+        artifact_ids.append(artifact_id)
+    return artifact_ids
+
+
+def _artifact_id(reference: dict[str, Any]) -> str:
+    value = reference.get("artifact_id")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _project_current_lifecycle(
+    reference: dict[str, Any],
+    *,
+    artifact: MediaArtifact,
+    now: datetime,
+) -> None:
+    _strip_private_fields(reference)
+    expires_at = _as_utc(artifact.expires_at)
+    purged_at = _as_utc(artifact.purged_at) if artifact.purged_at is not None else None
+    if purged_at is not None or artifact.status == "purged":
+        status = "purged"
+    elif expires_at <= now or artifact.status == "purge_pending":
+        status = "expired"
+    else:
+        status = artifact.status
+
+    reference["status"] = status
+    reference["expires_at"] = expires_at.isoformat()
+    reference["purged_at"] = purged_at.isoformat() if purged_at is not None else None
+
+
+def _project_unavailable(reference: dict[str, Any]) -> None:
+    _strip_private_fields(reference)
+    reference["status"] = "unavailable"
+    reference["expires_at"] = None
+    reference["purged_at"] = None
+
+
+def _strip_private_fields(reference: dict[str, Any]) -> None:
+    for field in _PRIVATE_ARTIFACT_FIELDS:
+        reference.pop(field, None)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)

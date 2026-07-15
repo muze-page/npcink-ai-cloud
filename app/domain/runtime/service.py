@@ -94,6 +94,7 @@ from app.domain.media_artifacts.input_loading import (
     admit_artifact_input,
     load_artifact_input,
 )
+from app.domain.media_artifacts.projection import project_media_artifact_lifecycle
 from app.domain.media_batch_plans.contracts import (
     MEDIA_BATCH_PLAN_ABILITIES,
     MEDIA_BATCH_PLAN_PROFILE_ID,
@@ -5635,6 +5636,12 @@ class RuntimeService:
         response_result = get_transient_runtime_result(run)
         if not isinstance(response_result, dict):
             response_result = run.result_json or {}
+        response_result = project_media_artifact_lifecycle(
+            response_result,
+            session=repository.session,
+            site_id=run.site_id,
+            run_id=run.run_id,
+        )
         result = build_analysis_result_envelope(
             response_result,
             ability_family=run.ability_family or "text",

@@ -130,11 +130,14 @@ def test_connector_contract_freezes_one_suggestion_only_runtime() -> None:
         assert required in connector
 
 
-def test_media_contract_tracks_p3_b3b2_resources_and_remaining_targets() -> None:
+def test_media_contract_tracks_p3_b4a_projection_and_remaining_targets() -> None:
     media = _read("docs/media-runtime-boundary-v1.md")
 
     for required in (
-        "Status: P3-B3B2 artifact-referenced vision input implemented; B4-B5 remain",
+        (
+            "Status: P3-B4A dynamic artifact lifecycle projection implemented; "
+            "B4B-B5 remain target work."
+        ),
         "P3-B3A atomically replaces that pre-GA public POST route with two resources",
         "P3-B3B1 atomically replaces provider-media image-generation results",
         "P3-B3B2 atomically replaces URL/data-URL WordPress alt-text vision input",
@@ -156,6 +159,19 @@ def test_media_contract_tracks_p3_b3b2_resources_and_remaining_targets() -> None
         "delivery acknowledgement is never proof of local application",
     ):
         assert required in media
+
+    normalized_media = " ".join(media.split())
+    for required in (
+        "run-result reads",
+        "initial, transient, and idempotent execution responses",
+        "delayed terminal callback payloads",
+        "The durable creation-time snapshot is never rewritten by projection.",
+        "`media_upload_artifact` / `media_upload_result.v1`",
+        "`media_derivative_artifact` / `media_derivative_result.v1`",
+        "`image_generation_artifacts` / `image_generation_result.v1`",
+        "`audio_generation_candidates` / `audio_generation_result.v1`",
+    ):
+        assert required in normalized_media
 
 
 def test_image_generation_artifact_adr_freezes_provider_and_cms_boundaries() -> None:

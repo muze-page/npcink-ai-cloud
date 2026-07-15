@@ -629,7 +629,8 @@ def test_lifecycle_dependency_boundary_and_runtime_service_facades() -> None:
     assert not {
         module
         for module in imported_modules
-        if any(fragment in module for fragment in forbidden_fragments)
+        if module != "app.domain.media_artifacts.projection"
+        and any(fragment in module for fragment in forbidden_fragments)
     }
     assert "Settings" not in lifecycle_source
 
