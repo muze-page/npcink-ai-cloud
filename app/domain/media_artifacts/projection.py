@@ -28,6 +28,8 @@ _PRIVATE_ARTIFACT_FIELDS = frozenset(
         "purge_last_attempt_at",
         "purge_next_attempt_at",
         "purge_last_error_code",
+        "purge_claim_id",
+        "purge_claim_expires_at",
         "url",
         "audio_url",
         "download_url",

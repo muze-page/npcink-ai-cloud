@@ -1,7 +1,8 @@
 # Media Runtime Boundary v1
 
-Status: P3-B4C1a transaction-tracked artifact publication implemented;
-orphan/lifecycle reconciliation and B5 remain target work.
+Status: P3-B4C1b fenced TTL purge and delivery coordination implemented;
+inventory reconciliation, PostgreSQL concurrency proof, WordPress local import,
+and B5 remain target work.
 
 ## 1. Purpose
 
@@ -18,8 +19,9 @@ P3-B1 byte-store foundation, P3-B2 streamed ingress, P3-B3A upload/image-job
 resource split, P3-B3B1 image-generation artifact convergence, and P3-B3B2
 artifact-referenced vision input, P3-B4A lifecycle projection, P3-B4B1 signed
 pull/delivery ACK, P3-B4B2 legacy-route/permanent-audio-asset removal, P3-B4B3
-unified delivery observability, and P3-B4C1a publication compensation. The
-remaining orphan/lifecycle reconciliation described for B4-B5 is still target
+unified delivery observability, P3-B4C1a publication compensation, and
+P3-B4C1b fenced TTL purge/delivery coordination. Inventory reconciliation and
+the remaining WordPress delivery closeout described for B4-B5 are still target
 work.
 
 ## 2. Stable Markers
@@ -43,9 +45,10 @@ evidence supports the direction but does not prove this target contract.
 
 P3-B4B2 removed the legacy authenticated derivative download, public-token
 download, permanent audio-asset model/router/configuration, and their dead
-derivative download counter writer. Orphan reconciliation, broader lifecycle
-closeout, and convergence of the retained derivative download-count projection
-onto `MediaArtifactDelivery` remain pending. Historical database blob paths,
+derivative download counter writer. P3-B4C1b replaces the old in-transaction
+cleanup helper with one leased `MediaArtifact` TTL purge and coordinates purge,
+stream completion, and ACK on one artifact-first lock order. Inventory
+reconciliation remains pending. Historical database blob paths,
 request/result Base64 media payloads, and audio-specific download-token shapes
 are migration history, not contracts to preserve.
 
@@ -218,8 +221,9 @@ non-buffered verified streaming, independent `MediaArtifactDelivery` evidence,
 and strict idempotent transfer ACK that may shorten but never extend retention.
 Known media projections remove historical URL/token/Base64 fields without
 rewriting durable results. P3-B4B2 removes the legacy routes, token helpers,
-permanent audio-asset surface, and active table. Orphan reconciliation,
-remaining lifecycle convergence, and broader media kinds remain later work.
+permanent audio-asset surface, and active table. P3-B4C1b implements fenced TTL
+purge and delivery coordination without adding an inventory scanner. Orphan
+inventory reconciliation and broader media kinds remain later work.
 
 The three B4A public projection outlets are run-result reads; initial,
 transient, and idempotent execution responses; and delayed terminal callback
@@ -454,6 +458,92 @@ Cleanup requirements are:
 - serialize ACK and purge decisions on the artifact row so acknowledgement
   cannot extend or revive an expired, purge-pending, or purged artifact.
 
+P3-B4C1b implements the TTL-purge portion with database truth and a two-stage
+lease:
+
+- `storage_key` is globally unique. `purge_claim_id` and
+  `purge_claim_expires_at` are either both present or both absent. Migration
+  `0065` starts a real SQLite `BEGIN IMMEDIATE` transaction before checking for
+  duplicate storage ownership, refuses duplicates before any DDL, and does not
+  reveal the duplicate key or repair it automatically;
+- cleanup fairly selects expired, retry-due candidates, then claims each with a
+  full eligibility `UPDATE` compare-and-set. The claim transaction locks the
+  artifact first and then all unacknowledged, unrevoked deliveries in ascending
+  `delivery_id` order. Those deliveries are revoked before the claim commits.
+  After revocation flushes, the transaction refreshes every matching claim
+  lease from the actual logical clock immediately before commit, so time spent
+  coordinating deliveries does not consume the delete worker's lease;
+- the transaction closes before `ArtifactStore.delete`. Success or failure is
+  finalized in a new short transaction fenced by artifact ID, claim ID,
+  unpurged state, and `purge_pending`. An old lease cannot finalize over a newer
+  claim. Retry time and `purged_at` are measured after delete returns;
+- an expected `ArtifactStoreError` records only
+  `artifact_store.delete_failed`, schedules a capped exponential retry, clears
+  the lease, leaves deliveries revoked, and lets cadence succeed with counts.
+  Any other ordinary delete exception first attempts the same fenced safe
+  failure finalize, then raises only stable
+  `media_artifact.lifecycle_cleanup_failed` semantics so cadence records an
+  error without exposing exception text, keys, or paths. A `BaseException`
+  crash after an idempotent delete leaves the active lease for stale reclaim.
+  Ordinary candidate, claim-CAS, revocation, lease-refresh, and claim-commit
+  database errors are wrapped at the lifecycle-service boundary with the same
+  stable error and no SQL or parameters; `BaseException` still escapes;
+- the cleanup cadence identity remains `artifact_cleanup` and emits exactly
+  `claimed`, `purged`, `retry_scheduled`, `stale_claims_reclaimed`, and
+  `superseded_finalizations`. IDs, storage keys, paths, and exception text are
+  not cadence evidence.
+
+The same artifact-first lock order applies to signed-pull preparation, stream
+completion, ACK, and purge. Preparation takes its first production time
+snapshot only after locking the artifact, then rechecks lifecycle, expiry, and
+the 300-second window after store metadata/open and again after the first
+delivery flush. The last valid pre-commit snapshot becomes `started_at` and the
+ACK-deadline basis. A post-flush crossing best-effort closes the stream and
+rolls back, so no delivery is committed. Immediately after commit and before a
+response can expose bytes or headers, a short artifact-then-delivery locking
+transaction takes a read-only lifecycle snapshot. Only after both the
+preparation and revalidation sessions have completely exited does the runtime
+take its final production time and require both the artifact expiry window and
+delivery ACK window to retain more than 300 seconds. A crossed post-commit
+boundary first closes the stream, then independently and best-effort deletes
+only a pristine never-exposed delivery. Completed, acknowledged, or revoked
+delivery evidence is never deleted. Compensation or session-exit failure
+cannot replace an existing commit or admission error. Artifact purge/expiry is
+evaluated before delivery terminal state, so purge still returns 410 even when
+that delivery is already revoked. If the snapshot otherwise permits signing,
+a `BaseException` from revalidation-session exit escapes unchanged and an
+ordinary exit failure maps to stable 409. Crossing expiry returns 410; crossing
+only a safety window returns public 409
+`media_artifact.delivery_window_unavailable`. Explicit `now=` remains a frozen
+deterministic test clock. A stream already issued may record completion after
+wall-clock expiry, but not after purge has claimed the artifact, the delivery
+has been revoked, or the locked delivery's expected byte size/checksum differs
+from the completion facts. For a first ACK, any artifact status other than
+`available` (including failed or unknown future states), or revoked,
+deadline-expired, purged, or time-expired state, returns unified 410
+`media_artifact.delivery_expired` before incomplete-delivery evaluation. An
+exact committed ACK replay remains successful after purge and never changes
+retention again; a conflicting replay remains 409.
+
+The C1b migration and race-state proof is SQLite-based. It proves schema shape,
+constraints, destructive downgrade shape, pre-DDL duplicate rejection, CAS
+state transitions, lease recovery, and deterministic orderings in the focused
+harness. The migration proof enables SQLite FK enforcement and retains a
+near-full `media_artifact_deliveries -> media_artifacts` inbound FK, delivery
+row, and delivery indexes through upgrade and downgrade. It exercises normal
+Alembic SQLite per-migration connections whose DBAPI transaction is initially
+inactive, starts the transaction before duplicate validation or DDL, restores
+deferred-FK state after a clean `foreign_key_check`, and proves injected
+upgrade/downgrade failures roll back without temporary tables or partial
+schema loss and can be retried directly. Failure cleanup cannot mask the
+original migration exception. A successful FK check is not commit-ready until
+strict `PRAGMA defer_foreign_keys=OFF` succeeds; a `BaseException` from that
+restore escapes unchanged, rolls back schema and version state, and permits a
+direct retry. It is not a claim of PostgreSQL production concurrency behavior.
+P3-B4C2 inventory reconciliation, P3-B4C3 PostgreSQL real-concurrency and PG16
+migration validation, and P3-B4D WordPress local import remain explicit future
+work.
+
 Metrics and redacted diagnostics must cover upload/download byte counts and
 duration, validation rejects, queue age, processing latency, success/failure,
 checksum mismatch, signed-pull admission and use, delivery acknowledgements,
@@ -519,11 +609,12 @@ capability.
   converge on artifact references. Provider URL/data-URL transport is private,
   transient, and absent from public and durable contracts. Addon upload handoff
   and real WordPress evidence remain P5 work.
-- **P3-B4A/B4B1/B4B2:** Current lifecycle is projected at exact public
+- **P3-B4A/B4B1/B4B2/B4C1:** Current lifecycle is projected at exact public
   envelopes; signed pull, verified stream completion, independent delivery
   evidence, credential stripping, and strict transfer ACK are implemented.
   Legacy delivery routes and the permanent audio-asset playback surface are
-  deleted. Orphan/lifecycle reconciliation remains pending.
+  deleted. Transaction-tracked publication and fenced TTL purge/delivery
+  coordination are implemented. Inventory reconciliation remains pending.
 - **P3 target:** The four target resources, typed image contracts, security
   controls, signed pull, delivery acknowledgement, TTL, and purge are
   implemented and covered by focused tests.

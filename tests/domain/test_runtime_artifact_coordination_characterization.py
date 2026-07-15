@@ -28,8 +28,8 @@ from app.domain.image_generation.materialization import (
     ImageGenerationArtifactMaterializationError,
 )
 from app.domain.media_artifacts import ArtifactStoreError
+from app.domain.media_artifacts.lifecycle import MediaArtifactLifecycleService
 from app.domain.media_derivatives.artifacts import (
-    cleanup_expired_artifacts,
     get_artifact,
     validate_image_upload_stream,
 )
@@ -252,19 +252,19 @@ def test_media_derivative_artifact_correlation_scope_ttl_and_cleanup_handoff(
         artifact_id = artifact.artifact_id
         cleanup_at = _as_utc(artifact.expires_at) + timedelta(seconds=1)
 
-        class FailingDeleteStore:
-            def delete(self, storage_key: str) -> None:
-                raise ArtifactStoreError(f"cannot delete {storage_key}")
+    class FailingDeleteStore:
+        def delete(self, storage_key: str) -> None:
+            raise ArtifactStoreError(f"cannot delete {storage_key}")
 
-        assert (
-            cleanup_expired_artifacts(
-                database_url=runtime_context.database_url,
-                artifact_store=FailingDeleteStore(),  # type: ignore[arg-type]
-                now=cleanup_at,
-                session=session,
-            )
-            == 0
-        )
+    failed_cleanup = MediaArtifactLifecycleService(
+        runtime_context.database_url,
+        artifact_store=FailingDeleteStore(),  # type: ignore[arg-type]
+    ).cleanup_expired_artifacts(now=cleanup_at)
+    assert failed_cleanup["claimed"] == 2
+    assert failed_cleanup["retry_scheduled"] == 2
+    with get_session(runtime_context.database_url) as session:
+        artifact = session.get(MediaArtifact, artifact_id)
+        assert artifact is not None
         assert artifact.status == "purge_pending"
         assert artifact.purged_at is None
         assert artifact.purge_attempt_count == 1
@@ -272,19 +272,16 @@ def test_media_derivative_artifact_correlation_scope_ttl_and_cleanup_handoff(
         assert "cannot delete" not in artifact.purge_last_error_code
         assert artifact.purge_next_attempt_at is not None
         retry_at = _as_utc(artifact.purge_next_attempt_at) + timedelta(seconds=1)
-        assert (
-            cleanup_expired_artifacts(
-                database_url=runtime_context.database_url,
-                artifact_store=runtime_context.service.artifact_store,
-                now=retry_at,
-                session=session,
-            )
-            == 2
-        )
+    retried_cleanup = MediaArtifactLifecycleService(
+        runtime_context.database_url,
+        artifact_store=runtime_context.service.artifact_store,
+    ).cleanup_expired_artifacts(now=retry_at)
+    assert retried_cleanup["purged"] == 2
+    with get_session(runtime_context.database_url) as session:
+        artifact = session.get(MediaArtifact, artifact_id)
+        assert artifact is not None
         assert artifact.purged_at is not None
-        assert _as_utc(artifact.purged_at) == retry_at
         assert artifact.status == "purged"
-        session.commit()
 
     with pytest.raises(RuntimeRunNotFoundError):
         runtime_context.service.get_run_result(run_id, site_id="site_beta")
@@ -293,150 +290,6 @@ def test_media_derivative_artifact_correlation_scope_ttl_and_cleanup_handoff(
         assert purged is not None
         assert purged.purged_at is not None
         assert purged.status == "purged"
-
-
-def test_cleanup_retry_backoff_prevents_failed_prefix_starvation(
-    runtime_context: RuntimeContext,
-) -> None:
-    run_id = _enqueue_and_process(
-        runtime_context,
-        source_bytes=_png_bytes(),
-        idempotency_key="idem-cleanup-starvation",
-    )
-    now = datetime.now(UTC)
-    failure_ids = [f"art_fail_{index:03d}" for index in range(101)]
-    success_ids = [f"art_success_{index:03d}" for index in range(101)]
-
-    with get_session(runtime_context.database_url) as session:
-        session.add_all(
-            [
-                MediaArtifact(
-                    artifact_id=artifact_id,
-                    run_id=run_id,
-                    site_id="site_alpha",
-                    media_kind="image",
-                    operation="media_derivative",
-                    content_type="image/png",
-                    byte_size=1,
-                    checksum=f"sha256:{index:064x}",
-                    storage_key=f"fail_{index:03d}",
-                    status="available",
-                    format="png",
-                    width=1,
-                    height=1,
-                    expires_at=now - timedelta(minutes=2),
-                    created_at=now - timedelta(minutes=3),
-                )
-                for index, artifact_id in enumerate(failure_ids)
-            ]
-            + [
-                MediaArtifact(
-                    artifact_id=artifact_id,
-                    run_id=run_id,
-                    site_id="site_alpha",
-                    media_kind="image",
-                    operation="media_derivative",
-                    content_type="image/png",
-                    byte_size=1,
-                    checksum=f"sha256:{index + 1000:064x}",
-                    storage_key=f"success_{index:03d}",
-                    status="available",
-                    format="png",
-                    width=1,
-                    height=1,
-                    expires_at=now - timedelta(minutes=1),
-                    created_at=now - timedelta(minutes=3),
-                )
-                for index, artifact_id in enumerate(success_ids)
-            ]
-        )
-        session.flush()
-
-        class PrefixFailingStore:
-            def __init__(self) -> None:
-                self.attempted: list[str] = []
-
-            def delete(self, storage_key: str) -> None:
-                self.attempted.append(storage_key)
-                if storage_key.startswith("fail_"):
-                    raise ArtifactStoreError("injected delete failure")
-
-        store = PrefixFailingStore()
-        assert (
-            cleanup_expired_artifacts(
-                database_url=runtime_context.database_url,
-                artifact_store=store,  # type: ignore[arg-type]
-                now=now,
-                session=session,
-                batch_size=100,
-            )
-            == 0
-        )
-        assert len(store.attempted) == 100
-        assert (
-            cleanup_expired_artifacts(
-                database_url=runtime_context.database_url,
-                artifact_store=store,  # type: ignore[arg-type]
-                now=now,
-                session=session,
-                batch_size=100,
-            )
-            == 99
-        )
-        assert len(store.attempted) == 200
-        assert (
-            cleanup_expired_artifacts(
-                database_url=runtime_context.database_url,
-                artifact_store=store,  # type: ignore[arg-type]
-                now=now,
-                session=session,
-                batch_size=100,
-            )
-            == 2
-        )
-        assert len(store.attempted) == 202
-        failed = list(
-            session.scalars(select(MediaArtifact).where(MediaArtifact.artifact_id.in_(failure_ids)))
-        )
-        succeeded = list(
-            session.scalars(select(MediaArtifact).where(MediaArtifact.artifact_id.in_(success_ids)))
-        )
-        assert {artifact.status for artifact in failed} == {"purge_pending"}
-        assert {artifact.purge_last_error_code for artifact in failed} == {
-            "artifact_store.delete_failed"
-        }
-        assert all("injected" not in str(artifact.purge_last_error_code) for artifact in failed)
-        assert sum(artifact.status == "purged" for artifact in succeeded) == 101
-        assert sum(artifact.status == "available" for artifact in succeeded) == 0
-
-        first_retry_at = min(
-            _as_utc(artifact.purge_next_attempt_at)
-            for artifact in failed
-            if artifact.purge_next_attempt_at is not None
-        )
-        assert (
-            cleanup_expired_artifacts(
-                database_url=runtime_context.database_url,
-                artifact_store=store,  # type: ignore[arg-type]
-                now=first_retry_at - timedelta(microseconds=1),
-                session=session,
-                batch_size=100,
-            )
-            == 0
-        )
-        assert len(store.attempted) == 202
-        assert (
-            cleanup_expired_artifacts(
-                database_url=runtime_context.database_url,
-                artifact_store=store,  # type: ignore[arg-type]
-                now=first_retry_at,
-                session=session,
-                batch_size=100,
-            )
-            == 0
-        )
-        assert len(store.attempted) == 302
-        assert sum(artifact.purge_attempt_count == 2 for artifact in failed) == 100
 
 
 def test_media_derivative_source_failures_map_to_run_result_and_metric(

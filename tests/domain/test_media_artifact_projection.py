@@ -169,6 +169,8 @@ def test_projects_only_known_envelopes_and_current_lifecycle(database_url: str) 
                     "keep": "root",
                     "storage_key": "must-not-leak",
                     "purge_last_error_code": "must-not-leak",
+                    "purge_claim_id": "pcl_must-not-leak",
+                    "purge_claim_expires_at": "must-not-leak",
                     "download_url": "/historical/download?token=secret",
                     "b64_json": "historical-base64",
                 },
@@ -185,6 +187,8 @@ def test_projects_only_known_envelopes_and_current_lifecycle(database_url: str) 
     assert root_projected["artifact"]["keep"] == "root"
     assert "storage_key" not in root_projected["artifact"]
     assert "purge_last_error_code" not in root_projected["artifact"]
+    assert "purge_claim_id" not in root_projected["artifact"]
+    assert "purge_claim_expires_at" not in root_projected["artifact"]
     assert "download_url" not in root_projected["artifact"]
     assert "b64_json" not in root_projected["artifact"]
     assert [item["status"] for item in projected["artifacts"]] == [

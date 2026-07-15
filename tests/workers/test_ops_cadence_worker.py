@@ -3,10 +3,18 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+from sqlalchemy.exc import StatementError
+
 from app.core.config import Settings
 from app.core.db import dispose_engine, init_schema
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
+from app.domain.media_artifacts.lifecycle import (
+    MediaArtifactLifecycleError,
+    MediaArtifactLifecycleService,
+)
+from app.workers import ops_cadence as ops_cadence_module
 from app.workers.ops_cadence import build_cadence_summary, run_due_tasks
 
 
@@ -51,10 +59,25 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "payment_order_expiration",
     }
     assert all(item["outcome"] == "succeeded" for item in first_results)
+    artifact_cleanup = next(
+        item for item in first_results if item["task_id"] == "artifact_cleanup"
+    )
+    assert artifact_cleanup["payload"] == {
+        "claimed": 0,
+        "purged": 0,
+        "retry_scheduled": 0,
+        "stale_claims_reclaimed": 0,
+        "superseded_finalizations": 0,
+        "interval_seconds": 60,
+    }
 
     service = CommercialService(database_url, settings=settings)
     first_events = service.list_service_audit_events(limit=20)["items"]
     assert len(first_events) == 9
+    cleanup_event = next(
+        item for item in first_events if item["event_kind"] == "runtime.artifact_cleanup.cadence"
+    )
+    assert cleanup_event["payload"] == artifact_cleanup["payload"]
 
     latest_created_at = datetime.fromisoformat(
         str(first_events[0]["created_at"]).replace("Z", "+00:00")
@@ -153,4 +176,118 @@ def test_cadence_summary_hides_stale_error_details_after_newer_success(
     assert item["last_error_message"] == ""
     assert item["last_error_code"] == ""
 
+    dispose_engine(database_url)
+
+
+def test_artifact_cleanup_unexpected_delete_error_records_stable_cadence_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = Settings(
+        project_name="Npcink AI Cloud Test",
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        internal_auth_token="i" * 32,
+        artifact_cleanup_interval_seconds=60,
+    )
+
+    def fail_cleanup(
+        _service: MediaArtifactLifecycleService,
+        **_kwargs: object,
+    ) -> dict[str, int]:
+        raise MediaArtifactLifecycleError() from None
+
+    monkeypatch.setattr(
+        MediaArtifactLifecycleService,
+        "cleanup_expired_artifacts",
+        fail_cleanup,
+    )
+    monkeypatch.setattr(
+        ops_cadence_module,
+        "cadence_task_specs",
+        lambda: [
+            ops_cadence_module.CadenceTaskSpec(
+                task_id="artifact_cleanup",
+                event_kind="runtime.artifact_cleanup.cadence",
+                interval_seconds=lambda _settings: 60,
+                runner=ops_cadence_module._run_artifact_cleanup,
+            )
+        ],
+    )
+
+    results = run_due_tasks(settings, now=datetime(2026, 7, 15, 19, 0, tzinfo=UTC))
+
+    assert results == [
+        {
+            "task_id": "artifact_cleanup",
+            "event_kind": "runtime.artifact_cleanup.cadence",
+            "outcome": "error",
+            "payload": {
+                "interval_seconds": 60,
+                "message": "media artifact lifecycle cleanup failed",
+                "error_code": "ops.cadence_task_failed",
+            },
+        }
+    ]
+    dispose_engine(database_url)
+
+
+def test_artifact_cleanup_claim_database_error_never_reaches_cadence_payload_or_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = Settings(
+        project_name="Npcink AI Cloud Test",
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        internal_auth_token="i" * 32,
+        artifact_cleanup_interval_seconds=60,
+    )
+    private_statement = "SELECT purge_claim_id FROM media_artifacts WHERE storage_key=:key"
+    private_storage_key = "private/object/cadence-claim.png"
+
+    def fail_claim(
+        _service: MediaArtifactLifecycleService,
+        **_kwargs: object,
+    ) -> tuple[list[object], int]:
+        raise StatementError(
+            "private cadence claim failure",
+            private_statement,
+            {"key": private_storage_key},
+            RuntimeError("private database driver detail"),
+        )
+
+    monkeypatch.setattr(MediaArtifactLifecycleService, "_claim_batch", fail_claim)
+    monkeypatch.setattr(
+        ops_cadence_module,
+        "cadence_task_specs",
+        lambda: [
+            ops_cadence_module.CadenceTaskSpec(
+                task_id="artifact_cleanup",
+                event_kind="runtime.artifact_cleanup.cadence",
+                interval_seconds=lambda _settings: 60,
+                runner=ops_cadence_module._run_artifact_cleanup,
+            )
+        ],
+    )
+    caplog.set_level("ERROR", logger="npcink_ai_cloud.ops_cadence")
+
+    results = run_due_tasks(settings, now=datetime(2026, 7, 15, 19, 1, tzinfo=UTC))
+
+    assert results[0]["payload"] == {
+        "interval_seconds": 60,
+        "message": "media artifact lifecycle cleanup failed",
+        "error_code": "ops.cadence_task_failed",
+    }
+    observed = f"{results!r}\n{caplog.text}"
+    assert private_statement not in observed
+    assert private_storage_key not in observed
+    assert "private database driver detail" not in observed
     dispose_engine(database_url)

@@ -1718,6 +1718,17 @@ class CommercialDecisionEvent(Base):
 
 class MediaArtifact(Base):
     __tablename__ = "media_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "storage_key",
+            name="uq_media_artifacts_storage_key",
+        ),
+        CheckConstraint(
+            "((purge_claim_id IS NULL AND purge_claim_expires_at IS NULL) OR "
+            "(purge_claim_id IS NOT NULL AND purge_claim_expires_at IS NOT NULL))",
+            name="ck_media_artifacts_purge_claim_pair",
+        ),
+    )
 
     artifact_id: Mapped[str] = mapped_column(String(191), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("run_records.run_id"), index=True)
@@ -1741,6 +1752,10 @@ class MediaArtifact(Base):
         DateTime(timezone=True), index=True
     )
     purge_last_error_code: Mapped[str | None] = mapped_column(String(64))
+    purge_claim_id: Mapped[str | None] = mapped_column(String(64))
+    purge_claim_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

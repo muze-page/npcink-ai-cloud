@@ -24,8 +24,10 @@ from app.domain.media_artifacts.delivery import (
     MediaArtifactDeliveryAckRequest,
     MediaArtifactDeliveryError,
     acknowledge_media_artifact_delivery,
+    discard_pristine_media_artifact_delivery_best_effort,
     iter_verified_delivery_chunks,
     prepare_media_artifact_delivery,
+    revalidate_committed_media_artifact_delivery,
 )
 from app.domain.media_derivatives.artifacts import validate_image_upload_stream
 from app.domain.media_derivatives.contracts import (
@@ -112,6 +114,8 @@ def _stream_signed_delivery_response(
         iter_verified_delivery_chunks(
             prepared.stream,
             database_url=database_url,
+            artifact_id=prepared.artifact.artifact_id,
+            site_id=prepared.artifact.site_id,
             delivery_id=prepared.delivery.delivery_id,
             expected_byte_size=prepared.delivery.expected_byte_size,
             expected_checksum=prepared.delivery.expected_checksum,
@@ -143,7 +147,11 @@ def _prepare_signed_delivery(
     site_id: str,
     trace_id: str,
 ) -> Any:
-    with get_session(database_url) as session:
+    session_context = get_session(database_url)
+    session = session_context.__enter__()
+    prepared = None
+    primary_error: BaseException | None = None
+    try:
         prepared = prepare_media_artifact_delivery(
             session=session,
             artifact_store=artifact_store,
@@ -151,12 +159,56 @@ def _prepare_signed_delivery(
             site_id=site_id,
             trace_id=trace_id,
         )
+        session.commit()
+    except BaseException as error:
+        primary_error = error
+    try:
+        session_context.__exit__(
+            type(primary_error) if primary_error is not None else None,
+            primary_error,
+            primary_error.__traceback__ if primary_error is not None else None,
+        )
+    except BaseException as error:
+        if primary_error is None:
+            primary_error = error
+    if primary_error is not None:
+        if prepared is not None:
+            try:
+                prepared.stream.close()
+            except BaseException:
+                pass
+        raise primary_error
+    assert prepared is not None
+
+    try:
+        revalidate_committed_media_artifact_delivery(
+            database_url=database_url,
+            artifact_id=prepared.artifact.artifact_id,
+            site_id=prepared.artifact.site_id,
+            delivery_id=prepared.delivery.delivery_id,
+        )
+    except MediaArtifactDeliveryError as error:
         try:
-            session.commit()
-        except Exception:
             prepared.stream.close()
-            raise
-        return prepared
+        except BaseException:
+            pass
+        try:
+            discard_pristine_media_artifact_delivery_best_effort(
+                database_url=database_url,
+                artifact_id=prepared.artifact.artifact_id,
+                site_id=prepared.artifact.site_id,
+                delivery_id=prepared.delivery.delivery_id,
+            )
+        except BaseException:
+            pass
+        raise error
+    except BaseException:
+        try:
+            prepared.stream.close()
+        except BaseException:
+            pass
+        raise
+    return prepared
 
 
 def _acknowledge_signed_delivery(

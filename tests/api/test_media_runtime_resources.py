@@ -4,8 +4,10 @@ import hashlib
 import io
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,6 +17,7 @@ from sqlalchemy import select
 
 from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.api.main import create_app
+from app.api.routes import media_derivatives as media_routes
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
@@ -28,14 +31,18 @@ from app.core.models import (
 from app.core.secrets import decrypt_runtime_execution_input
 from app.core.services import CloudServices
 from app.domain.media_artifacts import build_artifact_store
+from app.domain.media_artifacts import delivery as delivery_module
 from app.domain.media_artifacts.delivery import (
+    MEDIA_ARTIFACT_MIN_PULL_WINDOW_SECONDS,
+    MediaArtifactDeliveryWindowUnavailableError,
     iter_verified_delivery_chunks,
     prepare_media_artifact_delivery,
 )
+from app.domain.media_artifacts.lifecycle import MediaArtifactLifecycleService
 from app.domain.media_artifacts.publication import (
     ArtifactPublicationCleanupUncertainError,
 )
-from app.domain.media_derivatives.artifacts import cleanup_expired_artifacts
+from app.domain.media_artifacts.store import ArtifactStorageMetadata
 from app.domain.media_derivatives.contracts import BLOCKED_RESPONSE_FIELDS, MediaJobRequest
 from app.domain.runtime.service import RuntimeService
 from tests.conftest import (
@@ -279,6 +286,974 @@ def _process_jobs(
     ).process_queued_runs(max_runs=max_runs, timeout_seconds=0)
 
 
+@pytest.mark.parametrize(
+    ("remaining", "allowed"),
+    [
+        (
+            timedelta(seconds=MEDIA_ARTIFACT_MIN_PULL_WINDOW_SECONDS) - timedelta(microseconds=1),
+            False,
+        ),
+        (timedelta(seconds=MEDIA_ARTIFACT_MIN_PULL_WINDOW_SECONDS), False),
+        (
+            timedelta(seconds=MEDIA_ARTIFACT_MIN_PULL_WINDOW_SECONDS) + timedelta(microseconds=1),
+            True,
+        ),
+    ],
+)
+def test_prepare_delivery_enforces_exact_minimum_pull_window_without_store_access(
+    tmp_path: Path,
+    remaining: timedelta,
+    allowed: bool,
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    payload = _png()
+    now = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client, payload, key=f"pull-window-{remaining}", nonce=f"pull-window-{remaining}"
+            )
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = now + remaining
+            storage_key = artifact.storage_key
+            checksum = artifact.checksum
+            byte_size = artifact.byte_size
+            session.commit()
+
+        class CountingPreparedStore:
+            chunk_size = 64 * 1024
+
+            def __init__(self) -> None:
+                self.metadata_calls = 0
+                self.open_calls = 0
+
+            def metadata(self, requested_key: str) -> ArtifactStorageMetadata:
+                self.metadata_calls += 1
+                return ArtifactStorageMetadata(requested_key, byte_size, checksum)
+
+            def open(self, requested_key: str) -> io.BytesIO:
+                assert requested_key == storage_key
+                self.open_calls += 1
+                return io.BytesIO(payload)
+
+        store = CountingPreparedStore()
+        with get_session(database_url) as session:
+            if not allowed:
+                with pytest.raises(MediaArtifactDeliveryWindowUnavailableError):
+                    prepare_media_artifact_delivery(
+                        session=session,
+                        artifact_store=store,  # type: ignore[arg-type]
+                        artifact_id=artifact_id,
+                        site_id="site_alpha",
+                        trace_id="trace-pull-window",
+                        now=now,
+                    )
+                assert store.metadata_calls == 0
+                assert store.open_calls == 0
+            else:
+                prepared = prepare_media_artifact_delivery(
+                    session=session,
+                    artifact_store=store,  # type: ignore[arg-type]
+                    artifact_id=artifact_id,
+                    site_id="site_alpha",
+                    trace_id="trace-pull-window",
+                    now=now,
+                )
+                assert prepared.delivery.ack_deadline_at == now + remaining
+                assert store.metadata_calls == 1
+                assert store.open_calls == 1
+                prepared.stream.close()
+                session.commit()
+
+        with get_session(database_url) as session:
+            deliveries = list(
+                session.scalars(
+                    select(MediaArtifactDelivery).where(
+                        MediaArtifactDelivery.artifact_id == artifact_id
+                    )
+                )
+            )
+        assert len(deliveries) == (1 if allowed else 0)
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize(
+    ("final_advance", "error_type"),
+    [
+        (timedelta(seconds=1), MediaArtifactDeliveryWindowUnavailableError),
+        (timedelta(seconds=302), delivery_module.MediaArtifactExpiredError),
+    ],
+)
+def test_prepare_delivery_rechecks_time_after_store_open_and_closes_crossed_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    final_advance: timedelta,
+    error_type: type[Exception],
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    payload = _png()
+    initial_time = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, payload, key=f"slow-pull-{final_advance}", nonce="slow-pull")
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = initial_time + timedelta(seconds=301)
+            storage_key = artifact.storage_key
+            checksum = artifact.checksum
+            byte_size = artifact.byte_size
+            session.commit()
+
+        class TrackingStream(io.BytesIO):
+            closed_by_cleanup = False
+
+            def close(self) -> None:
+                self.closed_by_cleanup = True
+                super().close()
+
+        class ControlledSlowStore:
+            chunk_size = 64 * 1024
+
+            def __init__(self) -> None:
+                self.stream = TrackingStream(payload)
+
+            def metadata(self, requested_key: str) -> ArtifactStorageMetadata:
+                assert requested_key == storage_key
+                return ArtifactStorageMetadata(requested_key, byte_size, checksum)
+
+            def open(self, requested_key: str) -> TrackingStream:
+                assert requested_key == storage_key
+                return self.stream
+
+        clock_values = iter((initial_time, initial_time + final_advance))
+        monkeypatch.setattr(delivery_module, "_delivery_clock_now", lambda: next(clock_values))
+        store = ControlledSlowStore()
+        with get_session(database_url) as session:
+            with pytest.raises(error_type):
+                prepare_media_artifact_delivery(
+                    session=session,
+                    artifact_store=store,  # type: ignore[arg-type]
+                    artifact_id=artifact_id,
+                    site_id="site_alpha",
+                    trace_id="trace-slow-pull",
+                )
+            assert store.stream.closed_by_cleanup is True
+            assert not session.new
+
+        with get_session(database_url) as session:
+            assert session.scalar(
+                select(MediaArtifactDelivery).where(
+                    MediaArtifactDelivery.artifact_id == artifact_id
+                )
+            ) is None
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize(
+    ("final_advance", "error_type"),
+    [
+        (timedelta(seconds=1), MediaArtifactDeliveryWindowUnavailableError),
+        (timedelta(seconds=302), delivery_module.MediaArtifactExpiredError),
+    ],
+)
+def test_prepare_delivery_rechecks_time_after_flush_and_rolls_back_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    final_advance: timedelta,
+    error_type: type[Exception],
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    payload = _png()
+    initial_time = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, payload, key=f"flush-window-{final_advance}", nonce="flush-window")
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = initial_time + timedelta(seconds=301)
+            storage_key = artifact.storage_key
+            checksum = artifact.checksum
+            byte_size = artifact.byte_size
+            session.commit()
+
+        class TrackingStream(io.BytesIO):
+            closed_by_cleanup = False
+
+            def close(self) -> None:
+                self.closed_by_cleanup = True
+                super().close()
+
+        class ControlledFlushStore:
+            chunk_size = 64 * 1024
+
+            def __init__(self) -> None:
+                self.stream = TrackingStream(payload)
+
+            def metadata(self, requested_key: str) -> ArtifactStorageMetadata:
+                assert requested_key == storage_key
+                return ArtifactStorageMetadata(requested_key, byte_size, checksum)
+
+            def open(self, requested_key: str) -> TrackingStream:
+                assert requested_key == storage_key
+                return self.stream
+
+        clock_values = iter((initial_time, initial_time, initial_time + final_advance))
+        monkeypatch.setattr(delivery_module, "_delivery_clock_now", lambda: next(clock_values))
+        store = ControlledFlushStore()
+        with get_session(database_url) as session:
+            with pytest.raises(error_type):
+                prepare_media_artifact_delivery(
+                    session=session,
+                    artifact_store=store,  # type: ignore[arg-type]
+                    artifact_id=artifact_id,
+                    site_id="site_alpha",
+                    trace_id="trace-flush-window",
+                )
+            assert store.stream.closed_by_cleanup is True
+            assert not session.new
+
+        with get_session(database_url) as session:
+            assert session.scalar(
+                select(MediaArtifactDelivery).where(
+                    MediaArtifactDelivery.artifact_id == artifact_id
+                )
+            ) is None
+    finally:
+        dispose_engine(database_url)
+
+
+def test_prepare_delivery_uses_last_precommit_time_for_started_at_and_ack_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    initial_time = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    post_open_time = initial_time + timedelta(seconds=7)
+    precommit_time = initial_time + timedelta(seconds=11)
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, _png(), key="pull-final-time", nonce="pull-final-time")
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = initial_time + timedelta(seconds=1000)
+            session.commit()
+
+        clock_values = iter((initial_time, post_open_time, precommit_time))
+        monkeypatch.setattr(delivery_module, "_delivery_clock_now", lambda: next(clock_values))
+        with get_session(database_url) as session:
+            prepared = prepare_media_artifact_delivery(
+                session=session,
+                artifact_store=build_artifact_store(settings),
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id="trace-pull-final-time",
+            )
+            assert prepared.delivery.started_at == precommit_time
+            assert prepared.delivery.ack_deadline_at == precommit_time + timedelta(minutes=15)
+            prepared.stream.close()
+    finally:
+        dispose_engine(database_url)
+
+
+def test_prepare_delivery_flush_cleanup_preserves_primary_error_when_close_interrupts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    payload = _png()
+    now = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    primary_error = RuntimeError("primary flush failure")
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, payload, key="flush-cleanup", nonce="flush-cleanup")
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = now + timedelta(hours=1)
+            storage_key = artifact.storage_key
+            checksum = artifact.checksum
+            byte_size = artifact.byte_size
+            session.commit()
+
+        class InterruptingCloseStream(io.BytesIO):
+            close_attempted = False
+
+            def close(self) -> None:
+                self.close_attempted = True
+                raise KeyboardInterrupt("secondary close interrupt")
+
+        class FlushFailureStore:
+            chunk_size = 64 * 1024
+
+            def __init__(self) -> None:
+                self.stream = InterruptingCloseStream(payload)
+
+            def metadata(self, requested_key: str) -> ArtifactStorageMetadata:
+                return ArtifactStorageMetadata(requested_key, byte_size, checksum)
+
+            def open(self, requested_key: str) -> InterruptingCloseStream:
+                assert requested_key == storage_key
+                return self.stream
+
+        store = FlushFailureStore()
+        with get_session(database_url) as session:
+            def fail_flush() -> None:
+                raise primary_error
+
+            monkeypatch.setattr(session, "flush", fail_flush)
+            with pytest.raises(RuntimeError) as captured:
+                prepare_media_artifact_delivery(
+                    session=session,
+                    artifact_store=store,  # type: ignore[arg-type]
+                    artifact_id=artifact_id,
+                    site_id="site_alpha",
+                    trace_id="trace-flush-cleanup",
+                    now=now,
+                )
+            assert captured.value is primary_error
+            assert store.stream.close_attempted is True
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize("primary_error", [RuntimeError("commit failed"), KeyboardInterrupt()])
+@pytest.mark.parametrize(
+    "exit_error",
+    [RuntimeError("secondary session exit failure"), KeyboardInterrupt("secondary exit")],
+)
+def test_prepare_signed_delivery_commit_cleanup_preserves_primary_base_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    primary_error: BaseException,
+    exit_error: BaseException,
+) -> None:
+    class CommitFailingSession:
+        def commit(self) -> None:
+            raise primary_error
+
+    class InterruptingCloseStream:
+        close_attempted = False
+
+        def close(self) -> None:
+            self.close_attempted = True
+            raise KeyboardInterrupt("secondary close interrupt")
+
+    session = CommitFailingSession()
+    stream = InterruptingCloseStream()
+    prepared = SimpleNamespace(stream=stream)
+
+    @contextmanager
+    def fake_get_session(_database_url: str) -> Any:
+        try:
+            yield session
+        finally:
+            raise exit_error
+
+    monkeypatch.setattr(media_routes, "get_session", fake_get_session)
+    monkeypatch.setattr(
+        media_routes,
+        "prepare_media_artifact_delivery",
+        lambda **_kwargs: prepared,
+    )
+
+    with pytest.raises(type(primary_error)) as captured:
+        media_routes._prepare_signed_delivery(
+            database_url="sqlite+pysqlite:///:memory:",
+            artifact_store=object(),
+            artifact_id="art_commit_failure",
+            site_id="site_alpha",
+            trace_id="trace-commit-failure",
+        )
+
+    assert captured.value is primary_error
+    assert stream.close_attempted is True
+
+
+@pytest.mark.parametrize(
+    "compensation_error",
+    [RuntimeError("secondary compensation failure"), KeyboardInterrupt("secondary interrupt")],
+)
+def test_prepare_signed_delivery_postcommit_failure_closes_before_compensation_without_masking(
+    monkeypatch: pytest.MonkeyPatch,
+    compensation_error: BaseException,
+) -> None:
+    class SuccessfulSession:
+        def commit(self) -> None:
+            return None
+
+    class InterruptingCloseStream:
+        close_attempted = False
+
+        def close(self) -> None:
+            self.close_attempted = True
+            raise KeyboardInterrupt("secondary close interrupt")
+
+    primary_error = delivery_module.MediaArtifactDeliveryWindowUnavailableError(
+        "media artifact delivery window is unavailable"
+    )
+    session = SuccessfulSession()
+    stream = InterruptingCloseStream()
+    prepared = SimpleNamespace(
+        stream=stream,
+        artifact=SimpleNamespace(artifact_id="art_postcommit", site_id="site_alpha"),
+        delivery=SimpleNamespace(delivery_id="mdl_postcommit"),
+    )
+
+    @contextmanager
+    def fake_get_session(_database_url: str) -> Any:
+        yield session
+
+    def fail_revalidation(**_kwargs: Any) -> None:
+        raise primary_error
+
+    def fail_compensation(**_kwargs: Any) -> None:
+        assert stream.close_attempted is True
+        raise compensation_error
+
+    monkeypatch.setattr(media_routes, "get_session", fake_get_session)
+    monkeypatch.setattr(
+        media_routes,
+        "prepare_media_artifact_delivery",
+        lambda **_kwargs: prepared,
+    )
+    monkeypatch.setattr(
+        media_routes,
+        "revalidate_committed_media_artifact_delivery",
+        fail_revalidation,
+    )
+    monkeypatch.setattr(
+        media_routes,
+        "discard_pristine_media_artifact_delivery_best_effort",
+        fail_compensation,
+    )
+
+    with pytest.raises(delivery_module.MediaArtifactDeliveryWindowUnavailableError) as captured:
+        media_routes._prepare_signed_delivery(
+            database_url="sqlite+pysqlite:///:memory:",
+            artifact_store=object(),
+            artifact_id="art_postcommit",
+            site_id="site_alpha",
+            trace_id="trace-postcommit",
+        )
+
+    assert captured.value is primary_error
+    assert stream.close_attempted is True
+
+
+@pytest.mark.parametrize(
+    ("artifact_ttl", "final_advance", "error_type"),
+    [
+        (
+            timedelta(seconds=301),
+            timedelta(seconds=1),
+            MediaArtifactDeliveryWindowUnavailableError,
+        ),
+        (
+            timedelta(seconds=301),
+            timedelta(seconds=302),
+            delivery_module.MediaArtifactExpiredError,
+        ),
+        (
+            timedelta(hours=1),
+            timedelta(minutes=10),
+            MediaArtifactDeliveryWindowUnavailableError,
+        ),
+    ],
+)
+def test_prepare_signed_delivery_revalidates_after_commit_and_deletes_crossed_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_ttl: timedelta,
+    final_advance: timedelta,
+    error_type: type[Exception],
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    payload = _png()
+    initial_time = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, payload, key=f"commit-window-{final_advance}", nonce="commit-window")
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = initial_time + artifact_ttl
+            storage_key = artifact.storage_key
+            checksum = artifact.checksum
+            byte_size = artifact.byte_size
+            session.commit()
+
+        class TrackingStream(io.BytesIO):
+            closed_by_cleanup = False
+
+            def close(self) -> None:
+                self.closed_by_cleanup = True
+                super().close()
+
+        class ControlledCommitStore:
+            chunk_size = 64 * 1024
+
+            def __init__(self) -> None:
+                self.stream = TrackingStream(payload)
+
+            def metadata(self, requested_key: str) -> ArtifactStorageMetadata:
+                assert requested_key == storage_key
+                return ArtifactStorageMetadata(requested_key, byte_size, checksum)
+
+            def open(self, requested_key: str) -> TrackingStream:
+                assert requested_key == storage_key
+                return self.stream
+
+        clock_values = iter(
+            (
+                initial_time,
+                initial_time,
+                initial_time,
+                initial_time + final_advance,
+                initial_time + final_advance,
+            )
+        )
+        monkeypatch.setattr(delivery_module, "_delivery_clock_now", lambda: next(clock_values))
+        store = ControlledCommitStore()
+        with pytest.raises(error_type):
+            media_routes._prepare_signed_delivery(
+                database_url=database_url,
+                artifact_store=store,
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id="trace-commit-window",
+            )
+
+        assert store.stream.closed_by_cleanup is True
+        with get_session(database_url) as session:
+            assert session.scalar(
+                select(MediaArtifactDelivery).where(
+                    MediaArtifactDelivery.artifact_id == artifact_id
+                )
+            ) is None
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize("advancing_exit", ["preparation", "revalidation"])
+def test_prepare_signed_delivery_final_clock_runs_after_both_session_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    advancing_exit: str,
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    payload = _png()
+    initial_time = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    current_time = {"value": initial_time}
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client,
+                payload,
+                key=f"session-exit-window-{advancing_exit}",
+                nonce=f"session-exit-window-{advancing_exit}",
+            )
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = initial_time + timedelta(seconds=301)
+            storage_key = artifact.storage_key
+            checksum = artifact.checksum
+            byte_size = artifact.byte_size
+            session.commit()
+
+        class TrackingStream(io.BytesIO):
+            closed_by_cleanup = False
+
+            def close(self) -> None:
+                self.closed_by_cleanup = True
+                super().close()
+
+        class ControlledStore:
+            chunk_size = 64 * 1024
+
+            def __init__(self) -> None:
+                self.stream = TrackingStream(payload)
+
+            def metadata(self, requested_key: str) -> ArtifactStorageMetadata:
+                assert requested_key == storage_key
+                return ArtifactStorageMetadata(requested_key, byte_size, checksum)
+
+            def open(self, requested_key: str) -> TrackingStream:
+                assert requested_key == storage_key
+                return self.stream
+
+        real_route_get_session = media_routes.get_session
+        real_delivery_get_session = delivery_module.get_session
+
+        @contextmanager
+        def advance_after_route_session(database: str) -> Any:
+            with real_route_get_session(database) as session:
+                yield session
+            current_time["value"] = initial_time + timedelta(seconds=1)
+
+        @contextmanager
+        def advance_after_revalidation_session(database: str) -> Any:
+            with real_delivery_get_session(database) as session:
+                yield session
+            current_time["value"] = initial_time + timedelta(seconds=1)
+
+        if advancing_exit == "preparation":
+            monkeypatch.setattr(media_routes, "get_session", advance_after_route_session)
+        else:
+            monkeypatch.setattr(
+                delivery_module,
+                "get_session",
+                advance_after_revalidation_session,
+            )
+        monkeypatch.setattr(
+            delivery_module,
+            "_delivery_clock_now",
+            lambda: current_time["value"],
+        )
+        store = ControlledStore()
+
+        with pytest.raises(MediaArtifactDeliveryWindowUnavailableError):
+            media_routes._prepare_signed_delivery(
+                database_url=database_url,
+                artifact_store=store,
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id=f"trace-session-exit-{advancing_exit}",
+            )
+
+        assert store.stream.closed_by_cleanup is True
+        with get_session(database_url) as session:
+            assert session.scalar(
+                select(MediaArtifactDelivery).where(
+                    MediaArtifactDelivery.artifact_id == artifact_id
+                )
+            ) is None
+    finally:
+        dispose_engine(database_url)
+
+
+def test_prepare_signed_delivery_allows_valid_postcommit_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    initial_time = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, _png(), key="commit-window-valid", nonce="commit-window-valid")
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = initial_time + timedelta(hours=2)
+            session.commit()
+
+        clock_values = iter((initial_time,) * 5)
+        monkeypatch.setattr(delivery_module, "_delivery_clock_now", lambda: next(clock_values))
+        prepared = media_routes._prepare_signed_delivery(
+            database_url=database_url,
+            artifact_store=build_artifact_store(settings),
+            artifact_id=artifact_id,
+            site_id="site_alpha",
+            trace_id="trace-commit-window-valid",
+        )
+        prepared.stream.close()
+
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, prepared.delivery.delivery_id)
+            assert delivery is not None
+            assert delivery.revoked_at is None
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize("terminal_field", ["completed_at", "acked_at", "revoked_at"])
+def test_postcommit_gate_never_deletes_terminal_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_field: str,
+) -> None:
+    now = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    artifact = SimpleNamespace(
+        status="available",
+        purged_at=None,
+        expires_at=now + timedelta(hours=1),
+    )
+    delivery = SimpleNamespace(
+        revoked_at=None,
+        completed_at=None,
+        acked_at=None,
+        ack_deadline_at=now + timedelta(minutes=15),
+    )
+    setattr(delivery, terminal_field, now)
+
+    class TrackingSession:
+        def __init__(self) -> None:
+            self.values = iter((artifact, delivery))
+            self.delete_called = False
+            self.commit_called = False
+
+        def scalar(self, _statement: Any) -> Any:
+            return next(self.values)
+
+        def delete(self, _value: Any) -> None:
+            self.delete_called = True
+
+        def commit(self) -> None:
+            self.commit_called = True
+
+    session = TrackingSession()
+
+    @contextmanager
+    def fake_get_session(_database_url: str) -> Any:
+        yield session
+
+    monkeypatch.setattr(delivery_module, "get_session", fake_get_session)
+    with pytest.raises(delivery_module.MediaArtifactNotAvailableError):
+        delivery_module.revalidate_committed_media_artifact_delivery(
+            database_url="sqlite+pysqlite:///:memory:",
+            artifact_id="art_terminal",
+            site_id="site_alpha",
+            delivery_id="mdl_terminal",
+            now=now,
+        )
+
+    assert session.delete_called is False
+    assert session.commit_called is False
+
+
+@pytest.mark.parametrize(
+    "exit_error",
+    [RuntimeError("secondary snapshot exit"), KeyboardInterrupt("secondary snapshot interrupt")],
+)
+def test_postcommit_gate_prioritizes_purge_snapshot_over_exit_and_retains_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+    exit_error: BaseException,
+) -> None:
+    now = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    artifact = SimpleNamespace(
+        status="purge_pending",
+        purged_at=None,
+        expires_at=now + timedelta(hours=1),
+    )
+    delivery = SimpleNamespace(
+        revoked_at=now,
+        completed_at=None,
+        acked_at=None,
+        ack_deadline_at=now + timedelta(minutes=15),
+    )
+
+    class SuccessfulPreparationSession:
+        def commit(self) -> None:
+            return None
+
+    class TrackingDeliverySession:
+        def __init__(self) -> None:
+            self.values = iter((artifact, delivery))
+            self.delete_called = False
+            self.commit_called = False
+
+        def scalar(self, _statement: Any) -> Any:
+            return next(self.values)
+
+        def delete(self, _value: Any) -> None:
+            self.delete_called = True
+
+        def commit(self) -> None:
+            self.commit_called = True
+
+    class TrackingStream:
+        close_attempted = False
+
+        def close(self) -> None:
+            self.close_attempted = True
+
+    stream = TrackingStream()
+    prepared = SimpleNamespace(
+        stream=stream,
+        artifact=SimpleNamespace(artifact_id="art_purge_race", site_id="site_alpha"),
+        delivery=SimpleNamespace(delivery_id="mdl_purge_race"),
+    )
+    sessions: list[TrackingDeliverySession] = []
+
+    @contextmanager
+    def fake_preparation_session(_database_url: str) -> Any:
+        yield SuccessfulPreparationSession()
+
+    @contextmanager
+    def fake_delivery_session(_database_url: str) -> Any:
+        session = TrackingDeliverySession()
+        sessions.append(session)
+        if len(sessions) == 2:
+            assert stream.close_attempted is True
+        try:
+            yield session
+        finally:
+            raise exit_error
+
+    monkeypatch.setattr(media_routes, "get_session", fake_preparation_session)
+    monkeypatch.setattr(
+        media_routes,
+        "prepare_media_artifact_delivery",
+        lambda **_kwargs: prepared,
+    )
+    monkeypatch.setattr(delivery_module, "get_session", fake_delivery_session)
+    with pytest.raises(delivery_module.MediaArtifactExpiredError) as captured:
+        media_routes._prepare_signed_delivery(
+            database_url="sqlite+pysqlite:///:memory:",
+            artifact_store=object(),
+            artifact_id="art_purge_race",
+            site_id="site_alpha",
+            trace_id="trace-purge-race",
+        )
+
+    assert str(captured.value) == "media artifact has expired"
+    assert stream.close_attempted is True
+    assert len(sessions) == 2
+    assert all(session.delete_called is False for session in sessions)
+    assert all(session.commit_called is False for session in sessions)
+
+
+@pytest.mark.parametrize(
+    ("exit_error", "expected_error_type"),
+    [
+        (
+            RuntimeError("valid snapshot exit failure"),
+            delivery_module.MediaArtifactNotAvailableError,
+        ),
+        (KeyboardInterrupt("valid snapshot exit interrupt"), KeyboardInterrupt),
+    ],
+)
+def test_valid_postcommit_snapshot_propagates_exit_failure_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    exit_error: BaseException,
+    expected_error_type: type[BaseException],
+) -> None:
+    now = datetime(2026, 7, 15, 13, 0, tzinfo=UTC)
+    artifact = SimpleNamespace(
+        status="available",
+        purged_at=None,
+        expires_at=now + timedelta(hours=1),
+    )
+    delivery = SimpleNamespace(
+        revoked_at=None,
+        completed_at=None,
+        acked_at=None,
+        ack_deadline_at=now + timedelta(minutes=15),
+    )
+
+    class SnapshotSession:
+        def __init__(self) -> None:
+            self.values = iter((artifact, delivery))
+
+        def scalar(self, _statement: Any) -> Any:
+            return next(self.values)
+
+    @contextmanager
+    def failing_exit_session(_database_url: str) -> Any:
+        try:
+            yield SnapshotSession()
+        finally:
+            raise exit_error
+
+    monkeypatch.setattr(delivery_module, "get_session", failing_exit_session)
+    with pytest.raises(expected_error_type) as captured:
+        delivery_module.revalidate_committed_media_artifact_delivery(
+            database_url="sqlite+pysqlite:///:memory:",
+            artifact_id="art_valid_snapshot",
+            site_id="site_alpha",
+            delivery_id="mdl_valid_snapshot",
+            now=now,
+        )
+
+    if isinstance(exit_error, KeyboardInterrupt):
+        assert captured.value is exit_error
+    else:
+        assert str(captured.value) == "media artifact delivery is not available"
+
+
+def test_postcommit_snapshot_query_base_exception_wins_over_exit_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary_error = KeyboardInterrupt("primary snapshot query interrupt")
+
+    class QueryFailingSession:
+        def scalar(self, _statement: Any) -> Any:
+            raise primary_error
+
+    @contextmanager
+    def query_and_exit_failing_session(_database_url: str) -> Any:
+        try:
+            yield QueryFailingSession()
+        finally:
+            raise SystemExit("secondary snapshot exit")
+
+    monkeypatch.setattr(
+        delivery_module,
+        "get_session",
+        query_and_exit_failing_session,
+    )
+    with pytest.raises(KeyboardInterrupt) as captured:
+        delivery_module.revalidate_committed_media_artifact_delivery(
+            database_url="sqlite+pysqlite:///:memory:",
+            artifact_id="art_query_failure",
+            site_id="site_alpha",
+            delivery_id="mdl_query_failure",
+        )
+
+    assert captured.value is primary_error
+
+
+def test_signed_pull_maps_insufficient_delivery_window_to_stable_public_error(
+    tmp_path: Path,
+) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, _png(), key="pull-window-api", nonce="pull-window-api")
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            storage_key = artifact.storage_key
+            artifact.expires_at = datetime.now(UTC) + timedelta(minutes=4)
+            session.commit()
+
+        response = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce="pull-window-api-download"),
+        )
+
+        assert response.status_code == 409, response.json()
+        assert response.json()["error_code"] == ("media_artifact.delivery_window_unavailable")
+        assert response.json()["data"] == {}
+        assert storage_key not in response.text
+        assert "retry-after" not in response.headers
+        with get_session(database_url) as session:
+            assert (
+                session.scalar(
+                    select(MediaArtifactDelivery).where(
+                        MediaArtifactDelivery.artifact_id == artifact_id
+                    )
+                )
+                is None
+            )
+    finally:
+        dispose_engine(database_url)
+
+
 def test_signed_pull_and_ack_record_verified_transfer_evidence(tmp_path: Path) -> None:
     database_url, _, _, client = _client(tmp_path)
     payload = _png()
@@ -433,6 +1408,174 @@ def test_delivery_ack_rejects_incomplete_delivery(tmp_path: Path) -> None:
             delivery = session.get(MediaArtifactDelivery, delivery_id)
             assert delivery is not None
             assert delivery.acked_at is None
+    finally:
+        dispose_engine(database_url)
+
+
+def test_committed_ack_replay_remains_successful_after_purge_and_conflict_stays_409(
+    tmp_path: Path,
+) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    media_bytes = _png()
+    checksum = f"sha256:{hashlib.sha256(media_bytes).hexdigest()}"
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client, media_bytes, key="ack-replay-purge-source", nonce="ack-replay-purge-source"
+            )
+        )
+        download = client.get(
+            _download_path(artifact_id),
+            headers=_pull_headers(artifact_id, nonce="ack-replay-purge-pull"),
+        )
+        assert download.status_code == 200, download.json()
+        delivery_id = download.headers["x-npcink-delivery-id"]
+        payload = {
+            "contract_version": "media_artifact_delivery_ack.v1",
+            "delivery_id": delivery_id,
+            "received_byte_size": len(media_bytes),
+            "received_checksum": checksum,
+        }
+        body, headers = _ack_headers(
+            artifact_id,
+            payload,
+            key="ack-replay-purge-key",
+            nonce="ack-replay-purge-first",
+        )
+        first = client.post(_ack_path(artifact_id), content=body, headers=headers)
+        assert first.status_code == 200, first.json()
+
+        cleanup_at = datetime.now(UTC)
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert artifact is not None and delivery is not None
+            artifact.expires_at = cleanup_at - timedelta(seconds=1)
+            retention_before_purge = artifact.expires_at
+            session.commit()
+        cleanup = MediaArtifactLifecycleService(
+            database_url,
+            artifact_store=build_artifact_store(settings),
+        ).cleanup_expired_artifacts(now=cleanup_at)
+        assert cleanup["purged"] == 1
+
+        replay_body, replay_headers = _ack_headers(
+            artifact_id,
+            payload,
+            key="ack-replay-purge-key",
+            nonce="ack-replay-purge-exact",
+        )
+        replay = client.post(_ack_path(artifact_id), content=replay_body, headers=replay_headers)
+        assert replay.status_code == 200, replay.json()
+        assert replay.json()["data"]["idempotent_replay"] is True
+
+        conflict_body, conflict_headers = _ack_headers(
+            artifact_id,
+            {**payload, "received_byte_size": len(media_bytes) - 1},
+            key="ack-replay-purge-key",
+            nonce="ack-replay-purge-conflict",
+        )
+        conflict = client.post(
+            _ack_path(artifact_id), content=conflict_body, headers=conflict_headers
+        )
+        assert conflict.status_code == 409, conflict.json()
+        assert conflict.json()["error_code"] == "media_artifact.delivery_ack_conflict"
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert artifact is not None and delivery is not None
+            assert artifact.status == "purged"
+            assert artifact.expires_at == retention_before_purge.replace(tzinfo=None)
+            assert delivery.acked_at is not None
+            assert delivery.revoked_at is None
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize(
+    "terminal_state",
+    [
+        "revoked",
+        "artifact_expired",
+        "artifact_pending",
+        "artifact_purged",
+        "artifact_failed",
+        "artifact_unknown",
+    ],
+)
+def test_first_ack_terminal_state_wins_over_incomplete_delivery(
+    tmp_path: Path,
+    terminal_state: str,
+) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    media_bytes = _png()
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client,
+                media_bytes,
+                key=f"ack-priority-{terminal_state}-source",
+                nonce=f"ack-priority-{terminal_state}-source",
+            )
+        )
+        with get_session(database_url) as session:
+            prepared = prepare_media_artifact_delivery(
+                session=session,
+                artifact_store=build_artifact_store(settings),
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id="ack-priority-trace",
+            )
+            delivery_id = prepared.delivery.delivery_id
+            byte_size = prepared.delivery.expected_byte_size
+            checksum = prepared.delivery.expected_checksum
+            session.commit()
+        prepared.stream.close()
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert artifact is not None and delivery is not None
+            if terminal_state == "revoked":
+                delivery.revoked_at = datetime.now(UTC)
+            elif terminal_state == "artifact_expired":
+                artifact.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            elif terminal_state == "artifact_pending":
+                artifact.status = "purge_pending"
+            elif terminal_state == "artifact_purged":
+                artifact.status = "purged"
+                artifact.purged_at = datetime.now(UTC)
+            elif terminal_state == "artifact_failed":
+                artifact.status = "failed"
+            else:
+                artifact.status = "unknown_future_status"
+            retention_before = artifact.expires_at
+            session.commit()
+
+        payload = {
+            "contract_version": "media_artifact_delivery_ack.v1",
+            "delivery_id": delivery_id,
+            "received_byte_size": byte_size,
+            "received_checksum": checksum,
+        }
+        body, headers = _ack_headers(
+            artifact_id,
+            payload,
+            key=f"ack-priority-{terminal_state}",
+            nonce=f"ack-priority-{terminal_state}",
+        )
+        response = client.post(_ack_path(artifact_id), content=body, headers=headers)
+
+        assert response.status_code == 410, response.json()
+        assert response.json()["error_code"] == "media_artifact.delivery_expired"
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert artifact is not None and delivery is not None
+            assert artifact.expires_at == retention_before.replace(tzinfo=None)
+            assert delivery.acked_at is None
+            assert delivery.ack_idempotency_key is None
+            assert delivery.retention_expires_at_before is None
+            assert delivery.retention_expires_at_after is None
     finally:
         dispose_engine(database_url)
 
@@ -607,21 +1750,23 @@ def test_delivery_ack_does_not_revive_a_purged_artifact(tmp_path: Path) -> None:
             assert artifact is not None
             artifact.expires_at = cleanup_time - timedelta(seconds=1)
             session.commit()
-        assert (
-            cleanup_expired_artifacts(
-                database_url=database_url,
-                artifact_store=build_artifact_store(settings),
-                now=cleanup_time,
-            )
-            == 1
-        )
+        cleanup = MediaArtifactLifecycleService(
+            database_url,
+            artifact_store=build_artifact_store(settings),
+        ).cleanup_expired_artifacts(now=cleanup_time)
+        assert cleanup["purged"] == 1
         with get_session(database_url) as session:
             artifact = session.get(MediaArtifact, artifact_id)
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
             assert artifact is not None
+            assert delivery is not None
             purged_at = artifact.purged_at
             expires_at = artifact.expires_at
             assert artifact.status == "purged"
             assert purged_at is not None
+            assert delivery.completed_at is not None
+            assert delivery.revoked_at is not None
+            assert delivery.completed_at <= delivery.revoked_at
 
         payload = {
             "contract_version": "media_artifact_delivery_ack.v1",
@@ -973,6 +2118,8 @@ def test_delivery_is_not_completed_for_interrupted_or_mismatched_stream(
         chunks = iter_verified_delivery_chunks(
             prepared.stream,
             database_url=database_url,
+            artifact_id=artifact_id,
+            site_id="site_alpha",
             delivery_id=delivery_id,
             expected_byte_size=(
                 expected_byte_size - 1 if failure_mode == "oversize" else expected_byte_size
@@ -998,6 +2145,243 @@ def test_delivery_is_not_completed_for_interrupted_or_mismatched_stream(
             assert delivery.completed_at is None
             assert delivery.completed_byte_size is None
             assert delivery.completed_checksum is None
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize("mismatch", ["byte_size", "checksum"])
+def test_stream_completion_rejects_facts_that_differ_from_locked_delivery_evidence(
+    tmp_path: Path,
+    mismatch: str,
+) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    media_bytes = _png()
+    try:
+        artifact_id = _artifact_id(
+            _upload(client, media_bytes, key="completion-db-facts", nonce="completion-db-facts")
+        )
+        with get_session(database_url) as session:
+            prepared = prepare_media_artifact_delivery(
+                session=session,
+                artifact_store=build_artifact_store(settings),
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id="completion-db-facts-trace",
+            )
+            delivery_id = prepared.delivery.delivery_id
+            expected_byte_size = prepared.delivery.expected_byte_size
+            expected_checksum = prepared.delivery.expected_checksum
+            session.commit()
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            if mismatch == "byte_size":
+                delivery.expected_byte_size += 1
+            else:
+                delivery.expected_checksum = "sha256:" + ("0" * 64)
+            session.commit()
+
+        delivered = b"".join(
+            iter_verified_delivery_chunks(
+                prepared.stream,
+                database_url=database_url,
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                delivery_id=delivery_id,
+                expected_byte_size=expected_byte_size,
+                expected_checksum=expected_checksum,
+                chunk_size=prepared.chunk_size,
+            )
+        )
+
+        assert delivered == media_bytes
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            assert delivery.completed_at is None
+            assert delivery.completed_byte_size is None
+            assert delivery.completed_checksum is None
+    finally:
+        dispose_engine(database_url)
+
+
+def test_wall_clock_expiry_does_not_erase_completion_for_already_issued_stream(
+    tmp_path: Path,
+) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    media_bytes = _png()
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client,
+                media_bytes,
+                key="completion-expiry-source",
+                nonce="completion-expiry-source",
+            )
+        )
+        with get_session(database_url) as session:
+            prepared = prepare_media_artifact_delivery(
+                session=session,
+                artifact_store=build_artifact_store(settings),
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id="completion-expiry-trace",
+            )
+            delivery_id = prepared.delivery.delivery_id
+            expected_byte_size = prepared.delivery.expected_byte_size
+            expected_checksum = prepared.delivery.expected_checksum
+            session.commit()
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            session.commit()
+
+        delivered = b"".join(
+            iter_verified_delivery_chunks(
+                prepared.stream,
+                database_url=database_url,
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                delivery_id=delivery_id,
+                expected_byte_size=expected_byte_size,
+                expected_checksum=expected_checksum,
+                chunk_size=prepared.chunk_size,
+            )
+        )
+
+        assert delivered == media_bytes
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            assert delivery.completed_at is not None
+            assert delivery.completed_byte_size == expected_byte_size
+            assert delivery.completed_checksum == expected_checksum
+    finally:
+        dispose_engine(database_url)
+
+
+@pytest.mark.parametrize("terminal_state", ["pending", "purged", "revoked"])
+def test_terminal_artifact_or_delivery_state_blocks_new_stream_completion(
+    tmp_path: Path,
+    terminal_state: str,
+) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    media_bytes = _png()
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client,
+                media_bytes,
+                key=f"completion-terminal-{terminal_state}",
+                nonce=f"completion-terminal-{terminal_state}",
+            )
+        )
+        with get_session(database_url) as session:
+            prepared = prepare_media_artifact_delivery(
+                session=session,
+                artifact_store=build_artifact_store(settings),
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id="completion-terminal-trace",
+            )
+            delivery_id = prepared.delivery.delivery_id
+            expected_byte_size = prepared.delivery.expected_byte_size
+            expected_checksum = prepared.delivery.expected_checksum
+            session.commit()
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert artifact is not None and delivery is not None
+            if terminal_state == "pending":
+                artifact.status = "purge_pending"
+            elif terminal_state == "purged":
+                artifact.status = "purged"
+                artifact.purged_at = datetime.now(UTC)
+            else:
+                delivery.revoked_at = datetime.now(UTC)
+            session.commit()
+
+        assert (
+            b"".join(
+                iter_verified_delivery_chunks(
+                    prepared.stream,
+                    database_url=database_url,
+                    artifact_id=artifact_id,
+                    site_id="site_alpha",
+                    delivery_id=delivery_id,
+                    expected_byte_size=expected_byte_size,
+                    expected_checksum=expected_checksum,
+                    chunk_size=prepared.chunk_size,
+                )
+            )
+            == media_bytes
+        )
+        with get_session(database_url) as session:
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert delivery is not None
+            assert delivery.completed_at is None
+            assert delivery.completed_byte_size is None
+            assert delivery.completed_checksum is None
+    finally:
+        dispose_engine(database_url)
+
+
+def test_purge_claim_wins_before_stream_completion(tmp_path: Path) -> None:
+    database_url, settings, _, client = _client(tmp_path)
+    media_bytes = _png()
+    try:
+        artifact_id = _artifact_id(
+            _upload(
+                client, media_bytes, key="purge-before-completion", nonce="purge-before-completion"
+            )
+        )
+        with get_session(database_url) as session:
+            prepared = prepare_media_artifact_delivery(
+                session=session,
+                artifact_store=build_artifact_store(settings),
+                artifact_id=artifact_id,
+                site_id="site_alpha",
+                trace_id="purge-before-completion-trace",
+            )
+            delivery_id = prepared.delivery.delivery_id
+            expected_byte_size = prepared.delivery.expected_byte_size
+            expected_checksum = prepared.delivery.expected_checksum
+            session.commit()
+        cleanup_at = datetime.now(UTC)
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            assert artifact is not None
+            artifact.expires_at = cleanup_at - timedelta(seconds=1)
+            session.commit()
+        cleanup = MediaArtifactLifecycleService(
+            database_url,
+            artifact_store=build_artifact_store(settings),
+        ).cleanup_expired_artifacts(now=cleanup_at)
+        assert cleanup["purged"] == 1
+
+        assert (
+            b"".join(
+                iter_verified_delivery_chunks(
+                    prepared.stream,
+                    database_url=database_url,
+                    artifact_id=artifact_id,
+                    site_id="site_alpha",
+                    delivery_id=delivery_id,
+                    expected_byte_size=expected_byte_size,
+                    expected_checksum=expected_checksum,
+                    chunk_size=prepared.chunk_size,
+                )
+            )
+            == media_bytes
+        )
+        with get_session(database_url) as session:
+            artifact = session.get(MediaArtifact, artifact_id)
+            delivery = session.get(MediaArtifactDelivery, delivery_id)
+            assert artifact is not None and delivery is not None
+            assert artifact.status == "purged"
+            assert delivery.revoked_at is not None
+            assert delivery.completed_at is None
     finally:
         dispose_engine(database_url)
 

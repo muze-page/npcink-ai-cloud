@@ -8,7 +8,7 @@ from typing import BinaryIO
 from uuid import uuid4
 
 from PIL import Image
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.models import MediaArtifact
@@ -39,8 +39,6 @@ from app.domain.media_derivatives.errors import (
 )
 from app.domain.media_derivatives.processor import MediaDerivativeResult
 
-_PURGE_RETRY_BASE_SECONDS = 30
-_PURGE_RETRY_MAX_SECONDS = 60 * 60
 _UPLOAD_MIME_BY_PILLOW_FORMAT = {
     "AVIF": "image/avif",
     "JPEG": "image/jpeg",
@@ -267,74 +265,6 @@ def is_artifact_expired(artifact: MediaArtifact, *, now: datetime | None = None)
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
     return expires_at <= current_time
-
-
-def cleanup_expired_artifacts(
-    *,
-    database_url: str,
-    artifact_store: ArtifactStore,
-    now: datetime | None = None,
-    session: Session | None = None,
-    batch_size: int = 100,
-) -> int:
-    from app.core.db import get_session as _get_session
-
-    current_time = now or datetime.now(UTC)
-
-    def _cleanup_with_session(s: Session) -> int:
-        success_limit = max(1, int(batch_size))
-        statement = (
-            select(MediaArtifact)
-            .where(
-                MediaArtifact.expires_at <= current_time,
-                MediaArtifact.purged_at.is_(None),
-                or_(
-                    MediaArtifact.purge_next_attempt_at.is_(None),
-                    MediaArtifact.purge_next_attempt_at <= current_time,
-                ),
-            )
-            .order_by(
-                func.coalesce(
-                    MediaArtifact.purge_next_attempt_at,
-                    MediaArtifact.expires_at,
-                ),
-                MediaArtifact.expires_at,
-                MediaArtifact.artifact_id,
-            )
-            .limit(success_limit)
-            .with_for_update(skip_locked=True)
-        )
-        artifacts = list(s.scalars(statement))
-        purged = 0
-        for artifact in artifacts:
-            artifact.status = "purge_pending"
-            artifact.purge_attempt_count = int(artifact.purge_attempt_count or 0) + 1
-            artifact.purge_last_attempt_at = current_time
-            try:
-                artifact_store.delete(artifact.storage_key)
-            except Exception:
-                delay_seconds = min(
-                    _PURGE_RETRY_MAX_SECONDS,
-                    _PURGE_RETRY_BASE_SECONDS * (2 ** min(10, artifact.purge_attempt_count - 1)),
-                )
-                artifact.purge_next_attempt_at = current_time + timedelta(seconds=delay_seconds)
-                artifact.purge_last_error_code = "artifact_store.delete_failed"
-                continue
-            artifact.status = "purged"
-            artifact.purged_at = current_time
-            artifact.purge_next_attempt_at = None
-            artifact.purge_last_error_code = None
-            purged += 1
-        s.flush()
-        return purged
-
-    if session is not None:
-        return _cleanup_with_session(session)
-
-    with _get_session(database_url) as s:
-        count = _cleanup_with_session(s)
-        s.commit()
-        return count
 
 
 def build_artifact_result_json(artifact: MediaArtifact) -> dict[str, object]:

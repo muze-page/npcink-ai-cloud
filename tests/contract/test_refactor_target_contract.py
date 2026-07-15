@@ -130,12 +130,17 @@ def test_connector_contract_freezes_one_suggestion_only_runtime() -> None:
         assert required in connector
 
 
-def test_media_contract_tracks_p3_b4c1a_publication_and_remaining_targets() -> None:
+def test_media_contract_tracks_p3_b4c1_publication_purge_and_remaining_targets() -> None:
     media = _read("docs/media-runtime-boundary-v1.md")
 
     for required in (
-        "Status: P3-B4C1a transaction-tracked artifact publication implemented;",
+        "Status: P3-B4C1b fenced TTL purge and delivery coordination implemented;",
         "P3-B4C1a routes all",
+        "full eligibility `UPDATE` compare-and-set",
+        "media_artifact.delivery_window_unavailable",
+        "P3-B4C2 inventory reconciliation",
+        "P3-B4C3 PostgreSQL real-concurrency",
+        "P3-B4D WordPress local import",
         "Session-local in-memory no-delete quarantine",
         "bounded artifact-store inventory versus database inventory scan",
         "B4B2 legacy-route",
