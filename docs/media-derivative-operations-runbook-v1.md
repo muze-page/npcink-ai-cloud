@@ -1,7 +1,9 @@
 # Media Derivative Operations Runbook v1
 
-Status: active Cloud guidance; WordPress end-to-end smoke pending connector adoption
+Status: active Cloud guidance; P3-B4D WordPress end-to-end smoke complete,
+P3-B5 release validation pending
 Date: 2026-06-03
+Updated: 2026-07-16
 
 ## Scope
 
@@ -92,14 +94,15 @@ Before enabling the feature:
    docker restart npcink-ai-cloud-worker-1
    ```
 
-5. After the WordPress connector adopts both resources, run the WordPress smoke:
+5. Run the fail-closed WordPress smoke against the intended WordPress and Cloud
+   revisions:
 
    ```bash
    pnpm run smoke:media-derivative:wp
    ```
 
-Until that connector batch lands, this smoke is not current P3-B3A acceptance
-evidence. Expected future smoke evidence:
+P3-B4D completed this smoke against the real local WordPress chain and live
+development Cloud on 2026-07-16. Its accepted evidence includes:
 
 - local batch planning returns a candidate with Cloud request input and a
   `batch_size_recommendation`;
@@ -113,6 +116,13 @@ evidence. Expected future smoke evidence:
 - `media_artifacts` contains an available short-lived artifact with
   `operation = 'image.transform.v1'`; bytes live in the shared ArtifactStore
   volume rather than PostgreSQL.
+
+That B4D evidence proves the development integration seam. It does not complete
+P3-B5 release validation, authorize production deployment, or enable production
+orphan cleanup. P3-B5 must repeat the flow from exact plugin packages in a fresh
+WordPress-plus-Cloud environment and attach the performance, security, rollback,
+and central-matrix evidence defined in
+[Media Runtime B5 Closeout 2026-07-16](media-runtime-b5-closeout-2026-07-16.md).
 
 ## Orphan Cleanup Enablement Gate
 
@@ -240,7 +250,7 @@ Download-time errors:
 | `media_derivative.artifact_not_found` | Artifact id is unknown for the site | Regenerate preview |
 | `media_derivative.artifact_expired` | Artifact TTL has elapsed | Regenerate preview before proposing/adopting |
 
-## Compatibility Notes
+## Processing Semantics
 
 Expected behavior:
 

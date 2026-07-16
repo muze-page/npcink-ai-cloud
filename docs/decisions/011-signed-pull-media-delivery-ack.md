@@ -2,11 +2,21 @@
 
 ## Status
 
-Accepted — B4B3 implemented
+Accepted — B4B3 implemented; ACK retention clause amended by B4D
 
 ## Date
 
 2026-07-15
+
+## Current Decision Addendum
+
+Effective 2026-07-16, delivery ACK is transfer evidence only. It records the
+verified received byte count and checksum without changing the artifact's
+original `expires_at`. The original B4B1/B4B3 retention-reduction clauses in
+the Decision, Consequences, and Verification sections are superseded by this
+addendum. They are retained below as explicitly marked historical context and
+are not an active delivery contract. TTL purge continues from the original
+server-owned expiry.
 
 ## Context
 
@@ -29,7 +39,12 @@ platform-neutral transfer contract:
 1. a nonce-protected same-site HMAC GET streams the exact artifact and creates
    independent delivery evidence; and
 2. a strict idempotent HMAC POST acknowledges the exact received byte count and
-   checksum, then only shortens temporary retention.
+   checksum without changing the original artifact expiry.
+
+Historical B4B1 clause, superseded by the Current Decision Addendum: the first
+implementation intended ACK to reduce the remaining temporary retention. B4D
+removed that mutation so a received artifact descriptor remains reusable for a
+later governed local adoption within its original TTL.
 
 `MediaArtifactDelivery` is distinct from `ReplayReceipt`. A delivery is marked
 complete only after verified normal EOF; that delivery row is the
@@ -80,7 +95,10 @@ two distinct evidence points without full-body buffering.
 - Replay, cross-site access, stale artifacts, byte mismatches, truncation, and
   ACK conflicts fail closed with deterministic status codes.
 - Cloud can measure started, completed, and acknowledged transfers separately.
-- ACK reduces exposure by shortening retention but cannot extend or delete it.
+- Historical B4B1 consequence, superseded by the Current Decision Addendum:
+  ACK was intended to reduce the remaining retention. The current consequence
+  is that retention-before and retention-after evidence are equal to the
+  original artifact expiry; ACK neither shortens nor extends it.
 - ACK and purge serialize on artifact lifecycle state; acknowledgement cannot
   revive an expired, purge-pending, or purged artifact.
 - Local connectors still verify, review, import, write, and audit under local
@@ -110,7 +128,8 @@ prepared.
 
 ## Verification
 
-- happy-path pull, completion, ACK, exact replay, and retention shortening;
+- happy-path pull, completion, ACK, exact replay, and equality of original,
+  retention-before, retention-after, and ACK-projected artifact expiry;
 - nonce/replay scope isolation, cross-site 404, query/idempotency/Range rejection;
 - unavailable, expired, storage-mismatch, interrupted, checksum-mismatch, and
   oversized stream behavior;

@@ -128,6 +128,18 @@ aggregation and transfer-only semantics in summary v2.
 | MED-03B | P3-B4B3 removed `artifact_download_count`, `artifact_last_downloaded_at`, and their v1 API/UI wording. | deleted | `MediaArtifactDelivery` is the platform-neutral transfer evidence, joined to `MediaArtifact` by artifact and site for operation and site dimensions. | P3 | `0064` near-full-shape migration preservation, summary-v2 API, started-cohort bounds, exact integrity predicates, cross-site exclusion, UTC-date aggregation, bounded site breakdown, zero-rate, anomalous-state exclusion, and frontend static contracts pass. |
 | MED-04 | P3-B4C1b removes the old `media_derivatives` cleanup helper and implements one `MediaArtifact` TTL purge with database claim truth, artifact-first delivery locking, revocation, delete-outside-transaction, fenced finalize, retry, and five-count cadence evidence. P3-B4C2a adds strict local-volume inventory, read-only two-direction reconciliation, publication fencing, and independent aggregate cadence evidence. P3-B4C2b adds durable complete-pass/candidate truth, fixed-root publication sessions, per-candidate exclusive conditional deletion, all-status final recheck, retry, and crash convergence. P3-B4C3 completes the isolated PostgreSQL 16 multi-connection, migration-head, deterministic claim-contention, stale-finalizer, cross-container publication-lock, and project-owned named-volume proof. P3-B4D completes the artifact-only, fail-closed real WordPress-to-Cloud smoke and focused static contract. | consolidate, implemented through C3 isolation proof and B4D real evidence; production default-off | `MediaArtifact` remains reference truth. ADR-014 age eligibility remains evidence only; ADR-015 separately requires two complete passes, ships cleanup disabled by default, and treats proof success as enablement evidence rather than production authorization. WordPress remains local write/restore/audit truth. | P3 | C1b/C2a/C2b focused migration, lifecycle, delivery/ACK, publication, inventory, concurrency-CAS, redaction, config, and cadence tests pass. The dedicated C3 isolation gate proves PostgreSQL/PG16 and named-volume behavior. The B4D gate passed on 2026-07-16 and freezes npcink-site identity, upload/job/signed-pull/ACK, exact artifact fields, local file and HTTP facts, Core audit, adoption/reference/restore, Cloud telemetry, and fixture cleanup. |
 
+### P3-B5 Media Closeout
+
+Status: pending. P3-B5 is the media closeout and release-validation batch; it is
+not the global P5 milestone and does not authorize production orphan cleanup.
+It exits only when the exact-package manifest, fresh-environment
+WordPress-plus-Cloud E2E, measured performance/memory bounds, security suite,
+upgrade/rollback/store-recovery rehearsal, remaining media-alias deletion, and
+central cross-repository matrix are all attached to
+[Media Runtime B5 Closeout 2026-07-16](media-runtime-b5-closeout-2026-07-16.md).
+Until then, production cleanup remains default-off and P3-B5 must not be marked
+complete.
+
 ## P4 Portal/Admin Cleanup
 
 P4 begins with a surface inventory. The candidates below are rules, not a claim

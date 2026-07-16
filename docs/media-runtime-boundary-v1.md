@@ -3,7 +3,7 @@
 Status: P3-B4D complete with real WordPress and Cloud evidence (2026-07-16).
 P3-B4C3 isolated PostgreSQL 16 multi-connection and named-volume proof is
 complete, persistent orphan cleanup remains production/default-off, and B5
-remains target work.
+remains pending closeout and release-validation work.
 
 ## 1. Purpose
 
@@ -29,7 +29,9 @@ WordPress chain and the live development Cloud on 2026-07-16. The accepted run
 was `run_ea365c8ef6fb4b1dbe721338208d9aee`, with derivative artifact
 `art_9ea7725f20914e819ba17d7d2ecc60ff` and explicit receive delivery
 `mdl_ae8fc3d7e06c49fc90d1872314323e50`. Production cleanup remains disabled and
-the B5 closeout remains pending.
+the P3-B5 media closeout remains pending. P3-B5 is a bounded media
+release-validation batch, not the global P5 refactor milestone and not
+authorization to enable production orphan cleanup.
 
 Toolbox remains the real WordPress operator entry for media derivatives. The
 B4D smoke intentionally bypasses presentation code and calls only the stable
@@ -475,8 +477,9 @@ Cleanup requirements are:
 - reconcile metadata without bytes and bytes without metadata; C2a reports
   aggregate mismatch evidence after a bounded safety window but does not clean
   observed orphans;
-- shorten the remaining TTL after delivery acknowledgement while preserving a
-  small retry grace period;
+- preserve the original server-owned `expires_at` after delivery
+  acknowledgement; retention-before and retention-after evidence remain equal
+  and ACK never becomes a retention mutation;
 - retry failed deletion without restoring artifact availability;
 - prevent expired or purged artifacts from receiving new signed pulls or ACKs;
 - serialize ACK and purge decisions on the artifact row so acknowledgement
@@ -663,6 +666,16 @@ capability.
   proposal/audit, exact local adopt/reference/HTTP/restore facts, and complete
   WordPress fixture cleanup. This is acceptance evidence, not production
   cleanup authorization.
+- **P3-B5:** Pending. This is the bounded media closeout and release-validation
+  batch. It requires exact plugin packages from recorded commits, a fresh
+  WordPress-plus-Cloud environment E2E, measured media performance and memory
+  bounds, cross-site/expiry/replay/security evidence, upgrade/rollback/store
+  recovery evidence, removal of remaining media input aliases, and a green
+  central cross-repository matrix. Its durable evidence record is
+  [Media Runtime B5 Closeout 2026-07-16](media-runtime-b5-closeout-2026-07-16.md).
+  P3-B5 is not complete until every required row in that record is backed by
+  reproducible evidence. It does not enable production orphan cleanup and it
+  is not the global P5 milestone.
 - **P3 target:** The four target resources, typed image contracts, security
   controls, signed pull, delivery acknowledgement, TTL, and purge are
   implemented and covered by focused tests.

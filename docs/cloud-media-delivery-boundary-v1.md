@@ -7,7 +7,7 @@ Scope: WordPress-first Cloud runtime, with a platform-neutral delivery seam
 ## Boundary
 
 Cloud owns short-lived media bytes, verified artifact metadata, signed transfer,
-delivery evidence, acknowledgement evidence, retention shortening, and transfer
+delivery evidence, acknowledgement evidence, bounded retention, and transfer
 diagnostics. The local CMS connector owns the user permission check, preview,
 review, import, association, publication, final write, and canonical local audit.
 
@@ -68,19 +68,21 @@ The request uses ordinary POST HMAC authorization, `runtime:execute`, nonce, and
 `received_byte_size`, and `received_checksum` in addition to its contract
 version. ACK requires the same site and artifact, a completed unexpired
 delivery, and exact expected facts. The first ACK records transfer-only evidence
-and shortens artifact retention to `min(existing expiry, acknowledged time + 5
-minutes)`; it never extends retention, deletes bytes, changes artifact status,
-or writes to a CMS. Exact key-and-fingerprint replay returns the same evidence;
-conflicts return `409`. ACK and purge serialize on the artifact row, and ACK
-also rechecks current lifecycle state after acquiring it, so an expired,
-purge-pending, or purged artifact cannot be extended or revived.
+without changing the artifact's original `expires_at`; it never shortens or
+extends retention, deletes bytes, changes artifact status, or writes to a CMS.
+Exact key-and-fingerprint replay returns the same evidence; conflicts return
+`409`. ACK and purge serialize on the artifact row, and ACK also rechecks
+current lifecycle state after acquiring it, so an expired, purge-pending, or
+purged artifact cannot be revived.
 
 ## Evidence Separation
 
 `ReplayReceipt` remains request replay/rate evidence. `MediaArtifactDelivery`
 is separate transfer evidence and records expected facts, start/completion,
 ACK deadline, ACK key/fingerprint/trace, verified receipt facts, retention
-before/after, expiry, and revocation. Pull request and rejection scopes use
+before/after, expiry, and revocation. The before/after retention evidence records
+the same original expiry; it is not a retention mutation. Pull request and
+rejection scopes use
 `public_pull_site`, `public_pull_key`, and `public_pull_ip`; they do not consume
 or pollute the existing `public_post_*` scopes. Ordinary non-media GET behavior
 is unchanged and does not require a nonce.

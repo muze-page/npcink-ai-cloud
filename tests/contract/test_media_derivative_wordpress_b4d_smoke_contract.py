@@ -309,3 +309,48 @@ def test_b4d_docs_state_records_real_wordpress_completion_without_cleanup_enable
     assert "real WordPress smoke evidence pending" not in combined
     assert "Production cleanup remains disabled" in media
     assert "production cleanup remains default-off" in inventory
+
+
+def test_media_docs_freeze_ack_expiry_and_pending_b5_closeout() -> None:
+    media = _read("docs/media-runtime-boundary-v1.md")
+    delivery = _read("docs/cloud-media-delivery-boundary-v1.md")
+    ack_adr = _read("docs/decisions/011-signed-pull-media-delivery-ack.md")
+    runbook = _read("docs/media-derivative-operations-runbook-v1.md")
+    inventory = _read("docs/refactor-deletion-inventory-v1.md")
+    closeout = _read("docs/media-runtime-b5-closeout-2026-07-16.md")
+    combined = "\n".join((media, delivery, ack_adr, runbook, inventory, closeout))
+
+    assert "without changing the artifact's original `expires_at`" in delivery
+    assert "preserve the original server-owned `expires_at`" in media
+    assert "Delivery ACK records verified transfer only and does not change" in closeout
+    assert "## Current Decision Addendum" in ack_adr
+    assert "retention clause amended by B4D" in ack_adr
+    assert (
+        "without changing the artifact's original `expires_at`"
+        in ack_adr.replace("\n", " ")
+    )
+    assert "superseded by the Current Decision Addendum" in ack_adr
+    for retired in (
+        "retention shortening",
+        "shortens artifact retention",
+        "shorten the remaining TTL after delivery acknowledgement",
+        "WordPress end-to-end smoke pending connector adoption",
+    ):
+        assert retired not in combined
+
+    assert "P3-B4D WordPress end-to-end smoke complete" in runbook
+    assert "Status: pending evidence; P3-B5 is not complete." in closeout
+    assert "not the global P5 refactor milestone" in closeout
+    assert "does not authorize enabling production orphan cleanup" in closeout
+    for required in (
+        "Exact package manifest",
+        "Fresh environment E2E",
+        "Performance and bounded memory",
+        "Security and isolation",
+        "Upgrade, rollback, and recovery",
+        "No old media aliases",
+        "Central cross-repository matrix",
+        "Independent review",
+    ):
+        assert required in closeout
+    assert "| pending |" in closeout
