@@ -49,6 +49,6 @@ assert.doesNotMatch(
 );
 assert.match(
   proxySource,
-  /normalized === 'credit-packs'[\s\S]*\/internal\/service\/admin\/credit-packs/,
-  'Admin proxy must route credit pack writes to the admin-prefixed service endpoint'
+  /methods: \['PATCH'\],[\s\S]*?pattern: \/\^credit-packs\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_catalog'/,
+  'Admin proxy must explicitly allowlist credit pack writes in the admin namespace with catalog authority'
 );

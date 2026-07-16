@@ -23,8 +23,14 @@ assert.equal(
 
 assert.match(
   adminProxySource,
-  /normalized === 'audio-jobs'[\s\S]*?return '\/internal\/service\/admin\/audio-jobs';/,
-  'audio job creation must remain proxied for the ability-model routing dialog preview'
+  /methods: \['POST'\],[\s\S]*?pattern: \/\^audio-jobs\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_catalog'/,
+  'audio job creation must remain explicitly allowlisted for the ability-model routing dialog preview'
+);
+
+assert.match(
+  adminProxySource,
+  /if \(!routeResolution\) \{\s*return buildErrorResponse\(\s*404,\s*'proxy\.admin_route_not_allowed'/s,
+  'audio job proxying must live inside a fail-closed Admin route policy'
 );
 
 assert.match(
