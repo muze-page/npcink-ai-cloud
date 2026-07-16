@@ -130,15 +130,14 @@ aggregation and transfer-only semantics in summary v2.
 
 ### P3-B5 Media Closeout
 
-Status: pending. P3-B5 is the media closeout and release-validation batch; it is
-not the global P5 milestone and does not authorize production orphan cleanup.
-It exits only when the exact-package manifest, fresh-environment
-WordPress-plus-Cloud E2E, measured performance/memory bounds, security suite,
-upgrade/rollback/store-recovery rehearsal, remaining media-alias deletion, and
-central cross-repository matrix are all attached to
+Status: complete on 2026-07-16. P3-B5 closed the media release-validation batch
+with exact-package manifests, fresh-environment WordPress-plus-Cloud E2E,
+measured performance/memory bounds, security and proxy-trust proof,
+upgrade/rollback/store recovery, media-alias deletion, a clean six-repository
+central matrix, and independent review. The complete evidence is attached to
 [Media Runtime B5 Closeout 2026-07-16](media-runtime-b5-closeout-2026-07-16.md).
-Until then, production cleanup remains default-off and P3-B5 must not be marked
-complete.
+P3-B5 is not the global P5 milestone, and production cleanup remains
+default-off.
 
 ## P4 Portal/Admin Cleanup
 

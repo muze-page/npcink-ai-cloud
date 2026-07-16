@@ -311,7 +311,7 @@ def test_b4d_docs_state_records_real_wordpress_completion_without_cleanup_enable
     assert "production cleanup remains default-off" in inventory
 
 
-def test_media_docs_freeze_ack_expiry_and_pending_b5_closeout() -> None:
+def test_media_docs_freeze_ack_expiry_and_complete_b5_closeout() -> None:
     media = _read("docs/media-runtime-boundary-v1.md")
     delivery = _read("docs/cloud-media-delivery-boundary-v1.md")
     ack_adr = _read("docs/decisions/011-signed-pull-media-delivery-ack.md")
@@ -339,7 +339,7 @@ def test_media_docs_freeze_ack_expiry_and_pending_b5_closeout() -> None:
         assert retired not in combined
 
     assert "P3-B4D WordPress end-to-end smoke complete" in runbook
-    assert "Status: pending evidence; P3-B5 is not complete." in closeout
+    assert "Status: complete; all eight P3-B5 evidence gates passed" in closeout
     assert "not the global P5 refactor milestone" in closeout
     assert "does not authorize enabling production orphan cleanup" in closeout
     for required in (
@@ -353,4 +353,19 @@ def test_media_docs_freeze_ack_expiry_and_pending_b5_closeout() -> None:
         "Independent review",
     ):
         assert required in closeout
-    assert "| pending |" in closeout
+    assert closeout.count("| passed |") == 8
+    assert "| pending |" not in closeout
+    assert "FINAL_BUNDLE_SHA_PENDING" not in closeout
+    for required_evidence in (
+        "7e90782275683efd9bdaf6a33b552528a79a3cba",
+        "77d7a0f8653119b9e17b2d4000f373af982e13476e620e213170b16473168927",
+        "run_914ca00b26964351b8d764c2b7254f9c",
+        "art_402f108aa0a449c1a2966529a7944fb5",
+        "mdl_193e3d0fc5574481873494a72e3343ce",
+        "P3-B5 is complete",
+        "all six repositories passed with `dirty=0`",
+        "172.28.0.11` to Nginx `172.28.0.10",
+    ):
+        assert required_evidence in closeout
+    assert "P3-B5 release validation complete" in runbook
+    assert "Status: complete on 2026-07-16" in inventory

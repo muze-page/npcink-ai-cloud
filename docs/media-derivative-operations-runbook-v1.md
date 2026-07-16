@@ -1,7 +1,7 @@
 # Media Derivative Operations Runbook v1
 
 Status: active Cloud guidance; P3-B4D WordPress end-to-end smoke complete,
-P3-B5 release validation pending
+P3-B5 release validation complete
 Date: 2026-06-03
 Updated: 2026-07-16
 
@@ -117,12 +117,17 @@ development Cloud on 2026-07-16. Its accepted evidence includes:
   `operation = 'image.transform.v1'`; bytes live in the shared ArtifactStore
   volume rather than PostgreSQL.
 
-That B4D evidence proves the development integration seam. It does not complete
-P3-B5 release validation, authorize production deployment, or enable production
-orphan cleanup. P3-B5 must repeat the flow from exact plugin packages in a fresh
-WordPress-plus-Cloud environment and attach the performance, security, rollback,
-and central-matrix evidence defined in
+That B4D evidence proves the development integration seam. P3-B5 subsequently
+repeated the flow from exact plugin packages in a fresh WordPress 7.0.1/PHP
+8.2.29 environment. Run `run_914ca00b26964351b8d764c2b7254f9c`, artifact
+`art_402f108aa0a449c1a2966529a7944fb5`, and receive delivery
+`mdl_193e3d0fc5574481873494a72e3343ce` passed upload, transfer-only ACK,
+governed local adoption, HTTP/reference verification, restore, and cleanup.
+The performance, security, rollback, exact-package, and central-matrix evidence
+is recorded in
 [Media Runtime B5 Closeout 2026-07-16](media-runtime-b5-closeout-2026-07-16.md).
+This closes P3-B5 but does not authorize production deployment or enable
+production orphan cleanup.
 
 ## Orphan Cleanup Enablement Gate
 
