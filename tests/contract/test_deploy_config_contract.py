@@ -169,9 +169,12 @@ def test_production_api_trusts_the_same_pinned_network_used_by_compose() -> None
     compose = (_cloud_root() / "docker-compose.prod.yml").read_text()
 
     shared_subnet = "${NPCINK_CLOUD_PROXY_SUBNET:-172.28.0.0/24}"
-    assert f"--forwarded-allow-ips {shared_subnet}" in compose
+    trusted_proxy_ip = "${NPCINK_CLOUD_PROXY_IP:-172.28.0.10}"
+    assert f"--forwarded-allow-ips {trusted_proxy_ip}" in compose
+    assert f"ipv4_address: {trusted_proxy_ip}" in compose
     assert f"- subnet: {shared_subnet}" in compose
-    assert compose.count(shared_subnet) == 2
+    assert compose.count(shared_subnet) == 1
+    assert compose.count(trusted_proxy_ip) == 2
     assert "--forwarded-allow-ips *" not in compose
     assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in (
         _cloud_root() / "deploy" / "nginx.prod.conf"
