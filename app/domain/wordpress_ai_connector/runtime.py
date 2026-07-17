@@ -24,6 +24,7 @@ from app.domain.site_knowledge.contracts import (
 from app.domain.site_knowledge.repository import SiteKnowledgeRepository
 from app.domain.site_knowledge.service import SiteKnowledgeService
 from app.domain.wordpress_ai_connector.contracts import (
+    WORDPRESS_OPERATION_CONTRACT,
     WP_AI_CONNECTOR_SOURCE_TEXT_TASKS,
     contains_inline_media_transport,
     resolve_site_knowledge_reference_mode,
@@ -534,14 +535,15 @@ class WordPressOperationRuntime:
         if (
             default_policy.get("platform_kind") != "wordpress"
             or default_policy.get("connector_id") != "wordpress_ai_connector"
-            or default_policy.get("connector_contract_version") != "wp_ai_connector_runtime.v1"
+            or default_policy.get("operation_contract_version")
+            != WORDPRESS_OPERATION_CONTRACT
         ):
             raise RuntimeExecutionContractError(
                 "runtime_profiles.managed_contract_invalid",
                 (
                     "hosted runtime profile requires platform_kind=wordpress, "
                     "connector_id=wordpress_ai_connector, and "
-                    "connector_contract_version=wp_ai_connector_runtime.v1"
+                    f"operation_contract_version={WORDPRESS_OPERATION_CONTRACT}"
                 ),
             )
 
@@ -556,7 +558,7 @@ class WordPressOperationRuntime:
         )
         platform_kind = "wordpress"
         connector_id = "wordpress_ai_connector"
-        connector_contract_version = "wp_ai_connector_runtime.v1"
+        operation_contract_version = WORDPRESS_OPERATION_CONTRACT
         policy["timeout_ms"] = timeout_ms
         policy["timeout_seconds"] = timeout_seconds
         policy["max_retries"] = max_retries
@@ -565,7 +567,7 @@ class WordPressOperationRuntime:
         policy["managed_surface"] = "hosted_runtime_profiles"
         policy["platform_kind"] = platform_kind
         policy["connector_id"] = connector_id
-        policy["connector_contract_version"] = connector_contract_version
+        policy["operation_contract_version"] = operation_contract_version
         if task_group:
             policy["task_group"] = task_group
         if routing_intent:
@@ -579,7 +581,7 @@ class WordPressOperationRuntime:
             execution_contract["managed_surface"] = "hosted_runtime_profiles"
             execution_contract["platform_kind"] = platform_kind
             execution_contract["connector_id"] = connector_id
-            execution_contract["connector_contract_version"] = connector_contract_version
+            execution_contract["operation_contract_version"] = operation_contract_version
             if task_group:
                 execution_contract["task_group"] = task_group
             if routing_intent:

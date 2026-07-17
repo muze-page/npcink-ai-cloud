@@ -63,6 +63,7 @@ from app.domain.site_knowledge.vector_profile import (
 from app.domain.site_knowledge.vector_profile_contract import (
     SITE_KNOWLEDGE_VECTOR_PROFILE_ID,
 )
+from app.domain.wordpress_ai_connector.contracts import WORDPRESS_OPERATION_CONTRACT
 from app.domain.wordpress_ai_connector.routing_profiles import (
     WP_AI_CONNECTOR_PROFILE_SPECS,
     WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID,
@@ -418,7 +419,7 @@ class HostedRuntimeProfileSettingsPayload(BaseModel):
     contract_version: Literal["cloud-hosted-runtime-profiles.v1"]
     platform_kind: Literal["wordpress"]
     connector_id: Literal["wordpress_ai_connector"]
-    connector_contract_version: Literal["wp_ai_connector_runtime.v1"]
+    operation_contract_version: Literal["wordpress_operation.v1"]
     profiles: list[HostedRuntimeProfilePayload]
 
 
@@ -965,7 +966,7 @@ def _build_hosted_runtime_profile_projection(
         "owner": "cloud_runtime",
         "platform_kind": "wordpress",
         "connector_id": "wordpress_ai_connector",
-        "connector_contract_version": "wp_ai_connector_runtime.v1",
+        "operation_contract_version": WORDPRESS_OPERATION_CONTRACT,
         "available_instances": available_instances_by_kind,
         "profiles": profiles,
         "boundary": {
@@ -4612,7 +4613,7 @@ async def update_admin_hosted_runtime_profiles(
                     "managed_surface": "hosted_runtime_profiles",
                     "platform_kind": payload.platform_kind,
                     "connector_id": payload.connector_id,
-                    "connector_contract_version": payload.connector_contract_version,
+                    "operation_contract_version": payload.operation_contract_version,
                     "task_group": spec.group_id,
                     "routing_intent": spec.routing_intent,
                     "tasks": list(spec.tasks),
@@ -4627,7 +4628,7 @@ async def update_admin_hosted_runtime_profiles(
                     "managed_surface": "hosted_runtime_profiles",
                     "platform_kind": payload.platform_kind,
                     "connector_id": payload.connector_id,
-                    "connector_contract_version": payload.connector_contract_version,
+                    "operation_contract_version": payload.operation_contract_version,
                     "task_group": spec.group_id,
                     "routing_intent": spec.routing_intent,
                     "operator_note": profile_payload.note.strip(),
@@ -4648,7 +4649,7 @@ async def update_admin_hosted_runtime_profiles(
                 "contract_version": payload.contract_version,
                 "platform_kind": payload.platform_kind,
                 "connector_id": payload.connector_id,
-                "connector_contract_version": payload.connector_contract_version,
+                "operation_contract_version": payload.operation_contract_version,
                 "profile_ids": [profile.profile_id for profile in profiles],
                 "revision": revision,
             },

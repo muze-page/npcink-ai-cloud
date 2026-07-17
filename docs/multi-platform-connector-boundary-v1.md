@@ -2,11 +2,13 @@
 
 ## Status
 
-Accepted target contract; not yet fully implemented.
+Accepted and implemented for the WordPress-only P0-P5 runtime seam. Future CMS
+adapters remain post-P5 validation work.
 
-This document defines the intended connector boundary for the WordPress-first
-refactor. Current code and routes remain evidence of the starting point, not
-proof that the target envelope or fields already exist.
+This document defines the connector boundary for the WordPress-first refactor.
+Current implementation evidence proves the neutral envelope and WordPress
+operation split; it does not prove Typecho, Z-BlogPHP, Ghost, or other CMS
+support.
 
 ## Purpose
 
@@ -28,19 +30,17 @@ only accepted platform until the refactor and its real product loops close.
 
 ## Current Evidence And Target State
 
-Current evidence includes `wp_ai_connector_runtime.v1`, its WordPress task
-allowlist, `suggestion_only` write posture, direct-write rejection, bounded
-request validation, and structured `wp_ai_connector.*` errors. It proves that a
-signed WordPress connector can use the hosted runtime safely.
+Current evidence uses one `cloud_connector_runtime.v1` envelope around one
+validated `wordpress_operation.v1` contract. It carries `site_url`, platform,
+connector implementation/version, `suggestion_only`, optional object identity,
+bounded request data, and a structured result while rejecting direct writes.
+The hosted-profile Admin resource binds the platform-specific operation
+version; it does not create another runtime envelope or CMS registry.
 
-The target is not fully implemented. The current contract still combines a
-WordPress connector identity, task semantics, and runtime envelope. P1 must
-separate a neutral envelope from the WordPress-specific operation contract,
-not merely rename every WordPress concept and pretend the result is generic.
-
-The transition has no compatibility requirement. When the target contract is
-implemented, producers, consumers, tests, fixtures, and documentation change
-atomically and the superseded public contract is removed.
+The superseded combined connector contract has no active producer, consumer,
+validator, fixture, or compatibility path. WordPress task/profile semantics
+remain explicitly WordPress-specific, while transport identity and execution
+stay in the neutral envelope.
 
 ## Two Orthogonal Axes
 
@@ -90,10 +90,11 @@ An account, membership, site, or `wp_user_id` is not a user identity. A local
 actor reference never grants Cloud permission and never replaces the local
 permission check.
 
-## Target Runtime Envelope
+## Runtime Envelope
 
-The target logical envelope carries the following fields. This table describes
-the accepted target, not current implementation evidence.
+The implemented WordPress-first logical envelope carries the following fields.
+This table describes the stable cross-platform seam; it does not claim that a
+second CMS adapter exists.
 
 | Field | Required semantics |
 | --- | --- |
@@ -118,8 +119,9 @@ bounded runtime fields. Their presence does not create a Cloud ability model.
 not register, discover, edit, publish, or govern those contracts. WordPress
 operation semantics remain explicitly WordPress-specific inside that contract.
 
-`wordpress_url` is not part of the target. P1 must replace it with `site_url`
-without an alias, fallback, compatibility shim, dual read, or dual write.
+`wordpress_url` is not part of the current contract. P1 replaced it with
+`site_url` without an alias, fallback, compatibility shim, dual read, or dual
+write.
 
 ## Platform-neutral Object Reference
 
@@ -206,8 +208,8 @@ result path and neither callback nor delivery acknowledgment means â€œapplied.â€
 | Action | Scope |
 | --- | --- |
 | Keep | existing hosted runtime, HMAC, idempotency, run evidence, provider routing, usage, entitlement, worker, health, diagnostics, and local governance ownership |
-| Change | split the neutral envelope from WordPress-specific operation semantics; add target site, platform, connector, object, and result-posture fields |
-| Delete | `wordpress_url`, obsolete connector envelope, aliases, fallback parsing, dual reads/writes, superseded fixtures, and duplicate version tests when P1 lands |
+| Change | neutral envelope is split from WordPress-specific operation semantics and carries site, platform, connector, object, and result-posture fields |
+| Delete | `wordpress_url`, the obsolete connector envelope, aliases, fallback parsing, dual reads/writes, superseded fixtures, and duplicate version tests are removed |
 | Defer | Typecho, Z-BlogPHP, Ghost adapters, shared SDK extraction, new channel products, and universal CMS content modeling |
 
 ## WordPress Acceptance For P0-P5
@@ -218,7 +220,7 @@ result path and neither callback nor delivery acknowledgment means â€œapplied.â€
 - `site_url`, connector identity/version, trace, idempotency, storage, and object references are preserved end to end.
 - Retries do not duplicate Cloud execution or local writes.
 - Cloud outage fails closed or uses a locally governed fallback; no Cloud registry, workflow/approval truth, or WordPress write path appears.
-- The old public connector contract and `wordpress_url` compatibility paths are absent after P1 closes.
+- The old public connector contract and `wordpress_url` compatibility paths are absent.
 
 ## Post-P5 Typecho PoC Acceptance
 

@@ -19,6 +19,14 @@ TARGET_CONTRACTS = (
 
 BASELINE_EVIDENCE = "docs/refactor-baseline-2026-07-14.md"
 P5_AUDIT_EVIDENCE = "docs/p5-hardening-release-audit-2026-07-17.md"
+P5_B1_EVIDENCE = "docs/p5-b1-hosted-profile-contract-cutover-2026-07-17.md"
+
+SUPERSEDED_CONNECTOR_RUNTIME = "wp_ai_connector_" "runtime.v1"
+SUPERSEDED_CONNECTOR_RESULT = "wp_ai_connector_" "result.v1"
+SUPERSEDED_CONNECTOR_VALIDATOR = (
+    "validate_wordpress_ai_connector_" "runtime_contract"
+)
+SUPERSEDED_HOSTED_PROFILE_FIELD = "connector_" "contract_version"
 
 BASELINE_RAW_SEARCH_COUNTS = {
     "DEBT-P1-SITE-01": 99,
@@ -53,6 +61,8 @@ def test_readme_links_pre_refactor_baseline_evidence() -> None:
     assert BASELINE_EVIDENCE in target_section
     assert "Evidence records (not target-contract completion proof)" in target_section
     assert P5_AUDIT_EVIDENCE in target_section
+    assert (ROOT / P5_B1_EVIDENCE).is_file()
+    assert P5_B1_EVIDENCE in target_section
 
 
 def test_p5_audit_records_open_blockers_without_claiming_completion() -> None:
@@ -66,7 +76,7 @@ def test_p5_audit_records_open_blockers_without_claiming_completion() -> None:
         "P3 | complete for the bounded media milestone",
         "P4 | complete",
         "P5 | incomplete",
-        "wp_ai_connector_runtime.v1",
+        SUPERSEDED_CONNECTOR_RUNTIME,
         "Pillow",
         "12.3.0",
         "pip-audit 2.10.1",
@@ -88,6 +98,59 @@ def test_p5_audit_records_open_blockers_without_claiming_completion() -> None:
         "/Users/muze/gitee/npcink-toolbox",
     ):
         assert forbidden not in audit
+
+
+def test_p5_b1_removes_superseded_hosted_profile_identity() -> None:
+    active_markers = (
+        SUPERSEDED_CONNECTOR_RUNTIME,
+        SUPERSEDED_CONNECTOR_RESULT,
+        SUPERSEDED_CONNECTOR_VALIDATOR,
+        SUPERSEDED_HOSTED_PROFILE_FIELD,
+    )
+    source_suffixes = {".py", ".pyi", ".ts", ".tsx", ".js", ".mjs"}
+
+    for directory in ("app", "tests", "frontend/src", "frontend/tests"):
+        for path in (ROOT / directory).rglob("*"):
+            if not path.is_file() or path.suffix not in source_suffixes:
+                continue
+            content = path.read_text(encoding="utf-8")
+            assert not any(marker in content for marker in active_markers), path
+
+    hosted_profiles = _read("docs/cloud-hosted-runtime-profiles-v1.md")
+    assert "`operation_contract_version`: `wordpress_operation.v1`" in hosted_profiles
+    assert SUPERSEDED_HOSTED_PROFILE_FIELD not in hosted_profiles
+
+
+def test_p5_b1_evidence_closes_only_the_connector_identity_batch() -> None:
+    evidence = _read(P5_B1_EVIDENCE)
+
+    for marker in (
+        "engineering batch complete; global P5 release closure and production\napproval remain incomplete",
+        "operation_contract_version",
+        "wordpress_operation.v1",
+        "cloud_connector_runtime.v1",
+        "20260717_0068",
+        "297 passed",
+        "302 passed",
+        "7 passed",
+        "156 passed, 1 skipped",
+        "602 passed, 3 skipped",
+        "746 passed",
+        "PostgreSQL 16 semantic rehearsal",
+        "P1-E05",
+        "P1-E06",
+        "P5-B2",
+        "P5-B5",
+    ):
+        assert marker in evidence
+
+    assert SUPERSEDED_CONNECTOR_RUNTIME not in evidence
+    assert SUPERSEDED_HOSTED_PROFILE_FIELD not in evidence
+    for forbidden in (
+        "global P5 completion achieved",
+        "Approved for production validation by operator.",
+    ):
+        assert forbidden not in evidence
 
 
 def test_readme_describes_the_bounded_current_model_operations_surface() -> None:
@@ -436,9 +499,9 @@ def test_active_connector_docs_match_the_p1_runtime_contract() -> None:
         assert required in smoke
 
     superseded_connector_markers = (
-        "wp_ai_connector_runtime.v1",
-        "wp_ai_connector_result.v1",
-        "validate_wordpress_ai_connector_runtime_contract",
+        SUPERSEDED_CONNECTOR_RUNTIME,
+        SUPERSEDED_CONNECTOR_RESULT,
+        SUPERSEDED_CONNECTOR_VALIDATOR,
     )
     for document in (ai_task, alt_text):
         assert not any(marker in document for marker in superseded_connector_markers)
@@ -447,7 +510,7 @@ def test_active_connector_docs_match_the_p1_runtime_contract() -> None:
     title_section = title_section.split("## Local Test Gate", maxsplit=1)[0]
     for marker in (
         "ability_name=npcink-cloud/wp-ai-connector",
-        "contract_version=wp_ai_connector_runtime.v1",
+        f"contract_version={SUPERSEDED_CONNECTOR_RUNTIME}",
         "channel=wordpress_ai_connector",
         "selected_model_id=",
         "selected_instance_id=",

@@ -745,7 +745,7 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
         assert run.policy_json["managed_surface"] == "hosted_runtime_profiles"
         assert run.policy_json["platform_kind"] == "wordpress"
         assert run.policy_json["connector_id"] == "wordpress_ai_connector"
-        assert run.policy_json["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
+        assert run.policy_json["operation_contract_version"] == ("wordpress_operation.v1")
         assert run.policy_json["task_group"] == "short_text"
         assert run.policy_json["routing_intent"] == "content.short_text"
         assert run.policy_json["timeout_ms"] == 45000
@@ -757,8 +757,8 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
         )
         assert run.policy_json["execution_contract"]["platform_kind"] == "wordpress"
         assert run.policy_json["execution_contract"]["connector_id"] == ("wordpress_ai_connector")
-        assert run.policy_json["execution_contract"]["connector_contract_version"] == (
-            "wp_ai_connector_runtime.v1"
+        assert run.policy_json["execution_contract"]["operation_contract_version"] == (
+            "wordpress_operation.v1"
         )
         assert run.policy_json["execution_contract"]["task_group"] == "short_text"
         assert run.policy_json["execution_contract"]["routing_intent"] == "content.short_text"
@@ -3040,7 +3040,7 @@ def test_wordpress_ai_connector_runtime_fails_closed_on_managed_profile_contract
         )
         assert profile is not None
         policy = dict(profile.default_policy_json or {})
-        policy["connector_contract_version"] = "wp_ai_connector_runtime.v2"
+        policy["operation_contract_version"] = "wordpress_operation.v2"
         profile.default_policy_json = policy
         session.commit()
 
@@ -3053,7 +3053,7 @@ def test_wordpress_ai_connector_runtime_fails_closed_on_managed_profile_contract
     assert response.status_code == 400
     payload = response.json()
     assert payload["error_code"] == "runtime_profiles.managed_contract_invalid"
-    assert "connector_contract_version=wp_ai_connector_runtime.v1" in payload["message"]
+    assert "operation_contract_version=wordpress_operation.v1" in payload["message"]
     assert provider.requests == []
     with get_session(database_url) as session:
         assert session.scalars(select(RunRecord)).all() == []
@@ -3094,7 +3094,7 @@ def test_admin_runtime_profiles_updates_hosted_candidates(
     assert data["owner"] == "cloud_runtime"
     assert data["platform_kind"] == "wordpress"
     assert data["connector_id"] == "wordpress_ai_connector"
-    assert data["connector_contract_version"] == "wp_ai_connector_runtime.v1"
+    assert data["operation_contract_version"] == "wordpress_operation.v1"
     assert data["boundary"]["admin_surface"] == "platform_admin_only"
     assert data["boundary"]["results_write_posture"] == "suggestion_only"
     assert data["boundary"]["public_runtime_accepts_raw_model_instance"] is False
@@ -3209,7 +3209,7 @@ def test_admin_runtime_profiles_updates_hosted_candidates(
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": replacement_profiles,
         },
     )
@@ -3293,7 +3293,7 @@ def test_admin_runtime_profiles_updates_hosted_candidates(
         assert run.policy_json["managed_surface"] == "hosted_runtime_profiles"
         assert run.policy_json["platform_kind"] == "wordpress"
         assert run.policy_json["connector_id"] == "wordpress_ai_connector"
-        assert run.policy_json["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
+        assert run.policy_json["operation_contract_version"] == ("wordpress_operation.v1")
         routing_profile = session.get(
             RoutingProfile,
             WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
@@ -3302,7 +3302,7 @@ def test_admin_runtime_profiles_updates_hosted_candidates(
         default_policy = routing_profile.default_policy_json
         assert isinstance(default_policy, dict)
         assert default_policy["operator_note"] == "short-text canary"
-        assert default_policy["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
+        assert default_policy["operation_contract_version"] == ("wordpress_operation.v1")
         routing_binding = session.get(
             RoutingBinding,
             WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
@@ -3314,7 +3314,7 @@ def test_admin_runtime_profiles_updates_hosted_candidates(
         assert selection_policy["managed_surface"] == "hosted_runtime_profiles"
         assert selection_policy["platform_kind"] == "wordpress"
         assert selection_policy["connector_id"] == "wordpress_ai_connector"
-        assert selection_policy["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
+        assert selection_policy["operation_contract_version"] == ("wordpress_operation.v1")
         assert selection_policy["operator_note"] == "short-text canary"
         audit_event = session.execute(
             select(ServiceAuditEvent).where(
@@ -3328,7 +3328,7 @@ def test_admin_runtime_profiles_updates_hosted_candidates(
         assert audit_payload["contract_version"] == "cloud-hosted-runtime-profiles.v1"
         assert audit_payload["platform_kind"] == "wordpress"
         assert audit_payload["connector_id"] == "wordpress_ai_connector"
-        assert audit_payload["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
+        assert audit_payload["operation_contract_version"] == ("wordpress_operation.v1")
 
 
 def test_admin_runtime_profiles_rejects_unknown_profile(tmp_path: Path) -> None:
@@ -3343,7 +3343,7 @@ def test_admin_runtime_profiles_rejects_unknown_profile(tmp_path: Path) -> None:
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": [
                 {
                     "profile_id": "text.balanced",
@@ -3381,7 +3381,7 @@ def test_admin_runtime_profiles_rejects_incomplete_replacement(tmp_path: Path) -
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": replacement_profiles,
         },
     )
@@ -3425,7 +3425,7 @@ def test_admin_runtime_profiles_rejects_more_than_primary_and_fallback(
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": replacement_profiles,
         },
     )
@@ -3442,7 +3442,7 @@ def test_admin_runtime_profiles_rejects_more_than_primary_and_fallback(
         {"contract_version": "cloud-hosted-runtime-profiles.v2"},
         {"platform_kind": "typecho"},
         {"connector_id": "npcink-cloud-addon"},
-        {"connector_contract_version": "wp_ai_connector_runtime.v2"},
+        {"operation_contract_version": "wordpress_operation.v2"},
         {"unexpected_control_plane": True},
     ],
 )
@@ -3455,7 +3455,7 @@ def test_admin_runtime_profiles_requires_frozen_platform_contract(
         "contract_version": "cloud-hosted-runtime-profiles.v1",
         "platform_kind": "wordpress",
         "connector_id": "wordpress_ai_connector",
-        "connector_contract_version": "wp_ai_connector_runtime.v1",
+        "operation_contract_version": "wordpress_operation.v1",
         "profiles": [],
     }
     payload.update(payload_overrides)
@@ -3477,7 +3477,7 @@ def test_admin_runtime_profiles_requires_frozen_platform_contract(
 
 @pytest.mark.parametrize(
     "missing_field",
-    ["contract_version", "connector_contract_version"],
+    ["contract_version", "operation_contract_version"],
 )
 def test_admin_runtime_profiles_requires_explicit_contract_versions(
     tmp_path: Path,
@@ -3488,7 +3488,7 @@ def test_admin_runtime_profiles_requires_explicit_contract_versions(
         "contract_version": "cloud-hosted-runtime-profiles.v1",
         "platform_kind": "wordpress",
         "connector_id": "wordpress_ai_connector",
-        "connector_contract_version": "wp_ai_connector_runtime.v1",
+        "operation_contract_version": "wordpress_operation.v1",
         "profiles": [],
     }
     payload.pop(missing_field)
@@ -3520,7 +3520,7 @@ def test_admin_runtime_profiles_rejects_execution_kind_mismatch(
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": [
                 {
                     "profile_id": WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
@@ -3567,7 +3567,7 @@ def test_admin_runtime_profiles_enforces_per_profile_timeout_limits(
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": replacement_profiles,
         },
     )
@@ -3599,7 +3599,7 @@ def test_admin_runtime_profiles_enforces_per_profile_timeout_limits(
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": replacement_profiles,
         },
     )
@@ -3686,7 +3686,7 @@ def test_admin_runtime_profiles_matches_routing_readiness_for_projection_and_put
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": eligible_replacement,
         },
     )
@@ -3726,7 +3726,7 @@ def test_admin_runtime_profiles_matches_routing_readiness_for_projection_and_put
                 "contract_version": "cloud-hosted-runtime-profiles.v1",
                 "platform_kind": "wordpress",
                 "connector_id": "wordpress_ai_connector",
-                "connector_contract_version": "wp_ai_connector_runtime.v1",
+                "operation_contract_version": "wordpress_operation.v1",
                 "profiles": replacement,
             },
         )
@@ -3777,7 +3777,7 @@ def test_admin_runtime_profiles_requires_enabled_provider_model(
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": replacement_profiles,
         },
     )
@@ -3807,7 +3807,7 @@ def test_admin_runtime_profiles_requires_enabled_provider_model(
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": [
                 {
                     "profile_id": WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,

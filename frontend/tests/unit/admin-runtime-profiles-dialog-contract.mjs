@@ -16,8 +16,26 @@ assert.match(
 
 assert.match(
   pageSource,
-  /\.request<RuntimeProfilesData>\('\/api\/admin\/runtime-profiles', \{[\s\S]*method: 'PUT'[\s\S]*body: \{[\s\S]*contract_version: 'cloud-hosted-runtime-profiles\.v1'[\s\S]*platform_kind: 'wordpress'[\s\S]*connector_id: 'wordpress_ai_connector'[\s\S]*connector_contract_version: 'wp_ai_connector_runtime\.v1'[\s\S]*profiles:/,
+  /\.request<RuntimeProfilesData>\('\/api\/admin\/runtime-profiles', \{[\s\S]*method: 'PUT'[\s\S]*body: \{[\s\S]*contract_version: 'cloud-hosted-runtime-profiles\.v1'[\s\S]*platform_kind: 'wordpress'[\s\S]*connector_id: 'wordpress_ai_connector'[\s\S]*operation_contract_version: 'wordpress_operation\.v1'[\s\S]*profiles:/,
   'hosted runtime profile saves must use PUT with all four contract identity fields'
+);
+
+const supersededConnectorContractField = ['connector', 'contract', 'version'].join('_');
+const supersededConnectorContractMarker = ['wp_ai_connector', 'runtime.v1'].join('_');
+assert.equal(
+  pageSource.includes(supersededConnectorContractField),
+  false,
+  'hosted runtime profiles must not retain the superseded connector contract field'
+);
+assert.equal(
+  pageSource.includes(supersededConnectorContractMarker),
+  false,
+  'hosted runtime profiles must not retain the superseded connector contract marker'
+);
+assert.match(
+  pageSource,
+  /const SUPERSEDED_CONNECTOR_CONTRACT_FIELD = \['connector', 'contract', 'version'\]\.join\('_'\);[\s\S]*if \(SUPERSEDED_CONNECTOR_CONTRACT_FIELD in data\)[\s\S]*throw new TypeError\('Hosted runtime profile contract contains superseded connector contract identity\.'/,
+  'hosted runtime profile responses must reject the superseded field instead of accepting a dual contract identity'
 );
 
 assert.doesNotMatch(pageSource, /\bfetch\s*\(/, 'hosted runtime profiles must not use raw fetch');
@@ -29,7 +47,7 @@ for (const contractLiteral of [
   'cloud_runtime',
   'wordpress',
   'wordpress_ai_connector',
-  'wp_ai_connector_runtime.v1',
+  'wordpress_operation.v1',
 ]) {
   assert.ok(pageSource.includes(contractLiteral), `hosted runtime profile page must retain ${contractLiteral}`);
 }
@@ -42,8 +60,14 @@ assert.match(
 
 assert.match(
   pageSource,
-  /const expectedIdentity: Record<string, string> = \{[\s\S]*contract_version: 'cloud-hosted-runtime-profiles\.v1'[\s\S]*surface: 'admin_hosted_runtime_profiles'[\s\S]*projection_kind: 'hosted_runtime_profile_configuration'[\s\S]*owner: 'cloud_runtime'[\s\S]*platform_kind: 'wordpress'[\s\S]*connector_id: 'wordpress_ai_connector'[\s\S]*connector_contract_version: 'wp_ai_connector_runtime\.v1'[\s\S]*for \(const \[field, expected\] of Object\.entries\(expectedIdentity\)\)[\s\S]*if \(data\[field\] !== expected\)[\s\S]*throw new TypeError\(`Hosted runtime profile contract identity mismatch:/,
+  /const expectedIdentity: Record<string, string> = \{[\s\S]*contract_version: 'cloud-hosted-runtime-profiles\.v1'[\s\S]*surface: 'admin_hosted_runtime_profiles'[\s\S]*projection_kind: 'hosted_runtime_profile_configuration'[\s\S]*owner: 'cloud_runtime'[\s\S]*platform_kind: 'wordpress'[\s\S]*connector_id: 'wordpress_ai_connector'[\s\S]*operation_contract_version: 'wordpress_operation\.v1'[\s\S]*for \(const \[field, expected\] of Object\.entries\(expectedIdentity\)\)[\s\S]*if \(data\[field\] !== expected\)[\s\S]*throw new TypeError\(`Hosted runtime profile contract identity mismatch:/,
   'all seven response identity fields must fail closed on mismatch'
+);
+
+assert.match(
+  pageSource,
+  /operation_contract_version[\s\S]*Operation contract/,
+  'hosted runtime profile contract details must label the operation contract identity'
 );
 
 assert.match(

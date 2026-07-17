@@ -21,10 +21,16 @@ The current contract identity is:
 
 - `platform_kind`: `wordpress`
 - `connector_id`: `wordpress_ai_connector`
-- `connector_contract_version`: `wp_ai_connector_runtime.v1`
+- `operation_contract_version`: `wordpress_operation.v1`
 - `contract_version`: `cloud-hosted-runtime-profiles.v1`
 
 This platform tag is an explicit seam, not a universal CMS registry.
+`connector_id` names the WordPress hosted-profile family; it is not the
+deployed connector implementation identifier carried by the public runtime
+envelope. The public execution envelope remains the single
+`cloud_connector_runtime.v1` contract and is not selectable from this Admin
+resource. Profiles are selected from the validated platform-specific operation,
+so this resource binds the WordPress operation contract explicitly.
 
 ## Ownership
 
@@ -74,7 +80,7 @@ The read projection contains:
 - the Cloud/local ownership boundary.
 
 The write request must repeat `contract_version`, `platform_kind`,
-`connector_id`, `connector_contract_version`, and the complete profile set.
+`connector_id`, `operation_contract_version`, and the complete profile set.
 Candidate instances, when present, must be available, enabled by the provider
 model allowlist, compatible with the profile execution kind, and limited to a
 primary plus one fallback. An empty candidate chain is an explicit fail-closed `needs_candidates` state, so a
@@ -103,6 +109,11 @@ bounded test surface only after a new contract review.
 The browser proxy no longer exposes audio-job creation or polling. The internal
 audio runtime API remains available to non-browser runtime consumers and is not
 silently repurposed as an Admin diagnostic surface.
+
+The superseded combined WordPress connector contract and its former identity
+field are removed atomically from active code, persisted hosted-profile
+policies, frontend consumers, and tests. There is no alias, dual read, or
+fallback value.
 
 ## UI Contract
 

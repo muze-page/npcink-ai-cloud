@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 const runtimeProfilesClient = createApiClient({ idempotencyPrefix: 'runtime_profiles' });
 const MAX_VISIBLE_CANDIDATES = 80;
 const SUPPORTED_EXECUTION_KINDS = new Set(['text', 'vision', 'image_generation', 'audio_generation']);
+const SUPERSEDED_CONNECTOR_CONTRACT_FIELD = ['connector', 'contract', 'version'].join('_');
 
 type RuntimeInstance = {
   instance_id: string;
@@ -70,7 +71,7 @@ type RuntimeProfilesData = {
   owner: 'cloud_runtime';
   platform_kind: 'wordpress';
   connector_id: 'wordpress_ai_connector';
-  connector_contract_version: 'wp_ai_connector_runtime.v1';
+  operation_contract_version: 'wordpress_operation.v1';
   available_instances: {
     text: RuntimeInstance[];
     vision: RuntimeInstance[];
@@ -163,6 +164,9 @@ function normalizeRuntimeProfilesData(value: unknown): RuntimeProfilesData {
     throw new TypeError('Hosted runtime profile response is not an object.');
   }
   const data = value as Record<string, unknown>;
+  if (SUPERSEDED_CONNECTOR_CONTRACT_FIELD in data) {
+    throw new TypeError('Hosted runtime profile contract contains superseded connector contract identity.');
+  }
   const expectedIdentity: Record<string, string> = {
     contract_version: 'cloud-hosted-runtime-profiles.v1',
     surface: 'admin_hosted_runtime_profiles',
@@ -170,7 +174,7 @@ function normalizeRuntimeProfilesData(value: unknown): RuntimeProfilesData {
     owner: 'cloud_runtime',
     platform_kind: 'wordpress',
     connector_id: 'wordpress_ai_connector',
-    connector_contract_version: 'wp_ai_connector_runtime.v1',
+    operation_contract_version: 'wordpress_operation.v1',
   };
   for (const [field, expected] of Object.entries(expectedIdentity)) {
     if (data[field] !== expected) {
@@ -208,7 +212,7 @@ function normalizeRuntimeProfilesData(value: unknown): RuntimeProfilesData {
     owner: 'cloud_runtime',
     platform_kind: 'wordpress',
     connector_id: 'wordpress_ai_connector',
-    connector_contract_version: 'wp_ai_connector_runtime.v1',
+    operation_contract_version: 'wordpress_operation.v1',
     available_instances: {
       text: list('text'),
       vision: list('vision'),
@@ -429,7 +433,7 @@ export default function RuntimeProfilesPage() {
           contract_version: 'cloud-hosted-runtime-profiles.v1',
           platform_kind: 'wordpress',
           connector_id: 'wordpress_ai_connector',
-          connector_contract_version: 'wp_ai_connector_runtime.v1',
+          operation_contract_version: 'wordpress_operation.v1',
           profiles: drafts.map((profile) => ({
             profile_id: profile.profile_id,
             candidate_instance_ids: profile.candidate_instance_ids,
@@ -636,7 +640,7 @@ export default function RuntimeProfilesPage() {
         <dl className="grid gap-4 text-sm md:grid-cols-2 xl:grid-cols-4">
           <div><dt className="text-xs text-slate-500 dark:text-slate-400">{copy('contract_version', 'Contract version')}</dt><dd className="mt-1 break-all font-mono text-xs text-slate-950 dark:text-white">{data?.contract_version || '—'}</dd></div>
           <div><dt className="text-xs text-slate-500 dark:text-slate-400">{copy('connector', 'Connector')}</dt><dd className="mt-1 break-all font-mono text-xs text-slate-950 dark:text-white">{data?.connector_id || '—'}</dd></div>
-          <div><dt className="text-xs text-slate-500 dark:text-slate-400">{copy('connector_contract', 'Connector contract')}</dt><dd className="mt-1 break-all font-mono text-xs text-slate-950 dark:text-white">{data?.connector_contract_version || '—'}</dd></div>
+          <div><dt className="text-xs text-slate-500 dark:text-slate-400">{copy('operation_contract', 'Operation contract')}</dt><dd className="mt-1 break-all font-mono text-xs text-slate-950 dark:text-white">{data?.operation_contract_version || '—'}</dd></div>
           <div><dt className="text-xs text-slate-500 dark:text-slate-400">{copy('surface', 'Surface')}</dt><dd className="mt-1 break-all font-mono text-xs text-slate-950 dark:text-white">{data?.surface || '—'}</dd></div>
         </dl>
       </BackofficeDisclosure> : null}

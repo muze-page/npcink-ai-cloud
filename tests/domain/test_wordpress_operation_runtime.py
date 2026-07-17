@@ -460,7 +460,7 @@ def test_managed_policy_projects_profile_runtime_controls() -> None:
             "managed_surface": "hosted_runtime_profiles",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "timeout_ms": 12_001,
             "max_retries": 1,
             "allow_fallback": False,
@@ -476,7 +476,7 @@ def test_managed_policy_projects_profile_runtime_controls() -> None:
     assert policy["managed_surface"] == "hosted_runtime_profiles"
     assert policy["platform_kind"] == "wordpress"
     assert policy["connector_id"] == "wordpress_ai_connector"
-    assert policy["connector_contract_version"] == "wp_ai_connector_runtime.v1"
+    assert policy["operation_contract_version"] == "wordpress_operation.v1"
     assert policy["task_group"]
     assert policy["routing_intent"]
     execution_contract = cast(dict[str, object], policy["execution_contract"])
@@ -487,7 +487,7 @@ def test_managed_policy_projects_profile_runtime_controls() -> None:
         "managed_surface": "hosted_runtime_profiles",
         "platform_kind": "wordpress",
         "connector_id": "wordpress_ai_connector",
-        "connector_contract_version": "wp_ai_connector_runtime.v1",
+        "operation_contract_version": "wordpress_operation.v1",
         "task_group": policy["task_group"],
         "routing_intent": policy["routing_intent"],
     }
@@ -518,7 +518,7 @@ def test_managed_policy_projects_profile_runtime_controls() -> None:
             "managed_surface": "hosted_runtime_profiles",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v2",
+            "operation_contract_version": "wordpress_operation.v2",
         },
     ],
 )

@@ -22,6 +22,7 @@ from app.domain.hosted_model_defaults import (
     TEXT_AI_PROFILE_ID,
     VISION_AI_PROFILE_ID,
 )
+from app.domain.wordpress_ai_connector.contracts import WORDPRESS_OPERATION_CONTRACT
 from app.domain.wordpress_ai_connector.routing_profiles import (
     WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
     WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
@@ -572,7 +573,7 @@ class CatalogService:
                     "managed_surface": "hosted_runtime_profiles",
                     "platform_kind": "wordpress",
                     "connector_id": "wordpress_ai_connector",
-                    "connector_contract_version": "wp_ai_connector_runtime.v1",
+                    "operation_contract_version": WORDPRESS_OPERATION_CONTRACT,
                     "task_group": wp_ai_spec.group_id,
                     "tasks": list(wp_ai_spec.tasks),
                 }
@@ -600,7 +601,7 @@ class CatalogService:
                                 "managed_surface": "hosted_runtime_profiles",
                                 "platform_kind": "wordpress",
                                 "connector_id": "wordpress_ai_connector",
-                                "connector_contract_version": ("wp_ai_connector_runtime.v1"),
+                                "operation_contract_version": WORDPRESS_OPERATION_CONTRACT,
                                 "task_group": wp_ai_spec.group_id,
                             }
                             if wp_ai_spec is not None

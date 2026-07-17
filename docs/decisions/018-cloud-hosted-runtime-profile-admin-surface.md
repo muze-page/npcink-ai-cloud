@@ -50,10 +50,17 @@ Vector Settings and keep audio runtime execution independent of this admin UI.
 
 Use a strict resource contract: `GET` reads the configuration and `PUT`
 replaces the complete supported profile set. The write repeats both Cloud and
-connector contract identities, permits an explicit empty fail-closed candidate
-chain, limits the chain to a primary plus one fallback, and preserves existing
-operator notes. Every write requires an idempotency key and returns an audit
-receipt. The browser proxy allowlists only the exact new method/path pairs.
+WordPress operation contract identities, permits an explicit empty fail-closed
+candidate chain, limits the chain to a primary plus one fallback, and preserves
+existing operator notes. Every write requires an idempotency key and returns an
+audit receipt. The browser proxy allowlists only the exact new method/path
+pairs.
+
+The Admin resource uses `operation_contract_version=wordpress_operation.v1`.
+It does not repeat the platform-neutral `cloud_connector_runtime.v1` envelope
+as a selectable profile dimension. Its `connector_id=wordpress_ai_connector`
+is the hosted-profile namespace and is intentionally distinct from the
+deployed connector implementation identity carried by a runtime request.
 
 ## Alternatives Considered
 
@@ -86,7 +93,10 @@ audio preview is a runtime/provider diagnostic, not profile truth.
 - Operator language describes hosted execution configuration instead of Cloud
   ability ownership.
 - WordPress-first profile IDs remain usable while their host platform and
-  connector contract are explicit.
+  operation contract are explicit.
+- The superseded combined connector identity is migrated out of current
+  routing-profile policy JSON without changing candidate chains, notes, or
+  revisions; no runtime compatibility branch remains.
 - Future CMS work can add another platform-tagged connector implementation
   without copying the Cloud runtime or mixing host platforms with access
   channels.
@@ -95,9 +105,15 @@ audio preview is a runtime/provider diagnostic, not profile truth.
 
 ## Rollback
 
-Revert the focused implementation commit. No database migration or dual-write
-state is introduced; existing routing profile and binding rows remain the
-durable runtime configuration data.
+Application and policy data must roll back as one versioned unit. Stop the API
+and workers, downgrade migration `20260717_0068` (or restore the verified
+pre-migration backup), and only then start the previous application revision.
+For promotion, stop the old API and workers, capture the required inventory and
+backup evidence, apply `20260717_0068`, and then start the new revision. Do not
+run old application code against upgraded policy JSON or new application code
+against legacy policy JSON. No dual-read or dual-write compatibility state is
+introduced; candidate chains, operator notes, revisions, and historical
+run/audit evidence remain intact.
 
 ## References
 

@@ -90,7 +90,7 @@ function projection(profiles: typeof initialProfiles, receipt?: Record<string, u
     owner: 'cloud_runtime',
     platform_kind: 'wordpress',
     connector_id: 'wordpress_ai_connector',
-    connector_contract_version: 'wp_ai_connector_runtime.v1',
+    operation_contract_version: 'wordpress_operation.v1',
     available_instances: {
       text: [primaryInstance, fallbackInstance],
       vision: [],
@@ -183,6 +183,9 @@ test('hosted runtime profiles are URL-backed, boundary-focused, and mobile safe'
   await expect(page.getByRole('button', { name: /Short text suggestions|短文本建议/i })).toBeVisible();
   await expect(page.getByText('Text Provider / text-model-v1').first()).toBeVisible();
   await expect(page.locator('main input')).toHaveCount(0);
+  await page.getByText(/Hosted runtime contract details|托管运行合同详情/i).click();
+  await expect(page.getByText(/Operation contract|操作合同/i)).toBeVisible();
+  await expect(page.getByText('wordpress_operation.v1')).toBeVisible();
 
   await page.getByRole('button', { name: /Content classification|内容分类/i }).click();
   await expect(page).toHaveURL(/profile=route\.classification/);
@@ -262,8 +265,9 @@ test('candidate editing is dialog-bounded and PUT saves an auditable receipt', a
     contract_version: 'cloud-hosted-runtime-profiles.v1',
     platform_kind: 'wordpress',
     connector_id: 'wordpress_ai_connector',
-    connector_contract_version: 'wp_ai_connector_runtime.v1',
+    operation_contract_version: 'wordpress_operation.v1',
   });
+  expect(writes[0].body).not.toHaveProperty(['connector', 'contract', 'version'].join('_'));
   const savedProfiles = writes[0].body.profiles as Array<Record<string, unknown>>;
   expect(savedProfiles.find((profile) => profile.profile_id === 'route.classification')).toMatchObject({
     candidate_instance_ids: ['text.primary', 'text.backup'],
@@ -312,6 +316,27 @@ test('an invalid hosted runtime contract fails closed instead of rendering an em
   await expect(page.getByText(/No hosted runtime profiles|暂无托管运行配置/i)).toHaveCount(0);
   await expect(page.getByRole('heading', { name: /Hosted profile directory|托管配置目录/i })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Configure candidate chain|配置候选链/i })).toHaveCount(0);
+});
+
+test('a superseded connector contract field is rejected instead of accepting dual identity', async ({ page }) => {
+  await installAdminMocks(page);
+  await page.route('**/api/admin/runtime-profiles', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(envelope({
+        ...projection(initialProfiles),
+        [['connector', 'contract', 'version'].join('_')]: 'superseded',
+      })),
+    });
+  });
+
+  await page.goto('/admin/runtime-profiles');
+
+  await expect(page.getByRole('alert').filter({
+    hasText: 'Hosted runtime profile contract contains superseded connector contract identity.',
+  })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Hosted profile directory|托管配置目录/i })).toHaveCount(0);
 });
 
 test('dirty profile drafts require confirmation before leaving for model suppliers', async ({ page }) => {

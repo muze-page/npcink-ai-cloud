@@ -1312,7 +1312,7 @@ def test_admin_runtime_profiles_requires_auth_and_idempotency_and_retires_old_ro
             "contract_version": "cloud-hosted-runtime-profiles.v1",
             "platform_kind": "wordpress",
             "connector_id": "wordpress_ai_connector",
-            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "operation_contract_version": "wordpress_operation.v1",
             "profiles": [],
         },
     )
