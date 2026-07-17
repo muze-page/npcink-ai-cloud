@@ -41,7 +41,8 @@ prompt/router/preset local truth, or WordPress write owner.
   `git diff --cached --name-only`; after committing, verify
   `git show --name-status --stat HEAD`.
 - For multi-repo milestones, run the central matrix from
-  `/Users/muze/gitee/npcink-toolbox` instead of copying the script into Cloud:
+  `/Users/muze/gitee/npcink-workflow-toolbox` instead of copying the script
+  into Cloud:
   `composer quality:matrix` for status and `composer quality:matrix:run` before
   cross-repo closeout.
 

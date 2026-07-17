@@ -36,6 +36,7 @@ const requiredPhrases = [
 	'rollback is a config or routing rollback to the existing Python path',
 	'whole repository rewrite',
 	'pnpm run check:runtime-stability-plan',
+	'/Users/muze/gitee/npcink-workflow-toolbox',
 	'composer quality:matrix',
 ];
 

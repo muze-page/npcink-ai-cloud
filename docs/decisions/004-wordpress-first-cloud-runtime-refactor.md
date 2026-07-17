@@ -183,7 +183,9 @@ Costs and risks:
 
 Each phase is delivered in single-module batches. The primary agent owns task
 envelopes, boundary decisions, independent verification, milestone reports,
-and Git. One write-enabled subagent operates in a shared workspace at a time.
+and Git. Multiple write-enabled subagents may run only across exclusive
+repository/file allowlists; a shared file has one writer, and overlapping
+batches run sequentially.
 
 ## Rollback
 

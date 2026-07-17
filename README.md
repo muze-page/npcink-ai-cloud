@@ -52,9 +52,10 @@ and other CMS adapters are post-P5 validation work.
 - [docs/decisions/016-fail-closed-portal-admin-service-boundaries.md](docs/decisions/016-fail-closed-portal-admin-service-boundaries.md)
 - [docs/decisions/018-cloud-hosted-runtime-profile-admin-surface.md](docs/decisions/018-cloud-hosted-runtime-profile-admin-surface.md)
 
-Baseline evidence (not target-contract completion proof):
+Evidence records (not target-contract completion proof):
 
 - [docs/refactor-baseline-2026-07-14.md](docs/refactor-baseline-2026-07-14.md)
+- [docs/p5-hardening-release-audit-2026-07-17.md](docs/p5-hardening-release-audit-2026-07-17.md)
 
 Operational references:
 
@@ -169,10 +170,11 @@ health, and cloud service entitlements, but they must not duplicate plugin
 admin surfaces such as abilities, workflows, MCP, OpenClaw, or other
 feature-control pages.
 
-Model operations admin surfaces (provider connections, model intelligence,
-recognition review, and platform model ops console) have been removed.
-`catalog/platform-models` is retained only as runtime metadata, not as a
-platform model operations console.
+Broad model-intelligence, recognition-review, and platform model-operations
+consoles have been removed. Bounded provider-connection operations and hosted
+runtime-profile configuration remain available to platform admins as Cloud
+runtime configuration. `catalog/platform-models` is retained only as runtime
+metadata, not as a platform model-operations console.
 
 ## Identity Contract
 

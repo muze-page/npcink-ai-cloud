@@ -188,7 +188,8 @@ pnpm run check:agent-feedback-quality
 ```
 
 For multi-repo closeout, use the central matrix from
-`/Users/muze/gitee/npcink-toolbox` instead of copying the matrix into Cloud:
+`/Users/muze/gitee/npcink-workflow-toolbox` instead of copying the matrix into
+Cloud:
 
 ```bash
 composer quality:matrix

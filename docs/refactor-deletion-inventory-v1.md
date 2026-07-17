@@ -2,18 +2,28 @@
 
 ## Status
 
-Accepted target inventory; implementation not yet complete.
+Accepted target inventory with phase-tracked implementation status:
+
+- P1 is incomplete: the canonical site contract and runtime extraction are
+  implemented, while the superseded connector marker and operator-only
+  `P1-E05`/`P1-E06` evidence remain open.
+- P3 is complete through the bounded Media Runtime B5 closeout.
+- P4 is complete through the Portal/Admin inventory and executable evidence.
+- global P5 hardening and release closure is incomplete.
 
 ## Purpose
 
-Freeze the P1 deletion and extraction obligations before implementation starts.
-The inventory prevents the refactor from adding a new path while leaving the old
-public field, validator, runtime branch, fixture, or oversized-service ownership
-active beside it.
+Freeze the P1 deletion and extraction obligations and track the later P3/P4
+cutovers without losing their original locators. The inventory prevents the
+refactor from adding a new path while leaving the old public field, validator,
+runtime branch, fixture, or oversized-service ownership active beside it.
 
-This is a target inventory, not evidence that any replacement is implemented.
-P1 remains WordPress-first: Cloud owns hosted execution and runtime evidence;
-WordPress keeps permission, review, approval, audit, and final-write truth.
+This is a target inventory and phase-status index, not standalone proof that a
+replacement or exit gate passed. Original “current evidence” locators remain
+baseline evidence and must be interpreted with the explicit phase status and
+linked closeout records. P1 remains WordPress-first: Cloud owns hosted execution
+and runtime evidence; WordPress keeps permission, review, approval, audit, and
+final-write truth.
 
 ## Inventory Rules
 

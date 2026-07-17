@@ -277,7 +277,8 @@ Required gates:
 - `pnpm run check:anti-drift`;
 - `pnpm run lint`;
 - all focused Cloud and WordPress suites named by P1-P4;
-- `composer quality:matrix:run` from `/Users/muze/gitee/npcink-toolbox`;
+- `composer quality:matrix:run` from
+  `/Users/muze/gitee/npcink-workflow-toolbox`;
 - exact deploy-bundle smoke and production release-policy check.
 
 Exit criteria:
@@ -301,7 +302,7 @@ and correct the seam before adding Z-BlogPHP or Ghost.
 
 Repository-local gates are necessary but do not close a milestone that changes
 Cloud/WordPress contracts. For P2, P3, and P5 closeout, run the central matrix
-from `/Users/muze/gitee/npcink-toolbox`:
+from `/Users/muze/gitee/npcink-workflow-toolbox`:
 
 ```bash
 composer quality:matrix:run
@@ -348,7 +349,9 @@ report.
 
 - The primary agent owns architecture, task envelopes, boundary decisions,
   independent acceptance, milestone reporting, and all Git operations.
-- One workspace has one write-enabled implementation subagent at a time.
+- Multiple write-enabled implementation subagents may run concurrently only
+  when each receives an exclusive repository/file allowlist. A shared file has
+  one writer, and batches that need the same file run sequentially.
 - A subagent receives exactly one module, explicit allowed and forbidden files,
   non-goals, public-contract impact, gates, and rollback path.
 - Subagents do not stage, commit, push, branch, rebase, reset, clean, or spawn
@@ -357,6 +360,8 @@ report.
   its report never substitutes for primary-agent verification.
 - The primary agent reviews the real diff and independently reruns the narrowest
   decisive tests before staging explicit files.
+- The primary agent stops concurrent work if an ownership overlap appears;
+  disjoint paths improve throughput but never weaken review or gate ownership.
 - A failed review returns to the same batch for bounded rework. A boundary error
   terminates and re-plans the batch instead of expanding it silently.
 

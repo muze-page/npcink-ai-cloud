@@ -280,6 +280,53 @@ remaining P0-P2 issue after the response-encryption, pass-through, and
 indeterminate-state fixes. ADR-017 records the guarantee and its honest crash
 boundary.
 
+Final gates on the durable-idempotency batch:
+
+- `pnpm run check:fast`: 146 contract passed, 1 skipped; 597 domain passed,
+  3 skipped;
+- `pnpm run check:seam`: 732 API passed; perimeter 9 passed;
+- `pnpm run check:perimeter`: 9 passed;
+- `pnpm run check:anti-drift`: passed;
+- Python Ruff and mypy: passed, 229 source files checked by mypy;
+- frontend static contracts, TypeScript, full ESLint, and Vitest: passed;
+- migration `0067` completed a real PostgreSQL upgrade/downgrade/upgrade
+  round trip with the expected encrypted-response column and constraints.
+
+## P4-F Hosted Runtime Profile Boundary — 2026-07-17
+
+The Admin runtime configuration surface now uses a direct, no-compatibility
+cutover:
+
+- `/admin/runtime-profiles` is the only hosted profile workspace;
+- `GET|PUT /internal/service/admin/runtime-profiles` is the only service
+  contract, explicitly tagged for `wordpress` and
+  `wordpress_ai_connector`;
+- the old ability-model page, projection, plugin-routing endpoints, and
+  constant-conflict runtime-binding endpoint are deleted rather than aliased;
+- Site Knowledge embedding remains under Vector Settings;
+- audio generation remains a runtime execution kind, while the unrelated page
+  preview experiment is deleted;
+- the page uses the shared strict API client and returns an auditable receipt
+  for the complete profile update;
+- local abilities, workflows, prompts, profile adoption, approvals, and final
+  WordPress writes remain outside Cloud ownership.
+
+ADR-018 and `docs/cloud-hosted-runtime-profiles-v1.md` are the active decision
+and boundary contracts.
+
+Final integrated evidence:
+
+- `pnpm run check:fast`: contract 146 passed / 1 skipped; domain 602 passed /
+  3 skipped;
+- `pnpm run check:seam`: API 746 passed; perimeter 9 passed;
+- `pnpm run check:anti-drift`: Cloud anti-drift and provider-env retirement
+  passed;
+- `pnpm run lint`: Ruff passed and mypy found no issues in 229 source files;
+- frontend static contracts, TypeScript, targeted ESLint, and the combined
+  Admin Runtime Profiles/operator Playwright suite passed (15 tests);
+- two independent review rounds closed the initial 3 P1 / 2 P2 findings and
+  the follow-up readiness P2; the final review reported no P0-P2 findings.
+
 ## P4-G Admin Client And Hot-Path Closeout — 2026-07-17
 
 The final Admin contraction is implemented without a compatibility path:
@@ -327,58 +374,3 @@ Integrated verification on the final working tree:
 
 No WordPress plugin, CMS connector, provider infrastructure, production deploy,
 or local approval/write ownership changed in this batch.
-
-Final gates on this batch:
-
-- `pnpm run check:fast`: 146 contract passed, 1 skipped; 597 domain passed,
-  3 skipped;
-- `pnpm run check:seam`: 732 API passed; perimeter 9 passed;
-- `pnpm run check:perimeter`: 9 passed;
-- `pnpm run check:anti-drift`: passed;
-- Python Ruff and mypy: passed, 229 source files checked by mypy;
-- frontend static contracts, TypeScript, full ESLint, and Vitest: passed;
-- migration `0067` completed a real PostgreSQL upgrade/downgrade/upgrade
-  round trip with the expected encrypted-response column and constraints.
-
-## P4-F Hosted Runtime Profile Boundary — 2026-07-17
-
-The Admin runtime configuration surface now uses a direct, no-compatibility
-cutover:
-
-- `/admin/runtime-profiles` is the only hosted profile workspace;
-- `GET|PUT /internal/service/admin/runtime-profiles` is the only service
-  contract, explicitly tagged for `wordpress` and
-  `wordpress_ai_connector`;
-- the old ability-model page, projection, plugin-routing endpoints, and
-  constant-conflict runtime-binding endpoint are deleted rather than aliased;
-- Site Knowledge embedding remains under Vector Settings;
-- audio generation remains a runtime execution kind, while the unrelated page
-  preview experiment is deleted;
-- the page uses the shared strict API client and returns an auditable receipt
-  for the complete profile update;
-- local abilities, workflows, prompts, profile adoption, approvals, and final
-  WordPress writes remain outside Cloud ownership.
-
-ADR-018 and `docs/cloud-hosted-runtime-profiles-v1.md` are the active decision
-and boundary contracts.
-
-Final integrated evidence:
-
-- `pnpm run check:fast`: contract 146 passed / 1 skipped; domain 602 passed /
-  3 skipped;
-- `pnpm run check:seam`: API 746 passed; perimeter 9 passed;
-- `pnpm run check:anti-drift`: Cloud anti-drift and provider-env retirement
-  passed;
-- `pnpm run lint`: Ruff passed and mypy found no issues in 229 source files;
-- frontend static contracts, TypeScript, targeted ESLint, and the combined
-  Admin Runtime Profiles/operator Playwright suite passed (15 tests);
-- two independent review rounds closed the initial 3 P1 / 2 P2 findings and
-  the follow-up readiness P2; the final review reported no P0-P2 findings.
-
-Still required before declaring P4 complete:
-
-- migrate the remaining raw Admin page fetches to the shared client in bounded
-  page batches;
-- simplify the Admin overview and operations advisor hot paths;
-- complete `P4-E03` read-only retained-surface screenshot evidence after those
-  remaining UI contracts land.
