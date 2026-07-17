@@ -26,10 +26,12 @@ import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
-import { resolveUiErrorMessage } from '@/lib/errors';
-import { generateIdempotencyKey } from '@/lib/idempotency';
+import { createApiClient } from '@/lib/api-client';
+import { ApiError, resolveUiErrorMessage } from '@/lib/errors';
 import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
 import { formatDate } from '@/lib/utils';
+
+const aiResourcesClient = createApiClient({ idempotencyPrefix: 'ai_resources' });
 
 type SupplierCategory = 'ai' | 'capability';
 
@@ -126,6 +128,10 @@ type ModelVisibilityRow = {
 
 type AiResources = {
   connections: Connection[];
+};
+
+type ProviderConnectionTestResponse = ProviderConnectionTestResult & {
+  receipt?: AdminMutationReceiptPayload | null;
 };
 
 type ProviderConnectionForm = {
@@ -561,6 +567,16 @@ function normalizeAiResources(raw: any): AiResources {
   };
 }
 
+function providerConnectionTestResultFromError(error: unknown): ProviderConnectionTestResponse | undefined {
+  if (!(error instanceof ApiError) || !error.details || typeof error.details !== 'object' || Array.isArray(error.details)) {
+    return undefined;
+  }
+  const details = error.details as Record<string, unknown>;
+  return typeof details.connection_id === 'string'
+    ? details as ProviderConnectionTestResponse
+    : undefined;
+}
+
 function formatCompactTokenCount(value: number | null): string {
   if (typeof value !== 'number') return '-';
   return new Intl.NumberFormat(undefined, {
@@ -874,18 +890,14 @@ function AiResourcesContent() {
     }
     setError('');
     try {
-      const response = await fetch('/api/admin/ai-resources', { credentials: 'include' });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_load', 'Failed to load provider management.')));
-      }
+      const response = await aiResourcesClient.request<AiResources>('/api/admin/ai-resources');
       if (sequence !== resourcesRequestSequenceRef.current) return;
-      const normalized = normalizeAiResources(payload.data);
+      const normalized = normalizeAiResources(response.data);
       setData(normalized);
       resourcesLoadedRef.current = true;
     } catch (loadError) {
       if (sequence !== resourcesRequestSequenceRef.current) return;
-      setError(loadError instanceof Error ? loadError.message : aiText('error_load', 'Failed to load provider management.'));
+      setError(resolveUiErrorMessage(loadError, aiText('error_load', 'Failed to load provider management.')));
     } finally {
       if (sequence === resourcesRequestSequenceRef.current) {
         resourcesRequestActiveRef.current = false;
@@ -911,23 +923,21 @@ function AiResourcesContent() {
         limit: '500',
         include_deprecated: 'true',
       });
-      const response = await fetch(`/api/admin/model-references?${params.toString()}`, {
-        credentials: 'include',
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_load_model_references', 'Failed to load model reference data.')));
-      }
-      setModelReferences(Array.isArray(payload.data?.items) ? payload.data.items : []);
-      setModelReferenceTotal(Number(payload.data?.total ?? 0) || 0);
-      setModelReferenceSources(Array.isArray(payload.data?.source_summary) ? payload.data.source_summary : []);
+      const response = await aiResourcesClient.request<{
+        items?: ModelReferenceEntry[];
+        total?: number;
+        source_summary?: ModelReferenceSourceSummary[];
+      }>(`/api/admin/model-references?${params.toString()}`);
+      setModelReferences(Array.isArray(response.data.items) ? response.data.items : []);
+      setModelReferenceTotal(Number(response.data.total ?? 0) || 0);
+      setModelReferenceSources(Array.isArray(response.data.source_summary) ? response.data.source_summary : []);
       setLoadedModelReferenceProviderId(normalizedProviderId);
     } catch (referenceError) {
       setModelReferences([]);
       setModelReferenceTotal(0);
       setModelReferenceSources([]);
       setLoadedModelReferenceProviderId('');
-      setError(referenceError instanceof Error ? referenceError.message : aiText('error_load_model_references', 'Failed to load model reference data.'));
+      setError(resolveUiErrorMessage(referenceError, aiText('error_load_model_references', 'Failed to load model reference data.')));
     } finally {
       setLoadingModelReferences(false);
     }
@@ -965,11 +975,12 @@ function AiResourcesContent() {
     setError('');
     setMessage('');
     try {
-      const response = await fetch('/api/admin/provider-connections', {
+      const response = await aiResourcesClient.request<{
+        connection_id?: string;
+        receipt?: AdminMutationReceiptPayload | null;
+      }>('/api/admin/provider-connections', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           connection_id: normalizedConnectionId,
           provider_id: normalizedProviderId,
           provider_type: providerConnectionForm.kind,
@@ -991,14 +1002,10 @@ function AiResourcesContent() {
             model_catalog_preview: catalogPreviewForMetadata(providerCatalogPreview),
           },
           credential: providerConnectionForm.credential || undefined,
-        }),
+        },
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_save_connection', 'Failed to save provider connection.')));
-      }
-      const savedConnectionId = String(payload.data?.connection_id || normalizedConnectionId);
-      setLastReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
+      const savedConnectionId = String(response.data.connection_id || normalizedConnectionId);
+      setLastReceipt(response.data.receipt || null);
       let testFailed = false;
       let successMessage = '';
       setMessage(aiText('message_connection_saved_testing', 'Provider connection saved. Running connection test now.'));
@@ -1010,7 +1017,7 @@ function AiResourcesContent() {
         testFailed = true;
         setError(
           aiText('message_connection_saved_test_failed', 'Provider connection saved, but the connection test failed: {{message}}', {
-            message: testError instanceof Error ? testError.message : aiText('error_test_connection', 'Provider connection test failed.'),
+            message: resolveUiErrorMessage(testError, aiText('error_test_connection', 'Provider connection test failed.')),
           })
         );
       }
@@ -1023,7 +1030,7 @@ function AiResourcesContent() {
         toast.success(successMessage, t('common.success'));
       }
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : aiText('error_save_connection', 'Failed to save provider connection.'));
+      setError(resolveUiErrorMessage(saveError, aiText('error_save_connection', 'Failed to save provider connection.')));
     } finally {
       setSavingConnection(false);
     }
@@ -1035,18 +1042,13 @@ function AiResourcesContent() {
     setError('');
     setMessage('');
     try {
-      const response = await fetch(`/api/admin/provider-connections/${encodeURIComponent(connection.connection_id)}`, {
-        method: 'DELETE',
-        credentials: 'include',
-        headers: {
-          'Idempotency-Key': generateIdempotencyKey(`provider_connection_delete_${connection.connection_id}`),
-        },
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_delete_connection', 'Failed to delete provider connection.')));
-      }
-      setLastReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
+      const response = await aiResourcesClient.request<{ receipt?: AdminMutationReceiptPayload | null }>(
+        `/api/admin/provider-connections/${encodeURIComponent(connection.connection_id)}`,
+        {
+          method: 'DELETE',
+        }
+      );
+      setLastReceipt(response.data.receipt || null);
       const successMessage = aiText('message_connection_deleted', 'Provider connection deleted.');
       setMessage('');
       toast.success(successMessage, t('common.success'));
@@ -1058,7 +1060,7 @@ function AiResourcesContent() {
       setConfirmingDeleteConnectionId('');
       await loadResources({ showLoading: false });
     } catch (deleteError) {
-      const deleteMessage = deleteError instanceof Error ? deleteError.message : aiText('error_delete_connection', 'Failed to delete provider connection.');
+      const deleteMessage = resolveUiErrorMessage(deleteError, aiText('error_delete_connection', 'Failed to delete provider connection.'));
       setError(deleteMessage);
       toast.error(deleteMessage, t('common.error'));
     } finally {
@@ -1068,26 +1070,17 @@ function AiResourcesContent() {
 
   async function syncModelReferencesForProvider(
     providerId: string,
-    options: { announce?: boolean; idempotencyKeyPrefix?: string } = {}
+    options: { announce?: boolean } = {}
   ): Promise<void> {
     const normalizedProviderId = providerId.trim().toLowerCase();
     if (!normalizedProviderId || normalizedProviderId === 'custom') return;
     setSyncingModelReferences(true);
     setModelReferenceAutoSyncError('');
     try {
-      const response = await fetch('/api/admin/model-references/sync', {
+      await aiResourcesClient.request<unknown>('/api/admin/model-references/sync', {
         method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Idempotency-Key': generateIdempotencyKey(options.idempotencyKeyPrefix || 'model_references_sync'),
-        },
-        body: JSON.stringify({}),
+        body: {},
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_sync_model_references', 'Failed to sync model reference data.')));
-      }
       await loadModelReferences(normalizedProviderId);
       if (options.announce) {
         setMessage(aiText('message_model_references_synced', 'Model reference data synced. It is reference-only and does not change billing or routing.'));
@@ -1115,11 +1108,9 @@ function AiResourcesContent() {
     setError('');
     setMessage('');
     try {
-      const response = await fetch('/api/admin/provider-connections/preview-catalog', {
+      const response = await aiResourcesClient.request<ProviderCatalogPreview>('/api/admin/provider-connections/preview-catalog', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           connection_id: normalizedConnectionId,
           provider_id: normalizedProviderId,
           provider_type: providerConnectionForm.kind,
@@ -1139,13 +1130,9 @@ function AiResourcesContent() {
             docs_url: docsUrl || undefined,
           },
           credential: providerConnectionForm.credential,
-        }),
+        },
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_fetch_catalog', 'Failed to fetch upstream models.')));
-      }
-      const preview = payload.data as ProviderCatalogPreview;
+      const preview = response.data;
       setProviderCatalogPreview(preview);
       const verifiedModelIds = (preview.models || [])
         .filter((model) => !model.is_deprecated && (model.verified || model.runtime_supported))
@@ -1162,13 +1149,12 @@ function AiResourcesContent() {
       }
       let referenceSyncFailed = '';
       try {
-        await syncModelReferencesForProvider(referenceProviderId, {
-          idempotencyKeyPrefix: `model_references_catalog_sync_${referenceProviderId}`,
-        });
+        await syncModelReferencesForProvider(referenceProviderId);
       } catch (syncError) {
-        referenceSyncFailed = syncError instanceof Error
-          ? syncError.message
-          : aiText('error_sync_model_references', 'Failed to sync model reference data.');
+        referenceSyncFailed = resolveUiErrorMessage(
+          syncError,
+          aiText('error_sync_model_references', 'Failed to sync model reference data.')
+        );
         setModelReferenceAutoSyncError(referenceSyncFailed);
         await loadModelReferences(referenceProviderId);
       }
@@ -1182,7 +1168,7 @@ function AiResourcesContent() {
         }
       ));
     } catch (catalogError) {
-      setError(catalogError instanceof Error ? catalogError.message : aiText('error_fetch_catalog', 'Failed to fetch upstream models.'));
+      setError(resolveUiErrorMessage(catalogError, aiText('error_fetch_catalog', 'Failed to fetch upstream models.')));
     } finally {
       setFetchingProviderCatalog(false);
     }
@@ -1201,7 +1187,6 @@ function AiResourcesContent() {
       }
       await syncModelReferencesForProvider(effectiveReferenceProviderId, {
         announce: true,
-        idempotencyKeyPrefix: 'model_references_manual_sync',
       });
     } catch (syncError) {
       const effectiveReferenceProviderId = inferReferenceProviderFromModelIds(
@@ -1209,7 +1194,7 @@ function AiResourcesContent() {
         modelReferenceProviderId
       );
       await loadModelReferences(effectiveReferenceProviderId);
-      setError(syncError instanceof Error ? syncError.message : aiText('error_sync_model_references', 'Failed to sync model reference data.'));
+      setError(resolveUiErrorMessage(syncError, aiText('error_sync_model_references', 'Failed to sync model reference data.')));
     }
   }
 
@@ -1217,26 +1202,18 @@ function AiResourcesContent() {
     setAutoSyncingModelReferences(true);
     setModelReferenceAutoSyncError('');
     try {
-      const response = await fetch('/api/admin/model-references/sync', {
+      await aiResourcesClient.request<unknown>('/api/admin/model-references/sync', {
         method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Idempotency-Key': generateIdempotencyKey(`model_references_auto_sync_${providerId}`),
-        },
-        body: JSON.stringify({}),
+        body: {},
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_sync_model_references', 'Failed to sync model reference data.')));
-      }
       await loadModelReferences(providerId);
     } catch (syncError) {
       await loadModelReferences(providerId);
       setModelReferenceAutoSyncError(
-        syncError instanceof Error
-          ? syncError.message
-          : aiText('model_reference_status_auto_sync_failed', 'Reference intelligence auto sync failed. Saved models and runtime calls are not affected.')
+        resolveUiErrorMessage(
+          syncError,
+          aiText('model_reference_status_auto_sync_failed', 'Reference intelligence auto sync failed. Saved models and runtime calls are not affected.')
+        )
       );
     } finally {
       setAutoSyncingModelReferences(false);
@@ -1255,26 +1232,19 @@ function AiResourcesContent() {
       setMessage('');
     }
     try {
-      const response = await fetch(`/api/admin/provider-connections/${encodeURIComponent(connectionId)}/test`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Idempotency-Key': generateIdempotencyKey('provider_connection_test'),
-        },
-      });
-      const payload = await response.json().catch(() => ({}));
-      const result = payload.data as ProviderConnectionTestResult | undefined;
+      const response = await aiResourcesClient.request<ProviderConnectionTestResponse>(
+        `/api/admin/provider-connections/${encodeURIComponent(connectionId)}/test`,
+        { method: 'POST' }
+      );
+      const result = response.data;
       if (result?.connection_id) {
         setConnectionTestResults((current) => ({
           ...current,
           [result.connection_id]: result,
         }));
       }
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, result?.message || aiText('error_test_connection', 'Provider connection test failed.')));
-      }
       if (announce) {
-        setLastReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
+        setLastReceipt(result.receipt || null);
         const successMessage = result ? providerTestMessage(result) : aiText('message_connection_tested', 'Provider connection tested.');
         setMessage('');
         toast.success(successMessage, t('common.success'));
@@ -1284,8 +1254,19 @@ function AiResourcesContent() {
       }
       return result;
     } catch (testError) {
+      const result = providerConnectionTestResultFromError(testError);
+      if (result?.connection_id) {
+        setConnectionTestResults((current) => ({
+          ...current,
+          [result.connection_id]: result,
+        }));
+      }
       if (announce) {
-        const testMessage = testError instanceof Error ? testError.message : aiText('error_test_connection', 'Provider connection test failed.');
+        setLastReceipt(result?.receipt || null);
+        const testMessage = resolveUiErrorMessage(
+          testError,
+          result?.message || aiText('error_test_connection', 'Provider connection test failed.')
+        );
         setError(testMessage);
         toast.error(testMessage, t('common.error'));
       }

@@ -14,7 +14,8 @@ import { AdminRouteSkeleton } from '@/components/admin/AdminRouteSkeleton';
 import { ConfirmModal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
-import { resolveUiErrorMessage } from '@/lib/errors';
+import { createApiClient } from '@/lib/api-client';
+import { ApiError, resolveUiErrorMessage } from '@/lib/errors';
 import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
 import { cn } from '@/lib/utils';
 
@@ -22,8 +23,12 @@ type SettingStatus = 'ready' | 'disabled' | 'missing_config' | 'error' | string;
 type ServiceSettingsTab = 'portal' | 'qq' | 'email' | 'payment';
 type EmailPreviewType = 'login' | 'registration' | 'email_change' | 'email_changed' | 'test';
 type EmailPreviewMode = 'html' | 'text';
-type BackendPayload = Record<string, unknown> | string | null;
 type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
+const serviceSettingsClient = createApiClient({
+  cache: 'default',
+  idempotencyPrefix: 'admin_service_settings',
+});
 
 type ServiceSetting = {
   setting_id: string;
@@ -197,17 +202,12 @@ function inferBrowserPublicBaseUrl(): string {
   }
 }
 
-function payloadRecord(payload: BackendPayload): Record<string, unknown> | null {
-  return payload && typeof payload === 'object' ? payload : null;
-}
-
-function serviceSettingsErrorMessage(
-  record: Record<string, unknown>,
+function serviceSettingsErrorDetail(
+  errorCode: string,
+  rawMessage: string,
   fallback: string,
   t: Translator
 ): string {
-  const errorCode = String(record.error_code || '').trim();
-  const rawMessage = String(record.message || '').trim();
   if (errorCode === 'service_settings.email_delivery_failed') {
     if (/Authentication failure|authentication failed|auth/i.test(rawMessage)) {
       return t('admin.service_settings.error_email_auth_failed', {}, 'SMTP 服务器拒绝认证。请检查 SMTP 用户名、密码或应用专用密码，并确认发件邮箱已启用 SMTP。');
@@ -264,49 +264,25 @@ function serviceSettingsErrorMessage(
   return resolveUiErrorMessage(rawMessage, fallback);
 }
 
-async function readBackendPayload(response: Response): Promise<BackendPayload> {
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    try {
-      return await response.json();
-    } catch {
-      return null;
-    }
-  }
-  const text = await response.text().catch(() => '');
-  return text.trim() || null;
-}
-
-function requestErrorMessage(
-  response: Response,
-  payload: BackendPayload,
+function serviceSettingsRequestErrorMessage(
+  error: unknown,
   fallback: string,
   t: Translator
 ): string {
-  const record = payloadRecord(payload);
-  if (record) {
-    const message = serviceSettingsErrorMessage(record, fallback, t);
-    const errorCode = String(record.error_code || '').trim();
-    if (errorCode.startsWith('service_settings.')) {
-      return response.status >= 500
-        ? t('admin.service_settings.error_http_suffix', { message, status: String(response.status) }, '{{message}} (HTTP {{status}}).')
-        : message;
-    }
-    if (response.status >= 500) {
-      return t('admin.service_settings.error_http_migration_hint', { message, status: String(response.status) }, '{{message}}（HTTP {{status}}）。请确认数据库迁移已执行，并查看 API 日志。');
-    }
-    return message;
+  if (!(error instanceof ApiError)) {
+    return resolveUiErrorMessage(error, fallback);
   }
 
-  const text = typeof payload === 'string' ? payload : '';
-  if (response.status >= 500) {
-    const detail = text ? `：${text.slice(0, 120)}` : '';
-    return t('admin.service_settings.error_backend_status', { fallback, status: String(response.status), detail }, '{{fallback}}：后端返回 {{status}}{{detail}}。请确认数据库迁移已执行，并查看 API 日志。');
+  const message = serviceSettingsErrorDetail(error.errorCode, error.message, fallback, t);
+  if (error.errorCode.startsWith('service_settings.')) {
+    return error.statusCode >= 500
+      ? t('admin.service_settings.error_http_suffix', { message, status: String(error.statusCode) }, '{{message}} (HTTP {{status}}).')
+      : message;
   }
-  if (text) {
-    return t('admin.service_settings.error_with_detail', { fallback, detail: text }, '{{fallback}}: {{detail}}');
+  if (error.statusCode >= 500) {
+    return t('admin.service_settings.error_http_migration_hint', { message, status: String(error.statusCode) }, '{{message}}（HTTP {{status}}）。请确认数据库迁移已执行，并查看 API 日志。');
   }
-  return t('admin.service_settings.error_http_suffix', { message: fallback, status: String(response.status) }, '{{message}} (HTTP {{status}}).');
+  return message;
 }
 
 function tabButtonClassName(active: boolean): string {
@@ -395,13 +371,9 @@ export default function AdminServiceSettingsPage() {
     setLoading(true);
     setError('');
     try {
-      const response = await fetch('/api/admin/service-settings', { credentials: 'include' });
-      const payload = await readBackendPayload(response);
-      if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.load_failed', {}, 'Failed to load service settings.'), t));
-      }
-      const record = payloadRecord(payload);
-      const nextData = record?.data as ServiceSettingsData | undefined;
+      const nextData = (await serviceSettingsClient.request<ServiceSettingsData>(
+        '/api/admin/service-settings'
+      )).data;
       if (!nextData?.settings) {
         throw new Error(t('admin.service_settings.invalid_response', {}, 'Service settings response is invalid.'));
       }
@@ -464,7 +436,7 @@ export default function AdminServiceSettingsPage() {
       setAlipayForm(nextAlipayForm);
     } catch (loadError) {
       if (settingsMountedRef.current && settingsRequestSequenceRef.current === requestSequence) {
-        setError(loadError instanceof Error ? loadError.message : t('admin.service_settings.load_failed', {}, 'Failed to load service settings.'));
+        setError(serviceSettingsRequestErrorMessage(loadError, t('admin.service_settings.load_failed', {}, 'Failed to load service settings.'), t));
       }
     } finally {
       if (settingsRequestSequenceRef.current === requestSequence) {
@@ -569,22 +541,15 @@ export default function AdminServiceSettingsPage() {
     }
   }
 
-  async function patchJson(
+  async function writeJson(
     path: string,
-    body: Record<string, unknown>,
-    fallbackMessage: string
-  ): Promise<BackendPayload> {
-    const response = await fetch(path, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const payload = await readBackendPayload(response);
-    if (!response.ok) {
-      throw new Error(requestErrorMessage(response, payload, fallbackMessage, t));
-    }
-    return payload;
+    method: 'PATCH' | 'POST',
+    body: Record<string, unknown>
+  ): Promise<unknown> {
+    return (await serviceSettingsClient.request<unknown>(path, {
+      method,
+      body,
+    })).data;
   }
 
   async function saveJson(
@@ -598,11 +563,11 @@ export default function AdminServiceSettingsPage() {
     setNotice('');
     const fallbackMessage = t('admin.service_settings.save_failed', {}, 'Failed to save service settings.');
     try {
-      await patchJson(path, body, fallbackMessage);
+      await writeJson(path, 'PATCH', body);
       setNotice(successMessage);
       await loadSettings();
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : fallbackMessage);
+      setError(serviceSettingsRequestErrorMessage(saveError, fallbackMessage, t));
     } finally {
       setSaving('');
     }
@@ -617,21 +582,13 @@ export default function AdminServiceSettingsPage() {
     setSaving(savingKey);
     setError('');
     setNotice('');
+    const fallbackMessage = t('admin.service_settings.test_failed', {}, 'Failed to test service settings.');
     try {
-      const response = await fetch(path, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const payload = await readBackendPayload(response);
-      if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.test_failed', {}, 'Failed to test service settings.'), t));
-      }
+      await writeJson(path, 'POST', body);
       setNotice(successMessage);
       await loadSettings();
     } catch (testError) {
-      setError(testError instanceof Error ? testError.message : t('admin.service_settings.test_failed', {}, 'Failed to test service settings.'));
+      setError(serviceSettingsRequestErrorMessage(testError, fallbackMessage, t));
     } finally {
       setSaving('');
     }
@@ -641,23 +598,18 @@ export default function AdminServiceSettingsPage() {
     setSaving('email-preview');
     setError('');
     try {
-      const response = await fetch('/api/admin/service-settings/email/preview', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          preview_type: type,
-          locale: 'zh-CN',
-          from_name: emailForm.from_name,
-          from_email: emailForm.from_email,
-        }),
-      });
-      const payload = await readBackendPayload(response);
-      if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.email_preview_failed', {}, 'Failed to load email preview.'), t));
-      }
-      const record = payloadRecord(payload);
-      const preview = record?.data as EmailPreview | undefined;
+      const preview = (await serviceSettingsClient.request<EmailPreview>(
+        '/api/admin/service-settings/email/preview',
+        {
+          method: 'POST',
+          body: {
+            preview_type: type,
+            locale: 'zh-CN',
+            from_name: emailForm.from_name,
+            from_email: emailForm.from_email,
+          },
+        }
+      )).data;
       if (!preview?.html || !preview.subject) {
         throw new Error(t('admin.service_settings.email_preview_invalid', {}, 'Email preview response is invalid.'));
       }
@@ -665,7 +617,7 @@ export default function AdminServiceSettingsPage() {
       setNotice('');
     } catch (previewError) {
       setEmailPreview(null);
-      setError(previewError instanceof Error ? previewError.message : t('admin.service_settings.email_preview_failed', {}, 'Failed to load email preview.'));
+      setError(serviceSettingsRequestErrorMessage(previewError, t('admin.service_settings.email_preview_failed', {}, 'Failed to load email preview.'), t));
     } finally {
       setSaving('');
     }
@@ -779,17 +731,17 @@ export default function AdminServiceSettingsPage() {
     const fallbackMessage = t('admin.service_settings.save_failed', {}, '保存服务配置失败。');
     try {
       if (alipayForm.enabled && !savedPortalPublicBaseUrl && browserPublicBaseUrl) {
-        await patchJson(
+        await writeJson(
           '/api/admin/service-settings/portal-public',
+          'PATCH',
           {
             ...portalPublicForm,
             enabled: true,
             public_base_url: browserPublicBaseUrl,
-          },
-          fallbackMessage
+          }
         );
       }
-      await patchJson('/api/admin/service-settings/alipay-payment', payload, fallbackMessage);
+      await writeJson('/api/admin/service-settings/alipay-payment', 'PATCH', payload);
       setNotice(
         !savedPortalPublicBaseUrl && browserPublicBaseUrl
           ? t('admin.service_settings.alipay_saved_with_public_url', { baseUrl: browserPublicBaseUrl }, '已先保存门户基础地址 {{baseUrl}}，并保存支付宝支付配置。')
@@ -797,7 +749,7 @@ export default function AdminServiceSettingsPage() {
       );
       await loadSettings();
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : fallbackMessage);
+      setError(serviceSettingsRequestErrorMessage(saveError, fallbackMessage, t));
     } finally {
       setSaving('');
     }

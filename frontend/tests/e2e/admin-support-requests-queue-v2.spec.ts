@@ -1,5 +1,9 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 type TicketFixture = {
   request_id: string;
@@ -89,7 +93,11 @@ async function installSupportQueueMocks(page: Page) {
     const query = (url.searchParams.get('q') || '').toLowerCase();
     if (failQuery && query === failQuery.toLowerCase()) {
       failQuery = '';
-      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary ticket queue failure' }) });
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify(buildAdminApiErrorEnvelope('temporary ticket queue failure')),
+      });
       return;
     }
     const status = url.searchParams.get('status') || '';
@@ -101,7 +109,14 @@ async function installSupportQueueMocks(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'ok', data: { items, pagination: { total: items.length, limit: 20, offset: 0, has_more: false }, summary: { open: tickets.filter((ticket) => ticket.status === 'open').length, in_progress: tickets.filter((ticket) => ticket.status === 'in_progress').length } } }),
+      body: JSON.stringify(buildAdminApiEnvelope({
+        items,
+        pagination: { total: items.length, limit: 20, offset: 0, has_more: false },
+        summary: {
+          open: tickets.filter((ticket) => ticket.status === 'open').length,
+          in_progress: tickets.filter((ticket) => ticket.status === 'in_progress').length,
+        },
+      })),
     });
   });
 
@@ -118,7 +133,11 @@ async function installSupportQueueMocks(page: Page) {
       updated = { ...ticket, status: payload.status, admin_note: payload.admin_note, updated_at: '2026-07-12T07:00:00Z' };
       return updated;
     });
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { request: updated } }) });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildAdminApiEnvelope({ request: updated })),
+    });
   });
 
   return {

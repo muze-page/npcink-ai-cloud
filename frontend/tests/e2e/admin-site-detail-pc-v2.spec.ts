@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import { buildAdminApiErrorEnvelope, installAdminMocks } from './helpers/admin-operator-fixture';
 
 test('site detail keeps the PC first screen focused on one conclusion and one next action', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -37,13 +37,13 @@ test('site detail failure preserves the PC shell and bounded retry', async ({ pa
     await route.fulfill({
       status: 503,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'error', message: 'site unavailable' }),
+      body: JSON.stringify(buildAdminApiErrorEnvelope('site unavailable')),
     });
   });
   await page.goto('/admin/sites/site_mvp');
 
   await expect(page.getByRole('heading', { name: /Site detail is temporarily unavailable|站点详情暂时不可用/i })).toBeVisible();
-  await expect(page.getByRole('alert').filter({ hasText: /Failed to load|加载数据失败/i })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'site unavailable' })).toBeVisible();
   await page.getByRole('button', { name: /^Retry$|^重试$/i }).click();
   await expect.poll(() => attempts).toBe(2);
   await expect(page).toHaveURL(/\/admin\/sites\/site_mvp$/);

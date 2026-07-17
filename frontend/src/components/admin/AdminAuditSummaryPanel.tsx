@@ -7,10 +7,14 @@ import {
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
+import { resolveUiErrorMessage } from '@/lib/errors';
 import {
   formatDate,
   formatNumber as formatInteger,
 } from '@/lib/utils';
+
+const adminAuditSummaryClient = createApiClient({ idempotencyPrefix: 'admin_audit_summary' });
 
 type AuditSummaryGroup = {
   event_kind?: string;
@@ -72,37 +76,22 @@ export function AdminAuditSummaryPanel({
       setError(null);
 
       try {
-        const response = await fetch(href, {
-          credentials: 'include',
-        });
-        const payload = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-          throw new Error(
-            String(
-              payload?.message ||
-                t(
-                  'admin.audit_summary.load_failed',
-                  {},
-                  'Failed to load recent audit summary.'
-                )
-            )
-          );
-        }
+        const response = await adminAuditSummaryClient.request<AuditSummaryPayload>(href);
 
         if (!cancelled) {
-          setSummary((payload?.data ?? null) as AuditSummaryPayload | null);
+          setSummary(response.data ?? null);
         }
       } catch (err) {
         if (!cancelled) {
           setError(
-            err instanceof Error
-              ? err.message
-              : t(
-                  'admin.audit_summary.load_failed',
-                  {},
-                  'Failed to load recent audit summary.'
-                )
+            resolveUiErrorMessage(
+              err,
+              t(
+                'admin.audit_summary.load_failed',
+                {},
+                'Failed to load recent audit summary.'
+              )
+            )
           );
         }
       } finally {

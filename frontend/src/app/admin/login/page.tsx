@@ -5,6 +5,9 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useLocale } from '@/contexts/LocaleContext';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { createApiClient } from '@/lib/api-client';
+
+const adminLoginSessionClient = createApiClient({ idempotencyPrefix: 'admin_login_session' });
 
 function resolveAdminLoginRedirect(value: string | null): string {
   const redirect = String(value || '').trim();
@@ -50,19 +53,13 @@ function AdminLoginPageContent() {
 
   useEffect(() => {
     let cancelled = false;
-    void fetch('/admin/session', {
-      cache: 'no-store',
-      credentials: 'include',
-    })
-      .then((response) => {
+    void adminLoginSessionClient
+      .request('/admin/session')
+      .then(() => {
         if (cancelled) {
           return;
         }
-        if (response.ok) {
-          router.replace(redirectTo);
-          return;
-        }
-        setIsCheckingSession(false);
+        router.replace(redirectTo);
       })
       .catch(() => {
         if (!cancelled) {

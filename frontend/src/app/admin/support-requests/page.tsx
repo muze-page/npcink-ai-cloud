@@ -16,8 +16,8 @@ import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { ListPagination } from '@/components/ui/ListPagination';
 import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
-import { readResponsePayload } from '@/lib/safe-response';
 import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 
 type SupportRequestStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
@@ -51,6 +51,10 @@ const NEXT_STATUSES: SupportRequestStatus[] = ['open', 'in_progress', 'resolved'
 const TOPIC_FILTERS = ['', 'billing', 'payment', 'site', 'usage', 'account', 'general'] as const;
 const SORTS = new Set<SupportRequestSort>(['risk', 'updated_at']);
 const PAGE_SIZE = 20;
+const supportRequestsClient = createApiClient({
+  cache: 'default',
+  idempotencyPrefix: 'admin_support_requests',
+});
 
 function normalizeOffset(value: string | null): number {
   const parsed = Number(value || 0);
@@ -172,22 +176,21 @@ function SupportRequestsContent() {
     else setIsLoading(true);
     setLoadError('');
     try {
-      const response = await fetch(`/api/admin/support-requests?${requestKey}`, { credentials: 'include', cache: 'no-store' });
-      const payload = await readResponsePayload<{ data?: SupportRequestListPayload; message?: string }>(response);
-      if (!response.ok || !('data' in payload) || !payload.data) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_load')));
-      }
+      const data = (await supportRequestsClient.request<SupportRequestListPayload>(
+        `/api/admin/support-requests?${requestKey}`,
+        { cache: 'no-store' }
+      )).data;
       if (sequence !== requestSequenceRef.current) return;
-      setItems(payload.data.items || []);
-      setSummary(payload.data.summary || {});
-      setTotal(Number(payload.data.pagination?.total || 0));
+      setItems(data.items || []);
+      setSummary(data.summary || {});
+      setTotal(Number(data.pagination?.total || 0));
       setLoadedAt(new Date());
       setLoadedRequestKey(requestKey);
       hasLoadedRef.current = true;
       setHasLoaded(true);
     } catch (error) {
       if (sequence !== requestSequenceRef.current) return;
-      setLoadError(resolveUiErrorMessage(error instanceof Error ? error.message : null, t('error.failed_load')));
+      setLoadError(resolveUiErrorMessage(error, t('error.failed_load')));
     } finally {
       if (sequence === requestSequenceRef.current) {
         activeRequestKeyRef.current = '';
@@ -240,21 +243,21 @@ function SupportRequestsContent() {
     setPendingRequestId(item.request_id);
     setActionError('');
     try {
-      const response = await fetch(`/api/admin/support-requests/${encodeURIComponent(item.request_id)}`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: statusDraft, admin_note: noteDraft }),
-      });
-      const payload = await readResponsePayload<{ data?: { request?: SupportRequest }; message?: string }>(response);
-      if (!response.ok || !('data' in payload) || !payload.data?.request) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_save')));
+      const data = (await supportRequestsClient.request<{ request?: SupportRequest }>(
+        `/api/admin/support-requests/${encodeURIComponent(item.request_id)}`,
+        {
+          method: 'PATCH',
+          body: { status: statusDraft, admin_note: noteDraft },
+        }
+      )).data;
+      if (!data.request) {
+        throw new Error(t('error.failed_save'));
       }
       updateQueueUrl({ focus: item.request_id });
       toast.success(t('admin.support_requests_updated_notice', {}, 'Ticket updated.'), t('admin.support_requests_updated_title', {}, 'Ticket saved'));
       await loadRequests(true);
     } catch (error) {
-      setActionError(resolveUiErrorMessage(error instanceof Error ? error.message : null, t('error.failed_save')));
+      setActionError(resolveUiErrorMessage(error, t('error.failed_save')));
     } finally {
       setPendingRequestId('');
     }

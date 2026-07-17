@@ -11,11 +11,41 @@ export const LONG_PLAN_VERSION_ID = 'pro_v1';
 export const FREE_PLAN_ID = 'free';
 export const FREE_PLAN_VERSION_ID = 'free_v1';
 
+export function buildAdminApiEnvelope(data: unknown) {
+  return {
+    status: 'ok',
+    error_code: '',
+    message: 'ok',
+    data,
+    meta: {
+      trace_id: 'trace-e2e-admin',
+      revision: 'e2e-admin-v1',
+    },
+  };
+}
+
+export function buildAdminApiErrorEnvelope(
+  message: string,
+  errorCode = 'admin.e2e_request_failed',
+  data: unknown = {}
+) {
+  return {
+    status: 'error',
+    error_code: errorCode,
+    message,
+    data,
+    meta: {
+      trace_id: 'trace-e2e-admin-error',
+      revision: 'e2e-admin-v1',
+    },
+  };
+}
+
 async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ status: 'ok', data }),
+    body: JSON.stringify(buildAdminApiEnvelope(data)),
   });
 }
 

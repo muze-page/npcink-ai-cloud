@@ -123,7 +123,7 @@ assert.match(
 );
 assert.match(
   adminSupportPageSource,
-  /fetch\(`\/api\/admin\/support-requests\?\$\{(?:requestKey|params\.toString\(\))\}`/,
+  /createApiClient[\s\S]*`\/api\/admin\/support-requests\?\$\{(?:requestKey|params\.toString\(\))\}`/,
   'Admin support page must load the support request queue through the admin proxy'
 );
 assert.match(

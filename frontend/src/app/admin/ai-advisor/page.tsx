@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackofficeDiagnosticNotice,
   BackofficeMetricStrip,
@@ -13,8 +13,11 @@ import {
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { cn, formatNumber } from '@/lib/utils';
+
+const operationsAdvisorClient = createApiClient({ idempotencyPrefix: 'operations_advisor' });
 
 type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
 
@@ -1066,10 +1069,19 @@ function OperationsWorkPanel({ data }: { data: AdvisorPreviewData }) {
   );
 }
 
-function AdvisorEvaluationDetails({ children }: { children: React.ReactNode }) {
+function AdvisorEvaluationDetails({
+  children,
+  onToggle,
+}: {
+  children: React.ReactNode;
+  onToggle?: (open: boolean) => void;
+}) {
   const { t } = useLocale();
   return (
-    <details className="rounded-xl border border-slate-200/80 bg-white/65 dark:border-slate-800 dark:bg-slate-950/30">
+    <details
+      className="rounded-xl border border-slate-200/80 bg-white/65 dark:border-slate-800 dark:bg-slate-950/30"
+      onToggle={(event) => onToggle?.(event.currentTarget.open)}
+    >
       <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-900/60">
         {t('admin.ai_advisor.evaluation_details', {}, 'AI evaluation details')}
       </summary>
@@ -1747,6 +1759,10 @@ function AdminAiAdvisorContent() {
   const [data, setData] = useState<AdvisorPreviewData | null>(null);
   const [historyItems, setHistoryItems] = useState<AdvisorHistoryItem[]>([]);
   const [valueMetrics, setValueMetrics] = useState<AdvisorValueMetrics | null>(null);
+  const [evaluationDetailsOpen, setEvaluationDetailsOpen] = useState(false);
+  const [evaluationDetailsLoading, setEvaluationDetailsLoading] = useState(false);
+  const [evaluationDetailsError, setEvaluationDetailsError] = useState('');
+  const [loadedEvaluationDetailsKey, setLoadedEvaluationDetailsKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [scope, setScope] = useState('operations');
@@ -1760,7 +1776,17 @@ function AdminAiAdvisorContent() {
   const [reviewingDisclosure, setReviewingDisclosure] = useState(false);
   const [copyMessage, setCopyMessage] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
+  const previewRequestActiveRef = useRef('');
+  const previewRequestCompletedRef = useRef('');
+  const previewRequestSequenceRef = useRef(0);
+  const evaluationDetailsRequestActiveRef = useRef('');
+  const evaluationDetailsRequestSequenceRef = useRef(0);
   const historyScope = data?.ai.scope || data?.baseline.scope || '';
+  const evaluationDetailsKey = [
+    historyScope || scope,
+    siteId.trim(),
+    data?.ai.generation.cache_key || data?.ai.ai_disclosure.generated_at || 'current',
+  ].join('|');
 
   const loadHistory = useCallback(async () => {
     const params = new URLSearchParams();
@@ -1771,17 +1797,14 @@ function AdminAiAdvisorContent() {
     if (siteId.trim()) {
       params.set('site_id', siteId.trim());
     }
-    const response = await fetch(`/api/admin/advisor/ops-summary-history?${params.toString()}`, {
-      credentials: 'include',
-    });
-    const payload = await response.json();
-    if (!response.ok || payload?.status === 'error') {
-      throw payload;
-    }
-    const items = Array.isArray(payload?.data?.items)
-      ? payload.data.items.map((item: any) => normalizeHistoryItem(item))
+    const response = await operationsAdvisorClient.request<unknown>(
+      `/api/admin/advisor/ops-summary-history?${params.toString()}`
+    );
+    const payload = response.data as { items?: unknown };
+    const items = Array.isArray(payload?.items)
+      ? payload.items.map((item: any) => normalizeHistoryItem(item))
       : [];
-    setHistoryItems(items);
+    return items;
   }, [historyScope, siteId]);
 
   const loadValueMetrics = useCallback(
@@ -1795,23 +1818,32 @@ function AdminAiAdvisorContent() {
       if (siteId.trim()) {
         valueParams.set('site_id', siteId.trim());
       }
-      const valueResponse = await fetch(`/api/admin/advisor/ops-summary-value?${valueParams.toString()}`, {
-        credentials: 'include',
-      });
-      const valuePayload = await valueResponse.json();
-      if (!valueResponse.ok || valuePayload?.status === 'error') {
-        throw valuePayload;
-      }
-      setValueMetrics(normalizeValueMetrics(valuePayload?.data ?? {}));
+      const valueResponse = await operationsAdvisorClient.request<unknown>(
+        `/api/admin/advisor/ops-summary-value?${valueParams.toString()}`
+      );
+      return normalizeValueMetrics(valueResponse.data ?? {});
     },
     [scope, siteId]
   );
 
-  const loadPreview = useCallback(async () => {
+  const loadPreview = useCallback(async (force = false) => {
+    const requestKey = [scope, siteId.trim(), providerId.trim(), modelId.trim(), forceRefresh, reloadKey].join('|');
+    if (
+      previewRequestActiveRef.current === requestKey ||
+      (!force && previewRequestCompletedRef.current === requestKey)
+    ) {
+      return;
+    }
+    const sequence = previewRequestSequenceRef.current + 1;
+    previewRequestSequenceRef.current = sequence;
+    previewRequestActiveRef.current = requestKey;
     setLoading(true);
     setError('');
+    setEvaluationDetailsError('');
+    setLoadedEvaluationDetailsKey('');
+    setHistoryItems([]);
+    setValueMetrics(null);
     try {
-      let nextData: AdvisorPreviewData | null = null;
       try {
         const params = new URLSearchParams();
         params.set('scope', scope);
@@ -1828,54 +1860,99 @@ function AdminAiAdvisorContent() {
           params.set('force_refresh', 'true');
         }
 
-        const response = await fetch(`/api/admin/advisor/ops-summary-preview?${params.toString()}`, {
-          credentials: 'include',
-        });
-        const payload = await response.json();
-        if (!response.ok || payload?.status === 'error') {
-          throw payload;
+        const response = await operationsAdvisorClient.request<unknown>(
+          `/api/admin/advisor/ops-summary-preview?${params.toString()}`
+        );
+        const nextData = normalizePreview(response.data ?? {});
+        if (sequence === previewRequestSequenceRef.current) {
+          setData(nextData);
         }
-        nextData = normalizePreview(payload?.data ?? {});
-        setData(nextData);
       } catch (previewError) {
-        setData(null);
-        setError(resolveUiErrorMessage(previewError, t('error.failed_load')));
-      }
-
-      const resolvedScope = nextData?.ai.scope || nextData?.baseline.scope || scope;
-      await loadValueMetrics(resolvedScope).catch(() => {
-        setValueMetrics(null);
-      });
-
-      if (nextData) {
-        const historyParams = new URLSearchParams();
-        historyParams.set('limit', '10');
-        if (resolvedScope) {
-          historyParams.set('scope', resolvedScope);
-        }
-        if (siteId.trim()) {
-          historyParams.set('site_id', siteId.trim());
-        }
-        const historyResponse = await fetch(`/api/admin/advisor/ops-summary-history?${historyParams.toString()}`, {
-          credentials: 'include',
-        });
-        const historyPayload = await historyResponse.json();
-        if (historyResponse.ok && historyPayload?.status !== 'error') {
-          setHistoryItems(
-            Array.isArray(historyPayload?.data?.items)
-              ? historyPayload.data.items.map((item: any) => normalizeHistoryItem(item))
-              : []
-          );
+        if (sequence === previewRequestSequenceRef.current) {
+          setData(null);
+          setError(resolveUiErrorMessage(previewError, t('error.failed_load')));
         }
       }
     } finally {
-      setLoading(false);
+      if (sequence === previewRequestSequenceRef.current) {
+        previewRequestActiveRef.current = '';
+        previewRequestCompletedRef.current = requestKey;
+        setLoading(false);
+      }
     }
-  }, [forceRefresh, loadValueMetrics, modelId, providerId, scope, siteId, t]);
+  }, [forceRefresh, modelId, providerId, reloadKey, scope, siteId, t]);
 
   useEffect(() => {
     void loadPreview();
   }, [loadPreview, reloadKey]);
+
+  const loadEvaluationDetails = useCallback(
+    async (force = false) => {
+      if (
+        !data ||
+        loading ||
+        (!force &&
+          (evaluationDetailsRequestActiveRef.current === evaluationDetailsKey ||
+            loadedEvaluationDetailsKey === evaluationDetailsKey))
+      ) {
+        return;
+      }
+
+      const sequence = evaluationDetailsRequestSequenceRef.current + 1;
+      evaluationDetailsRequestSequenceRef.current = sequence;
+      evaluationDetailsRequestActiveRef.current = evaluationDetailsKey;
+      setEvaluationDetailsLoading(true);
+      setEvaluationDetailsError('');
+      const results = await Promise.allSettled([
+        loadHistory(),
+        loadValueMetrics(historyScope || scope),
+      ] as const);
+      if (sequence !== evaluationDetailsRequestSequenceRef.current) {
+        return;
+      }
+      if (results[0].status === 'fulfilled') {
+        setHistoryItems(results[0].value);
+      }
+      if (results[1].status === 'fulfilled') {
+        setValueMetrics(results[1].value);
+      }
+      const failures = results.filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected'
+      );
+      if (failures.length > 0) {
+        setEvaluationDetailsError(
+          resolveUiErrorMessage(
+            failures[0].reason,
+            t(
+              'admin.ai_advisor.error_evaluation_details',
+              {},
+              'Some evaluation details could not be loaded.'
+            )
+          )
+        );
+      }
+      evaluationDetailsRequestActiveRef.current = '';
+      setLoadedEvaluationDetailsKey(evaluationDetailsKey);
+      setEvaluationDetailsLoading(false);
+    },
+    [
+      data,
+      evaluationDetailsKey,
+      historyScope,
+      loadHistory,
+      loadedEvaluationDetailsKey,
+      loading,
+      loadValueMetrics,
+      scope,
+      t,
+    ]
+  );
+
+  useEffect(() => {
+    if (evaluationDetailsOpen) {
+      void loadEvaluationDetails();
+    }
+  }, [evaluationDetailsOpen, loadEvaluationDetails]);
 
   const copyWithDisclosure = useCallback(
     async (value: string, disclosure: SummaryBranch['ai_disclosure']) => {
@@ -1901,22 +1978,18 @@ function AdminAiAdvisorContent() {
       setReviewingDisclosure(true);
       setError('');
       try {
-        const response = await fetch('/api/admin/advisor/ops-summary-review', {
+        const response = await operationsAdvisorClient.request<unknown>(
+          '/api/admin/advisor/ops-summary-review',
+          {
           method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
+          body: {
             cache_key: cacheKey,
             review_status: reviewStatus,
-          }),
-        });
-        const payload = await response.json();
-        if (!response.ok || payload?.status === 'error') {
-          throw payload;
-        }
-        const nextDisclosure = payload?.data?.ai_disclosure;
+          },
+          }
+        );
+        const payload = response.data as { ai_disclosure?: unknown };
+        const nextDisclosure = payload?.ai_disclosure;
         if (nextDisclosure && typeof nextDisclosure === 'object') {
           setData((current) => {
             if (!current) return current;
@@ -1929,15 +2002,16 @@ function AdminAiAdvisorContent() {
             };
           });
         }
-        await loadHistory().catch(() => undefined);
-        setReloadKey((current) => current + 1);
+        if (evaluationDetailsOpen) {
+          void loadEvaluationDetails(true);
+        }
       } catch (err) {
         setError(resolveUiErrorMessage(err, t('error.failed_save')));
       } finally {
         setReviewingDisclosure(false);
       }
     },
-    [data?.ai, loadHistory, t]
+    [data?.ai, evaluationDetailsOpen, loadEvaluationDetails, t]
   );
 
   const metricItems = useMemo(() => {
@@ -1990,7 +2064,7 @@ function AdminAiAdvisorContent() {
     return <LoadingFallback />;
   }
 
-  if (error && !valueMetrics) {
+  if (error && !data) {
     return (
       <BackofficePageStack>
         <BackofficePrimaryPanel
@@ -1998,7 +2072,7 @@ function AdminAiAdvisorContent() {
           title={t('admin.ai_advisor.title', {}, 'Operations Advisor')}
           description={t('admin.ai_advisor.load_error_desc', {}, 'The current diagnostic summary could not be loaded. No provider, routing, package, or WordPress state was changed.')}
         />
-        <BackofficeDiagnosticNotice message={error} retryLabel={t('common.retry')} onRetry={() => void loadPreview()} />
+        <BackofficeDiagnosticNotice message={error} retryLabel={t('common.retry')} onRetry={() => void loadPreview(true)} />
       </BackofficePageStack>
     );
   }
@@ -2131,10 +2205,22 @@ function AdminAiAdvisorContent() {
         <>
           <OperationsWorkPanel data={data} />
 
-          <AdvisorEvaluationDetails>
+          <AdvisorEvaluationDetails onToggle={setEvaluationDetailsOpen}>
             <SignalPanel branch={data.ai} />
-            <HistoryPanel items={historyItems} />
-            <ValueMetricsPanel valueMetrics={valueMetrics} />
+            {evaluationDetailsLoading ? <LoadingFallback /> : null}
+            {evaluationDetailsError ? (
+              <BackofficeDiagnosticNotice
+                message={evaluationDetailsError}
+                retryLabel={t('common.retry')}
+                onRetry={() => void loadEvaluationDetails(true)}
+              />
+            ) : null}
+            {loadedEvaluationDetailsKey === evaluationDetailsKey ? (
+              <>
+                <HistoryPanel items={historyItems} />
+                <ValueMetricsPanel valueMetrics={valueMetrics} />
+              </>
+            ) : null}
             <EffectComparisonPanel data={data} />
             <AiParticipationPanel data={data} />
             <ScenarioChecksPanel data={data} />

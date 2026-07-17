@@ -12,9 +12,12 @@ import {
 } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
 
 type ServiceCategory = 'search' | 'image';
+
+const externalServicesClient = createApiClient({ idempotencyPrefix: 'external_services' });
 
 type ProviderConnection = {
   connection_id: string;
@@ -77,12 +80,12 @@ export default function ExternalServicesPage() {
   const loadConnections = useCallback(async () => {
     setError('');
     try {
-      const response = await fetch('/api/admin/provider-connections', { credentials: 'include' });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(resolveUiErrorMessage(payload, copy('admin.external_services.load_error', '加载外部服务失败。', 'Failed to load external services.')));
-      setConnections(Array.isArray(payload?.data?.connections) ? payload.data.connections : []);
+      const response = await externalServicesClient.request<{ connections?: ProviderConnection[] }>(
+        '/api/admin/provider-connections'
+      );
+      setConnections(Array.isArray(response.data.connections) ? response.data.connections : []);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : copy('admin.external_services.load_error', '加载外部服务失败。', 'Failed to load external services.'));
+      setError(resolveUiErrorMessage(loadError, copy('admin.external_services.load_error', '加载外部服务失败。', 'Failed to load external services.')));
     } finally {
       setLoading(false);
     }
@@ -107,13 +110,11 @@ export default function ExternalServicesPage() {
     setError('');
     setMessage('');
     try {
-      const response = await fetch(
+      await externalServicesClient.request<unknown>(
         existing ? `/api/admin/provider-connections/${encodeURIComponent(existing.connection_id)}` : '/api/admin/provider-connections',
         {
           method: existing ? 'PATCH' : 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: {
             connection_id: existing?.connection_id || `external_${option.id}`,
             provider_id: option.id,
             provider_type: option.kind,
@@ -128,18 +129,16 @@ export default function ExternalServicesPage() {
             metadata: { ui_source: 'external_services', service_role: option.role },
             secretless: Boolean(option.secretless),
             credential,
-          }),
+          },
         }
       );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(resolveUiErrorMessage(payload, copy('admin.external_services.save_error', '保存外部服务失败。', 'Failed to save external service.')));
       setCredentials((current) => ({ ...current, [option.id]: '' }));
       setMessage(clearCredential
         ? copy('admin.external_services.cleared', '凭据已清除，服务已停用。', 'Credential cleared and service disabled.')
         : copy('admin.external_services.saved', '外部服务设置已保存。', 'External service settings saved.'));
       await loadConnections();
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : copy('admin.external_services.save_error', '保存外部服务失败。', 'Failed to save external service.'));
+      setError(resolveUiErrorMessage(saveError, copy('admin.external_services.save_error', '保存外部服务失败。', 'Failed to save external service.')));
     } finally {
       setBusy('');
     }
@@ -152,13 +151,14 @@ export default function ExternalServicesPage() {
     setError('');
     setMessage('');
     try {
-      const response = await fetch(`/api/admin/provider-connections/${encodeURIComponent(connection.connection_id)}/test`, { method: 'POST', credentials: 'include' });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.data?.ok === false) throw new Error(resolveUiErrorMessage(payload, copy('admin.external_services.test_error', '连接测试失败。', 'Connection test failed.')));
+      await externalServicesClient.request<unknown>(
+        `/api/admin/provider-connections/${encodeURIComponent(connection.connection_id)}/test`,
+        { method: 'POST' }
+      );
       setMessage(copy('admin.external_services.test_passed', '连接测试通过。', 'Connection test passed.'));
       await loadConnections();
     } catch (testError) {
-      setError(testError instanceof Error ? testError.message : copy('admin.external_services.test_error', '连接测试失败。', 'Connection test failed.'));
+      setError(resolveUiErrorMessage(testError, copy('admin.external_services.test_error', '连接测试失败。', 'Connection test failed.')));
     } finally {
       setBusy('');
     }

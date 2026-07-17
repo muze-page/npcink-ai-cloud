@@ -19,8 +19,11 @@ import { BackofficeTag } from '@/components/backoffice/BackofficeTag';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { AnalyticsBarChart, AnalyticsLineChart } from '@/components/ui/EChartsWrapper';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { formatDate, formatNumber } from '@/lib/utils';
+
+const vectorObservabilityClient = createApiClient({ idempotencyPrefix: 'vector_observability' });
 
 type VectorObservabilityData = {
   generatedAt: string;
@@ -263,17 +266,11 @@ function AdminVectorObservabilityContent() {
       if (siteIdFilter.trim()) {
         params.set('site_id', siteIdFilter.trim());
       }
-      const response = await fetch(`/api/admin/vector-observability?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
+      const response = await vectorObservabilityClient.request<unknown>(`/api/admin/vector-observability?${params.toString()}`, {
         signal: controller.signal,
       });
-      const payload = await response.json();
-      if (!response.ok || payload?.status === 'error') {
-        throw payload;
-      }
       if (sequence === requestSequenceRef.current) {
-        setData(normalizeVectorObservability(payload?.data ?? {}));
+        setData(normalizeVectorObservability(response.data));
         hasLoadedRef.current = true;
       }
     } catch (err) {

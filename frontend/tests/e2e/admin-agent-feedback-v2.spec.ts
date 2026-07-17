@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 const feedbackData = {
   artifact_type: 'agent_feedback_quality_summary',
@@ -38,10 +42,10 @@ async function installFeedbackHarness(page: Page) {
     urls.push(route.request().url());
     if (failNext) {
       failNext = false;
-      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary feedback telemetry failure' }) });
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('temporary feedback telemetry failure')) });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: feedbackData }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope(feedbackData)) });
   });
   return { urls: () => urls, failNextRequest: () => { failNext = true; } };
 }
@@ -79,11 +83,11 @@ test('Agent feedback keeps scope and selected quality issue URL-backed', async (
 test('Agent feedback exits initial loading with a scoped retry', async ({ page }) => {
   await installAdminMocks(page);
   await page.route('**/api/admin/agent-feedback?*', async (route) => {
-    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'feedback diagnostics unavailable' }) });
+    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('feedback diagnostics unavailable')) });
   });
   await page.goto('/admin/agent-feedback');
 
   await expect(page.getByRole('heading', { name: /Agent Feedback Quality|Agent 反馈质量/i })).toBeVisible();
-  await expect(page.locator('[role="alert"]').filter({ hasText: /Failed to load Agent feedback diagnostics|加载 Agent 反馈诊断失败/i })).toBeVisible();
+  await expect(page.locator('[role="alert"]').filter({ hasText: /feedback diagnostics unavailable|Failed to load Agent feedback diagnostics|加载 Agent 反馈诊断失败/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Retry$|^重试$/i })).toBeVisible();
 });

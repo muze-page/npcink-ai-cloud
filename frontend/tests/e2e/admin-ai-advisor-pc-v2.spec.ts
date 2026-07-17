@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 const advisorBranch = {
   generation: { mode: 'rule', cache_status: 'miss' },
@@ -37,10 +40,12 @@ const advisorBranch = {
 };
 
 async function installAdvisorMocks(page: Parameters<typeof installAdminMocks>[0]) {
+  const requestedPaths: string[] = [];
   await installAdminMocks(page);
   await page.unroute('**/api/admin/**');
   await page.route('**/api/admin/advisor/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
+    requestedPaths.push(pathname);
     const data = pathname.endsWith('/ops-summary-preview')
       ? {
           preview_version: 'v1',
@@ -52,12 +57,17 @@ async function installAdvisorMocks(page: Parameters<typeof installAdminMocks>[0]
       : pathname.endsWith('/ops-summary-value')
         ? { window: { days: 7 }, totals: {}, rates: {}, value_signal: {}, recent_events: [] }
         : { items: [] };
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data }) });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildAdminApiEnvelope(data)),
+    });
   });
+  return requestedPaths;
 }
 
-test('Operations Advisor keeps the current PC diagnosis primary and technical AI metrics advanced', async ({ page }) => {
-  await installAdvisorMocks(page);
+test('Operations Advisor keeps the current PC diagnosis primary and technical AI metrics advanced', async ({ page }, testInfo) => {
+  const requestedPaths = await installAdvisorMocks(page);
   await page.goto('/admin/ai-advisor');
 
   const diagnosis = page.locator('[data-ui="advisor-current-diagnosis"]');
@@ -71,4 +81,20 @@ test('Operations Advisor keeps the current PC diagnosis primary and technical AI
   await expect(advanced.getByText(/^AI 参与$|^AI participation$/i).first()).toBeHidden();
   await expect(advanced.getByText(/^请求成本$|^Request cost$/i).first()).toBeHidden();
   await expect(page.getByRole('button', { name: /运行诊断|Run diagnosis/i })).toBeVisible();
+
+  expect(requestedPaths).toEqual(['/api/admin/advisor/ops-summary-preview']);
+
+  const evaluationDetails = page.locator('details').filter({
+    hasText: /AI evaluation details|AI 评估详情/i,
+  });
+  await evaluationDetails.locator('summary').click();
+  await expect.poll(() => requestedPaths.sort()).toEqual([
+    '/api/admin/advisor/ops-summary-history',
+    '/api/admin/advisor/ops-summary-preview',
+    '/api/admin/advisor/ops-summary-value',
+  ]);
+  await testInfo.attach('p4-e03-admin-advisor-readonly', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
 });

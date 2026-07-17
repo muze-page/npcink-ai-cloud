@@ -20,6 +20,7 @@ import { AdminRouteSkeleton } from '@/components/admin/AdminRouteSkeleton';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveAdminPackageLabel } from '@/lib/admin-plan-copy';
 import { localizeAdminCommercialCopy } from '@/lib/admin-commercial-copy';
 import { translateStatusLabel } from '@/lib/status-display';
@@ -107,6 +108,42 @@ interface SiteDetail {
   }>;
 }
 
+interface SiteDetailApiPayload {
+  site?: Record<string, unknown>;
+  account?: Record<string, unknown>;
+  site_keys?: Array<{ status?: string }>;
+  subscription?: Record<string, unknown> | null;
+  commercial_policy?: {
+    budget_state?: SiteDetail['budget_state'];
+    subscription_grace?: SiteDetail['subscription_grace'];
+    policy?: Record<string, unknown>;
+  };
+  billing_reconciliation?: {
+    reconciliation?: {
+      in_sync?: boolean;
+      deltas?: { cost?: number };
+    };
+    snapshot?: Record<string, unknown> | null;
+  };
+  usage_meter?: {
+    totals?: {
+      requests?: number;
+      tokens?: number;
+      cost_usd?: number;
+    };
+  };
+  billing_snapshots?: { items?: Array<Record<string, unknown>> };
+  runtime_diagnostics?: {
+    queue?: { queued_runs?: number; latest_run_at?: string };
+    callback?: { failed?: number };
+  };
+  related_surfaces?: SiteDetail['related_surfaces'];
+  commercial_follow_up?: SiteDetail['commercial_follow_up'];
+  runtime_operator_explanations?: SiteDetail['runtime_operator_explanations'];
+}
+
+const siteDetailClient = createApiClient({ idempotencyPrefix: 'admin_site_detail' });
+
 function siteRuntimeExplanationText(
   value: string,
   t: (key: string, params?: Record<string, string>, fallback?: string) => string
@@ -151,23 +188,10 @@ function SiteDetailContent() {
     setSiteActionError(null);
 
     try {
-      const response = await fetch(`/api/admin/sites/${encodeURIComponent(site.site_id)}/activate`, {
+      await siteDetailClient.request<Record<string, unknown>>(`/api/admin/sites/${encodeURIComponent(site.site_id)}/activate`, {
         method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({}),
+        body: {},
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(
-          resolveUiErrorMessage(
-            payload.message,
-            t('admin.site_detail.activate_failed', undefined, 'Failed to activate the site.')
-          )
-        );
-      }
       setSite((current) => (current ? { ...current, status: 'active' } : current));
       toast.success(
         t(
@@ -178,11 +202,10 @@ function SiteDetailContent() {
         t('admin.site_detail.activate_success_title', undefined, 'Site activated')
       );
     } catch (err) {
-      setSiteActionError(
-        err instanceof Error
-          ? err.message
-          : t('admin.site_detail.activate_failed', undefined, 'Failed to activate the site.')
-      );
+      setSiteActionError(resolveUiErrorMessage(
+        err,
+        t('admin.site_detail.activate_failed', undefined, 'Failed to activate the site.')
+      ));
     } finally {
       setIsActivatingSite(false);
     }
@@ -194,16 +217,9 @@ function SiteDetailContent() {
       setError(null);
       
       try {
-        const response = await fetch(`/api/admin/sites/${siteId}`, {
-          credentials: 'include',
-        });
-        
-        if (!response.ok) {
-          throw new Error(t('error.failed_load'));
-        }
-        
-        const data = await response.json();
-        const payload = data.data || {};
+        const payload = (await siteDetailClient.request<SiteDetailApiPayload>(
+          `/api/admin/sites/${siteId}`
+        )).data;
         const rawSite = payload.site || {};
         const rawAccount = payload.account || {};
         const siteKeys = Array.isArray(payload.site_keys) ? payload.site_keys : [];
@@ -215,9 +231,7 @@ function SiteDetailContent() {
         const usageTotals = payload.usage_meter?.totals || {};
         const billingItems = Array.isArray(payload.billing_snapshots?.items)
           ? payload.billing_snapshots.items
-          : Array.isArray(payload.billing_snapshots)
-            ? payload.billing_snapshots
-            : [];
+          : [];
         const latestSnapshot = billingItems[0] || payload.billing_reconciliation?.snapshot || null;
         const normalizedSite: SiteDetail = {
           site_id: String(rawSite.site_id || siteId),
@@ -283,7 +297,7 @@ function SiteDetailContent() {
         setSite(normalizedSite);
         await Promise.resolve();
       } catch (err) {
-        setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+        setError(resolveUiErrorMessage(err, t('error.failed_load')));
       } finally {
         setIsLoading(false);
       }

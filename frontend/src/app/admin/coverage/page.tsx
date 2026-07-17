@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { translateCoverageStateLabel, type CoverageState } from '@/lib/customer-package-display';
 import {
   BackofficeEmptyState,
@@ -78,6 +79,8 @@ type CoverageWorkQueue = {
   items?: CoverageQueueItem[];
 };
 
+const coverageClient = createApiClient({ idempotencyPrefix: 'admin_coverage' });
+
 const INTERNAL_TEST_TEXT_RE = /Fatal error|Stack trace|Command line code|Uncaught ValueError|Path must not be empty|(^|[_-])smoke([_-]|$)|codex_image_smoke|site_knowledge_smoke/i;
 const QUEUE_VIEWS = new Set<QueueView>(['needs_action', 'all', 'error', 'warning', 'ok', 'inactive']);
 const QUEUE_SORTS = new Set<QueueSort>(['priority', 'expiry', 'customer']);
@@ -99,12 +102,7 @@ function queueItemKey(item: CoverageQueueItem): string {
 }
 
 async function readJsonData<T>(url: string): Promise<T> {
-  const response = await fetch(url, { credentials: 'include' });
-  if (!response.ok) {
-    throw new Error(`Failed to load ${url}`);
-  }
-  const payload = await response.json();
-  return payload.data as T;
+  return (await coverageClient.request<T>(url)).data;
 }
 
 function severityToneClassName(severity: string): string {
@@ -253,7 +251,7 @@ function AdminCoverageContent() {
       }
     } catch (err) {
       if (mountedRef.current && coverageRequestSequenceRef.current === requestSequence) {
-        setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+        setError(resolveUiErrorMessage(err, t('error.failed_load')));
       }
     } finally {
       if (coverageRequestSequenceRef.current === requestSequence) {

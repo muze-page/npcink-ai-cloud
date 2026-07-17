@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import { buildAdminApiEnvelope, installAdminMocks } from './helpers/admin-operator-fixture';
 
 const connections = [
   {
@@ -27,16 +27,16 @@ async function installExternalServicesHarness(page: Page) {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (request.method() === 'GET') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { connections } }) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope({ connections })) });
       return;
     }
     if (request.method() === 'POST' && pathname.endsWith('/test')) {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { ok: true } }) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope({ ok: true })) });
       return;
     }
     if (request.method() === 'POST' || request.method() === 'PATCH') {
       writes.push(request.postDataJSON() as Record<string, unknown>);
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: {} }) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope({})) });
       return;
     }
     await route.fallback();

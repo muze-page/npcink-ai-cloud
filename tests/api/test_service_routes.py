@@ -2512,7 +2512,10 @@ def test_admin_provider_connection_test_reports_missing_secret_without_leaking(
     )
 
     assert response.status_code == 200, response.text
-    data = response.json()["data"]
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "provider_connection.missing_secret"
+    data = payload["data"]
     assert data["ok"] is False
     assert data["status"] == "missing_secret"
     assert data["error_code"] == "provider_connection.missing_secret"
@@ -4690,7 +4693,7 @@ def test_service_routes_plan_version_label_conflict_is_readable(tmp_path: Path) 
     dispose_engine(database_url)
 
 
-def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
+def test_service_routes_admin_read_facade(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     database_url, client = _build_client(tmp_path)
     _seed_openai_text_model_allowlist(database_url)
 
@@ -4797,10 +4800,30 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
         headers=build_internal_headers(idempotency_key="svc-admin-billing-001"),
     )
 
-    overview_response = client.get(
-        "/internal/service/admin/overview",
-        headers=build_internal_headers(),
-    )
+    def _fail_unbounded_overview_read(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        pytest.fail("admin overview must not load unbounded usage, credit, or index detail")
+
+    with monkeypatch.context() as overview_guard:
+        overview_guard.setattr(
+            CommercialRepository,
+            "list_usage_meter_events_for_admin",
+            _fail_unbounded_overview_read,
+        )
+        overview_guard.setattr(
+            CommercialRepository,
+            "list_credit_ledger_entries",
+            _fail_unbounded_overview_read,
+        )
+        overview_guard.setattr(
+            CommercialRepository,
+            "summarize_site_knowledge_index_usage",
+            _fail_unbounded_overview_read,
+        )
+        overview_response = client.get(
+            "/internal/service/admin/overview",
+            headers=build_internal_headers(),
+        )
     coverage_work_queue_response = client.get(
         "/internal/service/admin/coverage-work-queue",
         headers=build_internal_headers(),
@@ -4863,13 +4886,7 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert overview["counts"]["sites_active"] == 1
     assert overview["counts"]["site_keys_active"] == 1
     assert overview["recent_usage"]["event_count"] >= 1
-    platform_credit = overview["platform_credit_summary"]
-    assert platform_credit["previous_period_start_at"]
-    assert platform_credit["previous_period_end_at"]
-    assert platform_credit["trend"]["current_used"] >= 0
-    assert platform_credit["trend"]["previous_used"] >= 0
-    assert platform_credit["trend"]["status"] in {"new_activity", "flat", "up", "down"}
-    assert isinstance(platform_credit["watch_items"], list)
+    assert "platform_credit_summary" not in overview
     assert "runtime_diagnostics" in overview
     assert overview["runtime_telemetry"]["filters"]["recent_minutes"] == 1440
     assert overview["runtime_telemetry"]["alert_summary"]["status"] in {

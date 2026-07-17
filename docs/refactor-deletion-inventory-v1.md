@@ -144,6 +144,11 @@ default-off.
 P4 begins with a surface inventory. The candidates below are rules, not a claim
 that any specific page has already been audited or approved for deletion.
 
+Current status: complete. The accepted inventory, destructive no-compatibility
+cutovers, strict client migration, bounded hot-path contraction, executable
+`P4-E02` gates, and screenshot-backed `P4-E03` browser smoke are recorded in
+`docs/p4-portal-admin-surface-inventory-2026-07-16.md`.
+
 The accepted path-by-path classification and owner map are recorded in
 `docs/p4-portal-admin-surface-inventory-2026-07-16.md`. ADR-016 fixes the
 fail-closed account-membership, Admin browser proxy, and customer credential

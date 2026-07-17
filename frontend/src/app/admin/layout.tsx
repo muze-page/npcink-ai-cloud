@@ -10,6 +10,7 @@ import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
 import { AdminRouteTransition } from '@/components/admin/AdminRouteTransition';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
+import { createApiClient } from '@/lib/api-client';
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -38,6 +39,7 @@ type AdminCommandItem = AdminNavItem & {
 };
 
 const ADMIN_SIDEBAR_STORAGE_KEY = 'npcink_admin_sidebar_collapsed';
+const adminLayoutSessionClient = createApiClient({ idempotencyPrefix: 'admin_layout_session' });
 
 function adminNavInitial(label: string): string {
   const trimmed = label.trim();
@@ -76,20 +78,13 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     }
 
     let cancelled = false;
-    void fetch('/admin/session', {
-      cache: 'no-store',
-      credentials: 'include',
-    })
-      .then((response) => {
+    void adminLayoutSessionClient
+      .request('/admin/session')
+      .then(() => {
         if (cancelled) {
           return;
         }
-        if (response.ok) {
-          setAdminSessionReady(true);
-          return;
-        }
-        const returnTo = `${pathname}${window.location.search}`;
-        window.location.replace(`/admin/login?redirect=${encodeURIComponent(returnTo)}`);
+        setAdminSessionReady(true);
       })
       .catch(() => {
         if (!cancelled) {

@@ -15,10 +15,10 @@ import {
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { ListPagination } from '@/components/ui/ListPagination';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveAdminPackageLabel } from '@/lib/admin-plan-copy';
 import { formatAdminCurrency } from '@/lib/currency';
 import { resolveUiErrorMessage } from '@/lib/errors';
-import { readResponsePayload } from '@/lib/safe-response';
 import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 
 interface Subscription {
@@ -89,12 +89,18 @@ interface SubscriptionApiItem {
   };
 }
 
+interface SubscriptionsPayload {
+  items?: SubscriptionApiItem[];
+  total?: number;
+}
+
 type QueueSort = 'priority' | 'expiry' | 'customer';
 type RiskLevel = 'critical' | 'warning' | 'monitor' | 'stable';
 
 const PAGE_SIZE = 20;
 const ALLOWED_STATUSES = new Set(['', 'past_due', 'expired', 'trialing', 'active', 'suspended', 'canceled']);
 const ALLOWED_SORTS = new Set<QueueSort>(['priority', 'expiry', 'customer']);
+const subscriptionsClient = createApiClient({ idempotencyPrefix: 'admin_subscriptions' });
 
 function daysUntil(raw?: string): number | null {
   if (!raw) return null;
@@ -256,19 +262,11 @@ function SubscriptionsContent() {
     else setIsLoading(true);
 
     try {
-      const response = await fetch(`/api/admin/subscriptions?${requestKey}`, { credentials: 'include' });
-      const payload = await readResponsePayload<{
-        data?: { items?: SubscriptionApiItem[]; total?: number };
-        items?: SubscriptionApiItem[];
-        total?: number;
-        message?: string;
-      }>(response);
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_load')));
-      }
-      const data = 'data' in payload && payload.data ? payload.data : payload;
-      const nextItems = ('items' in data && Array.isArray(data.items) ? data.items : []).map(normalizeSubscription);
-      const nextTotal = 'total' in data ? Number(data.total ?? nextItems.length) : nextItems.length;
+      const payload = (await subscriptionsClient.request<SubscriptionsPayload>(
+        `/api/admin/subscriptions?${requestKey}`
+      )).data;
+      const nextItems = (payload.items || []).map(normalizeSubscription);
+      const nextTotal = Number(payload.total ?? nextItems.length);
       if (mountedRef.current && requestSequenceRef.current === sequence) {
         setSubscriptions(nextItems);
         setTotal(nextTotal);
@@ -279,7 +277,7 @@ function SubscriptionsContent() {
       }
     } catch (err) {
       if (mountedRef.current && requestSequenceRef.current === sequence) {
-        setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+        setError(resolveUiErrorMessage(err, t('error.failed_load')));
       }
     } finally {
       if (requestSequenceRef.current === sequence) {

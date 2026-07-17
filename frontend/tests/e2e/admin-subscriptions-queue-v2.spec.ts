@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 const SUBSCRIPTIONS = [
   {
@@ -83,7 +87,7 @@ test('subscription risk queue persists server filters and inspector focus while 
       await route.fulfill({
         status: 503,
         contentType: 'application/json',
-        body: JSON.stringify({ status: 'error', message: 'temporary subscription refresh failure' }),
+        body: JSON.stringify(buildAdminApiErrorEnvelope('temporary subscription refresh failure')),
       });
       return;
     }
@@ -100,7 +104,7 @@ test('subscription risk queue persists server filters and inspector focus while 
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'ok', data: { items, total: items.length } }),
+      body: JSON.stringify(buildAdminApiEnvelope({ items, total: items.length })),
     });
   });
 

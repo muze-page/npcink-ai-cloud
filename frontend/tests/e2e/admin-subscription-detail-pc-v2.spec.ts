@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
-import { LONG_ACCOUNT_ID, installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  LONG_ACCOUNT_ID,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 test('subscription detail keeps one PC conclusion and defers operational evidence', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -40,13 +44,13 @@ test('subscription detail failure preserves the PC route shell and bounded retry
     await route.fulfill({
       status: 503,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'error', message: 'subscription unavailable' }),
+      body: JSON.stringify(buildAdminApiErrorEnvelope('subscription unavailable')),
     });
   });
   await page.goto('/admin/subscriptions/sub_mvp');
 
   await expect(page.getByRole('heading', { name: /Subscription detail is temporarily unavailable|订阅详情暂时不可用/i })).toBeVisible();
-  await expect(page.getByRole('alert').filter({ hasText: /Failed to load|加载数据失败/i })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'subscription unavailable' })).toBeVisible();
   await page.getByRole('button', { name: /^Retry$|^重试$/i }).click();
   await expect.poll(() => attempts).toBe(2);
   await expect(page).toHaveURL(/\/admin\/subscriptions\/sub_mvp$/);

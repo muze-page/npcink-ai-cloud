@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 const connections = [
   {
@@ -106,9 +110,8 @@ async function installProviderDirectoryHarness(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        status: 'ok',
-        data: {
+      body: JSON.stringify(
+        buildAdminApiEnvelope({
           surface: 'admin_ai_resources',
           connections,
           capabilities: [],
@@ -122,8 +125,8 @@ async function installProviderDirectoryHarness(page: Page) {
             secret_exposure: 'masked',
             not_a_control_plane: true,
           },
-        },
-      }),
+        })
+      ),
     });
   });
   await page.route('**/api/admin/provider-connections/*/test', async (route) => {
@@ -132,9 +135,8 @@ async function installProviderDirectoryHarness(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        status: 'ok',
-        data: {
+      body: JSON.stringify(
+        buildAdminApiEnvelope({
           connection_id: connectionId,
           provider_id: connection?.provider_id || 'unknown',
           kind: connection?.kind || 'unknown',
@@ -150,8 +152,8 @@ async function installProviderDirectoryHarness(page: Page) {
             scope_id: connectionId,
             outcome: 'succeeded',
           },
-        },
-      }),
+        })
+      ),
     });
   });
   await page.route('**/api/admin/provider-connections', async (route) => {
@@ -163,9 +165,8 @@ async function installProviderDirectoryHarness(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        status: 'ok',
-        data: {
+      body: JSON.stringify(
+        buildAdminApiEnvelope({
           connection_id: payload.connection_id || 'openai_compatible',
           provider_id: payload.provider_id || 'openai',
           receipt: {
@@ -174,14 +175,14 @@ async function installProviderDirectoryHarness(page: Page) {
             scope_id: payload.connection_id || 'openai_compatible',
             outcome: 'succeeded',
           },
-        },
-      }),
+        })
+      ),
     });
   });
   return { getRequestCount: () => requestCount };
 }
 
-test('model supplier queue keeps URL-backed focus and removes fixed-width table behavior', async ({ page }) => {
+test('model supplier queue keeps URL-backed focus and removes fixed-width table behavior', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const harness = await installProviderDirectoryHarness(page);
   await page.goto('/admin/ai-resources');
@@ -191,6 +192,10 @@ test('model supplier queue keeps URL-backed focus and removes fixed-width table 
   await expect(page.locator('[data-connection-id="embedding_ready"]')).toHaveCount(0);
   await expect(page.locator('table')).toHaveCount(0);
   expect(harness.getRequestCount()).toBe(1);
+  await testInfo.attach('p4-e03-admin-provider-runtime', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
 
   await page.locator('[data-connection-id="model_ready"]').click();
   await expect(page).toHaveURL(/focus=model_ready/);
@@ -235,6 +240,45 @@ test('supplier inspector keeps test feedback and destructive confirmation beside
   await expect(inspector.getByRole('button', { name: /Confirm delete|确认删除/i })).toBeVisible();
   await inspector.getByRole('button', { name: /^Cancel$|^取消$/i }).click();
   await expect(inspector.getByRole('button', { name: /Confirm delete|确认删除/i })).toHaveCount(0);
+});
+
+test('failed supplier test keeps its canonical error and audit receipt', async ({ page }) => {
+  await installProviderDirectoryHarness(page);
+  await page.route('**/api/admin/provider-connections/model_attention/test', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        buildAdminApiErrorEnvelope(
+          'provider credential is missing',
+          'provider_connection.missing_secret',
+          {
+            connection_id: 'model_attention',
+            provider_id: 'minimax',
+            kind: 'minimax',
+            status: 'missing_secret',
+            stage: 'config_preflight',
+            ok: false,
+            error_code: 'provider_connection.missing_secret',
+            message: 'provider credential is missing',
+            tested_at: '2026-07-12T02:00:00Z',
+            receipt: {
+              event_kind: 'provider_connection.test',
+              scope_kind: 'provider_connection',
+              scope_id: 'model_attention',
+              outcome: 'error',
+            },
+          }
+        )
+      ),
+    });
+  });
+  await page.goto('/admin/ai-resources?focus=model_attention');
+
+  const inspector = page.locator('[data-ui="supplier-inspector"]');
+  await inspector.getByRole('button', { name: /^Test$|^测试$/i }).click();
+  await expect(page.getByText('provider credential is missing').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: /Latest operation|最近操作/i })).toBeVisible();
 });
 
 test('provider configuration dialog supports PC keyboard entry, focus loop, and Escape recovery', async ({ page }) => {

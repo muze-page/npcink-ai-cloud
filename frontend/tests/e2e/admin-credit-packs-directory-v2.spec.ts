@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 type Pack = {
   pack_id: string;
@@ -31,7 +35,7 @@ async function installCreditPackHarness(page: Page) {
       getCount += 1;
       if (failNextGet) {
         failNextGet = false;
-        await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary catalog failure' }) });
+        await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('temporary catalog failure')) });
         return;
       }
     } else if (method === 'PATCH') {
@@ -46,17 +50,14 @@ async function installCreditPackHarness(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        status: 'ok',
-        data: {
+      body: JSON.stringify(buildAdminApiEnvelope({
           catalog_version: 'credit_pack_catalog_v1',
           period_policy: 'payment_order_grant',
           expiry_policy: 'paid_at_plus_validity_days',
           default_validity_days: 365,
           updated_at: '2026-07-12T08:00:00Z',
           items,
-        },
-      }),
+      })),
     });
   });
   return {

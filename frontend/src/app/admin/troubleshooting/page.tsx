@@ -12,8 +12,11 @@ import {
 } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { formatDate, formatNumber } from '@/lib/utils';
+
+const runtimeTelemetryClient = createApiClient({ idempotencyPrefix: 'runtime_telemetry' });
 
 type RuntimeTelemetryAlert = {
   code: string;
@@ -267,20 +270,15 @@ export default function AdminTroubleshootingPage() {
     setError('');
     try {
       const params = new URLSearchParams({ recent_minutes: String(windowHours * 60), limit: '25' });
-      const response = await fetch(`/api/admin/runtime-telemetry?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.status === 'error') {
-        throw new Error(resolveUiErrorMessage(payload, t('admin.troubleshooting.load_error', {}, 'Failed to load runtime diagnostics.')));
-      }
+      const response = await runtimeTelemetryClient.request<unknown>(
+        `/api/admin/runtime-telemetry?${params.toString()}`
+      );
       if (sequence !== requestSequenceRef.current) return;
-      setData(normalizeRuntimeTelemetry(payload?.data ?? {}));
+      setData(normalizeRuntimeTelemetry(response.data));
       hasLoadedRef.current = true;
     } catch (loadError) {
       if (sequence !== requestSequenceRef.current) return;
-      setError(loadError instanceof Error ? loadError.message : t('admin.troubleshooting.load_error', {}, 'Failed to load runtime diagnostics.'));
+      setError(resolveUiErrorMessage(loadError, t('admin.troubleshooting.load_error', {}, 'Failed to load runtime diagnostics.')));
     } finally {
       if (sequence === requestSequenceRef.current) {
         requestActiveRef.current = false;

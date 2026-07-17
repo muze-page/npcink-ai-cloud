@@ -1,7 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
-test('admin overview keeps canonical work destinations primary and evidence collapsed', async ({ page }) => {
+test('admin overview keeps canonical work destinations primary and evidence collapsed', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await installAdminMocks(page);
   await page.goto('/admin');
@@ -19,6 +22,10 @@ test('admin overview keeps canonical work destinations primary and evidence coll
   });
   await expect(extendedEvidence).not.toHaveAttribute('open', '');
   await expect(page.getByRole('heading', { name: /Runtime and usage snapshot|运行与用量快照/i })).toBeHidden();
+  await testInfo.attach('p4-e03-admin-overview', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(100);
@@ -51,11 +58,20 @@ test('admin overview API failure preserves the page shell and safe retry', async
   await installAdminMocks(page);
   await page.unroute('**/api/admin/**');
   await page.route('**/api/admin/overview', async (route) => {
-    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'overview unavailable' }) });
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        buildAdminApiErrorEnvelope(
+          'overview unavailable',
+          'admin.overview_unavailable'
+        )
+      ),
+    });
   });
   await page.goto('/admin');
 
   await expect(page.getByRole('heading', { name: /Platform state comes first|先看平台概况/i })).toBeVisible();
-  await expect(page.locator('[role="alert"]').filter({ hasText: /Failed to load|加载.*失败/i })).toBeVisible();
+  await expect(page.locator('[role="alert"]').filter({ hasText: /overview unavailable/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Retry$|^重试$/i })).toBeVisible();
 });

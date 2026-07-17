@@ -28,9 +28,9 @@ import {
   localizePositioning,
   localizeTierLabel,
 } from '@/lib/admin-plan-copy';
+import { createApiClient } from '@/lib/api-client';
 import { translateStatusLabel } from '@/lib/status-display';
 import { ADMIN_CURRENCY } from '@/lib/currency';
-import { readResponsePayload } from '@/lib/safe-response';
 import { formatCurrency, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
@@ -146,6 +146,8 @@ type PlanVersionFormState = {
   concurrency_override_json: string;
   policy_override_json: string;
 };
+
+const planDetailClient = createApiClient({ idempotencyPrefix: 'admin_plan_detail' });
 
 function prettyJson(value: unknown): string {
   return JSON.stringify(value ?? {}, null, 2);
@@ -321,21 +323,12 @@ function PlanDetailContent() {
     }
     setError(null);
     try {
-      const response = await fetch(`/api/admin/plans/${encodeURIComponent(planId)}`, {
-        credentials: 'include',
-      });
-      const payload = await readResponsePayload<{ data?: PlanDetailPayload; message?: string }>(response);
-      if (!response.ok) {
-        throw new Error(
-          resolveUiErrorMessage(
-            'message' in payload ? payload.message : null,
-            t('error.failed_load')
-          )
-        );
-      }
-      setDetail(('data' in payload ? payload.data : null) as PlanDetailPayload);
+      const payload = (await planDetailClient.request<PlanDetailPayload>(
+        `/api/admin/plans/${encodeURIComponent(planId)}`
+      )).data;
+      setDetail(payload);
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+      setError(resolveUiErrorMessage(err, t('error.failed_load')));
     } finally {
       if (showLoading) {
         setIsLoading(false);
@@ -416,16 +409,11 @@ function PlanDetailContent() {
         ),
         sales_price_cny: Number(form.sales_price_cny || 0),
       };
-      const response = await fetch(`/api/admin/plans/${encodeURIComponent(planId)}/versions`, {
+      const data = (await planDetailClient.request<{ receipt?: AdminMutationReceiptPayload | null }>(
+        `/api/admin/plans/${encodeURIComponent(planId)}/versions`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await readResponsePayload<{ data?: { receipt?: AdminMutationReceiptPayload | null }; message?: string }>(response);
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage('message' in data ? data.message : null, t('error.failed_save', {}, 'Failed to save.')));
-      }
+        body: payload,
+      })).data;
       setNotice(
         t(
           'admin.coverage_package_release_saved_notice',
@@ -433,12 +421,12 @@ function PlanDetailContent() {
           'Package changes saved and published. Existing subscriptions on this package use the latest values.'
         )
       );
-      setLastReceipt((('data' in data ? data.data?.receipt : null) ?? null) as AdminMutationReceiptPayload | null);
+      setLastReceipt(data.receipt ?? null);
       await loadDetail({ showLoading: false });
       setIsEditorOpen(false);
     } catch (err) {
       setError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save', {}, 'Failed to save.'))
+        resolveUiErrorMessage(err, t('error.failed_save', {}, 'Failed to save.'))
       );
     } finally {
       setIsSaving(false);

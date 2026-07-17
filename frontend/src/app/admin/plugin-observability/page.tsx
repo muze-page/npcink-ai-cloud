@@ -18,8 +18,11 @@ import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPi
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeTag } from '@/components/backoffice/BackofficeTag';
 import { AnalyticsBarChart, AnalyticsLineChart } from '@/components/ui/EChartsWrapper';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { formatDate, formatNumber as formatInteger } from '@/lib/utils';
+
+const pluginObservabilityClient = createApiClient({ idempotencyPrefix: 'plugin_observability' });
 
 type PluginObservabilityTotals = {
   eventsTotal: number;
@@ -540,15 +543,15 @@ function AdminPluginObservabilityContent() {
       const params = new URLSearchParams({ window_hours: String(windowHours) });
       if (pluginFilter !== 'all') params.set('plugin_slug', pluginFilter);
       if (siteIdFilter) params.set('site_id', siteIdFilter);
-      const response = await fetch(`/api/admin/plugin-observability?${params}`, { credentials: 'include' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json();
+      const response = await pluginObservabilityClient.request<unknown>(
+        `/api/admin/plugin-observability?${params.toString()}`
+      );
       if (sequence !== requestSequenceRef.current) return;
-      setData(normalizePluginObservability(payload.data));
+      setData(normalizePluginObservability(response.data));
       hasLoadedRef.current = true;
     } catch (err) {
       if (sequence !== requestSequenceRef.current) return;
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+      setError(resolveUiErrorMessage(err, t('error.failed_load')));
     } finally {
       if (sequence === requestSequenceRef.current) {
         requestActiveRef.current = false;
@@ -578,14 +581,9 @@ function AdminPluginObservabilityContent() {
       if (!item.attentionKey) return;
       setAttentionActionKey(`${item.attentionKey}-${action}`);
       try {
-        const response = await fetch('/api/admin/plugin-observability/attention-state', {
+        await pluginObservabilityClient.request<unknown>('/api/admin/plugin-observability/attention-state', {
           method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'Idempotency-Key': crypto.randomUUID(),
-          },
-          body: JSON.stringify({
+          body: {
             attention_key: item.attentionKey,
             attention_code: item.code,
             action,
@@ -594,16 +592,15 @@ function AdminPluginObservabilityContent() {
             event_kind: item.eventKind,
             error_code: item.errorCode,
             mute_hours: 24,
-          }),
+          },
         });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         await loadData();
         toast.success(
           t('admin.plugin_obs_attention_state_updated', {}, 'Watch item state updated.'),
           t('common.success')
         );
       } catch (err) {
-        const message = resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load'));
+        const message = resolveUiErrorMessage(err, t('error.failed_load'));
         setError(message);
         toast.error(message, t('common.error'));
       } finally {

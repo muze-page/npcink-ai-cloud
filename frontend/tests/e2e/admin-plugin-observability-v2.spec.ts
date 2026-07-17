@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 const pluginObservabilityData = {
   generated_at: '2026-07-12T12:00:00Z',
@@ -54,16 +58,16 @@ async function installPluginObservabilityHarness(page: Page, responseData = plug
   let failNextGet = false;
   await page.route('**/api/admin/plugin-observability/attention-state', async (route) => {
     statePostCount += 1;
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { updated: true } }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope({ updated: true })) });
   });
   await page.route('**/api/admin/plugin-observability?*', async (route) => {
     getUrls.push(route.request().url());
     if (failNextGet) {
       failNextGet = false;
-      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary plugin telemetry failure' }) });
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('temporary plugin telemetry failure')) });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: responseData }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope(responseData)) });
   });
   return {
     getStatePostCount: () => statePostCount,

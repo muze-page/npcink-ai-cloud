@@ -23,6 +23,7 @@ import {
   type CoverageState,
   type PackageKind,
 } from '@/lib/customer-package-display';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 
@@ -63,6 +64,12 @@ interface AccountsApiItem {
   nearest_expiry_at?: string | null;
 }
 
+interface AccountsListPayload {
+  items?: AccountsApiItem[];
+  total?: number;
+  hidden_internal_total?: number;
+}
+
 type AccountSort = 'risk' | 'display_name' | 'created_at';
 type AccountRisk = 'critical' | 'warning' | 'monitor' | 'stable';
 
@@ -71,6 +78,7 @@ const INTERNAL_TEST_ACCOUNT_RE = /(^|[_-])(smoke)([_-]|$)|codex_image_smoke|site
 const ACCOUNT_SORTS = new Set<AccountSort>(['risk', 'display_name', 'created_at']);
 const EXPIRY_ACTION_WINDOW_DAYS = 14;
 const PAGE_SIZE = 25;
+const accountsClient = createApiClient({ idempotencyPrefix: 'admin_accounts' });
 
 function isMalformedAccountText(value?: string): boolean {
   return MALFORMED_ACCOUNT_TEXT_RE.test(String(value || ''));
@@ -271,16 +279,14 @@ function AccountsContent() {
     else setIsLoading(true);
 
     try {
-      const response = await fetch(`/api/admin/accounts?${requestKey}`, { credentials: 'include' });
-      if (!response.ok) throw new Error(t('error.failed_load'));
-      const payload = await response.json();
-      const normalized = ((payload.data?.items || []) as AccountsApiItem[])
+      const payload = (await accountsClient.request<AccountsListPayload>(`/api/admin/accounts?${requestKey}`)).data;
+      const normalized = (payload.items || [])
         .map((item) => normalizeAccount(item, t))
         .filter((item): item is Account => Boolean(item));
       if (mountedRef.current && requestSequenceRef.current === sequence) {
         setAccounts(normalized);
-        setTotal(Number(payload.data?.total ?? normalized.length));
-        setHiddenInternalTotal(Number(payload.data?.hidden_internal_total || 0));
+        setTotal(Number(payload.total ?? normalized.length));
+        setHiddenInternalTotal(Number(payload.hidden_internal_total || 0));
         setLoadedAt(new Date());
         setLoadedRequestKey(requestKey);
         hasLoadedRef.current = true;
@@ -288,7 +294,7 @@ function AccountsContent() {
       }
     } catch (err) {
       if (mountedRef.current && requestSequenceRef.current === sequence) {
-        setLoadError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+        setLoadError(resolveUiErrorMessage(err, t('error.failed_load')));
       }
     } finally {
       if (requestSequenceRef.current === sequence) {
@@ -362,19 +368,15 @@ function AccountsContent() {
         ...(createForm.operator_display_name.trim() ? { operator_display_name: createForm.operator_display_name.trim() } : {}),
         ...(createForm.operator_note.trim() ? { operator_note: createForm.operator_note.trim() } : {}),
       };
-      const response = await fetch('/api/admin/accounts', {
+      await accountsClient.request<Record<string, unknown>>('/api/admin/accounts', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           account_id: createForm.account_id.trim(),
           name: createForm.name.trim(),
           metadata,
           bind_default_free: createForm.bind_default_free,
-        }),
+        },
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       showSuccessToast(
         createForm.bind_default_free
           ? t('admin.accounts.onboarding_created_notice', {}, 'Customer account created and bound to the Free package.')
@@ -385,7 +387,7 @@ function AccountsContent() {
       setIsCreateOpen(false);
       await loadAccounts(true);
     } catch (err) {
-      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+      setActionError(resolveUiErrorMessage(err, t('error.failed_save')));
     } finally {
       setIsSaving(false);
     }

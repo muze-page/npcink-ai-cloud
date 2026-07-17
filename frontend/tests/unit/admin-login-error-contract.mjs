@@ -52,7 +52,7 @@ assert.match(
 );
 assert.match(
   loginPageSource,
-  /resolveAdminLoginRedirect[\s\S]*fetch\('\/admin\/session'[\s\S]*response\.ok[\s\S]*router\.replace\(redirectTo\)/,
+  /createApiClient[\s\S]*resolveAdminLoginRedirect[\s\S]*\.request\('\/admin\/session'\)[\s\S]*router\.replace\(redirectTo\)/,
   'admin login must validate the server session before redirecting to a safe admin destination'
 );
 assert.match(

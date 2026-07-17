@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import { buildAdminApiEnvelope, installAdminMocks } from './helpers/admin-operator-fixture';
 
 test('vector settings keeps the fixed PC profile and saves only Zilliz credentials', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -74,7 +74,7 @@ test('vector settings keeps the fixed PC profile and saves only Zilliz credentia
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ status: 'ok', data: profile }),
+        body: JSON.stringify(buildAdminApiEnvelope(profile)),
       });
       return;
     }
@@ -106,7 +106,7 @@ test('vector settings keeps the fixed PC profile and saves only Zilliz credentia
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ status: 'ok', data: profile }),
+        body: JSON.stringify(buildAdminApiEnvelope(profile)),
       });
       return;
     }

@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted inventory for P4 implementation and acceptance.
+Accepted inventory and completed P4 closeout record. `P4-E01`, `P4-E02`, and
+`P4-E03` are satisfied by the inventory, executable gates, and screenshot-backed
+read-only browser smoke recorded below.
 
 This record satisfies `P4-E01` in
 `docs/refactor-deletion-inventory-v1.md`. It classifies the current customer
@@ -277,6 +279,54 @@ tests and 33 frontend transport tests passed. Independent review found no
 remaining P0-P2 issue after the response-encryption, pass-through, and
 indeterminate-state fixes. ADR-017 records the guarantee and its honest crash
 boundary.
+
+## P4-G Admin Client And Hot-Path Closeout — 2026-07-17
+
+The final Admin contraction is implemented without a compatibility path:
+
+- all Admin client pages, the protected layout/login flow, and the shared audit
+  summary panel now use the strict shared `ApiClient`; audited raw `fetch()`
+  calls on those surfaces dropped from 74 to zero;
+- a static contract recursively inventories Admin `page.tsx`/`layout.tsx`
+  surfaces and fails if a raw browser fetch is reintroduced;
+- `/admin/overview` no longer loads current/previous unbounded usage events,
+  credit-ledger entries, or Site Knowledge index detail. The obsolete
+  platform-credit response and helpers are deleted; bounded account and
+  commercial detail remain on their dedicated owner pages;
+- Operations Advisor initial navigation now requests only the diagnostic
+  preview instead of preview plus value and history. History/value reads occur
+  only when the operator expands AI evaluation details. Request keys and
+  sequences deduplicate development effects, reject stale results, and let a
+  post-review refresh supersede an older in-flight detail read;
+- Provider connection test failures now expose a canonical top-level error code
+  while retaining bounded result detail and the operator audit receipt. The UI
+  preserves that receipt on both successful and failed tests;
+- Playwright mocks use the same canonical envelope as production. Error-path
+  assertions check the structured backend message instead of relying on a
+  permissive partial envelope.
+
+`P4-E03` browser tests attach screenshots for Portal service home, selected-site
+health, usage, package/entitlement, Admin overview, provider runtime, runtime
+diagnostics, media observability, and the read-only Advisor. These tests exercise
+readable Cloud run, usage, entitlement, provider, health, diagnostic, and media
+evidence without exposing CMS apply, local registry, prompt/preset, approval, or
+WordPress write controls.
+
+Integrated verification on the final working tree:
+
+- frontend ESLint, TypeScript type-check, all static contracts, and 33 Vitest
+  tests: passed;
+- Admin Playwright integration: 60 passed; Portal and screenshot-backed
+  retained-surface batch: 33 passed;
+- `pnpm run check:fast`: 146 contract passed, 1 skipped; 602 domain passed,
+  3 skipped;
+- `pnpm run check:seam`: 746 API passed; perimeter 9 passed;
+- `pnpm run check:anti-drift`: passed;
+- Python Ruff and mypy: passed, with 229 source files checked by mypy;
+- independent five-axis review: no remaining P0-P3 issue.
+
+No WordPress plugin, CMS connector, provider infrastructure, production deploy,
+or local approval/write ownership changed in this batch.
 
 Final gates on this batch:
 

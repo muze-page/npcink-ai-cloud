@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 const vectorData = {
   generated_at: '2026-07-12T12:00:00Z',
@@ -43,10 +47,10 @@ async function installVectorHarness(page: Page) {
     urls.push(route.request().url());
     if (failNext) {
       failNext = false;
-      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary vector telemetry failure' }) });
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('temporary vector telemetry failure')) });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: vectorData }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope(vectorData)) });
   });
   return { urls: () => urls, failNextRequest: () => { failNext = true; } };
 }
@@ -84,11 +88,11 @@ test('vector observability keeps scope and selected error URL-backed', async ({ 
 test('vector observability exits initial loading with a scoped retry', async ({ page }) => {
   await installAdminMocks(page);
   await page.route('**/api/admin/vector-observability?*', async (route) => {
-    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'vector diagnostics unavailable' }) });
+    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('vector diagnostics unavailable')) });
   });
   await page.goto('/admin/vector-observability');
 
   await expect(page.getByRole('heading', { name: /Vector Observability|向量观测/i })).toBeVisible();
-  await expect(page.locator('[role="alert"]').filter({ hasText: /Failed to load vector diagnostics|加载向量诊断失败/i })).toBeVisible();
+  await expect(page.locator('[role="alert"]').filter({ hasText: /vector diagnostics unavailable|Failed to load vector diagnostics|加载向量诊断失败/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Retry$|^重试$/i })).toBeVisible();
 });

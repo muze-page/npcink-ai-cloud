@@ -1,5 +1,9 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 type AccountFixture = {
   account: { account_id: string; name: string; status: string; metadata?: Record<string, unknown> };
@@ -69,7 +73,7 @@ async function installAccountsQueueMocks(page: Page) {
     requestCount += 1;
     if (failNext) {
       failNext = false;
-      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary customer queue failure' }) });
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('temporary customer queue failure')) });
       return;
     }
     const url = new URL(route.request().url());
@@ -91,7 +95,7 @@ async function installAccountsQueueMocks(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'ok', data: { items, total: items.length, hidden_internal_total: 1 } }),
+      body: JSON.stringify(buildAdminApiEnvelope({ items, total: items.length, hidden_internal_total: 1 })),
     });
   });
 
@@ -124,7 +128,7 @@ async function installAccountsQueueMocks(page: Page) {
         nearest_expiry_at: '',
       },
     ];
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { account_id: payload.account_id } }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope({ account_id: payload.account_id })) });
   });
 
   return {

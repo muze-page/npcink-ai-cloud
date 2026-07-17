@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 const mediaData = {
   contract_version: 'magick-media-observability-summary-v2',
@@ -49,15 +53,15 @@ async function installMediaHarness(page: Page) {
     urls.push(route.request().url());
     if (failNext) {
       failNext = false;
-      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary media telemetry failure' }) });
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('temporary media telemetry failure')) });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: mediaData }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope(mediaData)) });
   });
   return { urls: () => urls, failNextRequest: () => { failNext = true; } };
 }
 
-test('media observability keeps scoped filters and failure evidence URL-backed', async ({ page }) => {
+test('media observability keeps scoped filters and failure evidence URL-backed', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const harness = await installMediaHarness(page);
   await page.goto('/admin/media-observability');
@@ -81,6 +85,10 @@ test('media observability keeps scoped filters and failure evidence URL-backed',
     hasText: /Advanced workflow and error evidence|高级工作流与错误证据/i,
   });
   await expect(advanced).not.toHaveAttribute('open', '');
+  await testInfo.attach('p4-e03-admin-media-observability', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
 
   harness.failNextRequest();
   await page.getByRole('button', { name: /^Refresh$|^刷新$/i }).click();
@@ -95,12 +103,12 @@ test('media observability keeps scoped filters and failure evidence URL-backed',
 test('media observability exits initial loading with a scoped retry when the API fails', async ({ page }) => {
   await installAdminMocks(page);
   await page.route('**/api/admin/media-observability?*', async (route) => {
-    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'media diagnostics unavailable' }) });
+    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('media diagnostics unavailable')) });
   });
   await page.goto('/admin/media-observability');
 
   await expect(page.getByRole('heading', { name: /Media Processing Observability|媒体处理观测/i })).toBeVisible();
-  await expect(page.locator('[role="alert"]').filter({ hasText: /Failed to load media processing diagnostics|加载媒体处理诊断失败/i })).toBeVisible();
+  await expect(page.locator('[role="alert"]').filter({ hasText: /media diagnostics unavailable|Failed to load media processing diagnostics|加载媒体处理诊断失败/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Retry$|^重试$/i })).toBeVisible();
   await expect(page.locator('[data-ui="media-failure-item"]')).toHaveCount(0);
 });

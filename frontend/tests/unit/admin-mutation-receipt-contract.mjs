@@ -92,9 +92,12 @@ assert.match(
   'AI resources provider writes must render the shared admin mutation receipt'
 );
 
-assert.match(
-  aiResourcesSource,
-  /setLastReceipt\(\(payload\.data\?\.receipt \|\| null\) as AdminMutationReceiptPayload \| null\)/,
+assert.ok(
+  Array.from(
+    aiResourcesSource.matchAll(
+      /setLastReceipt\((?:response\.data\.receipt|result\.receipt) \|\| null\)/g
+    )
+  ).length >= 3,
   'AI resources provider writes must store backend receipts for save, delete, and test operations'
 );
 

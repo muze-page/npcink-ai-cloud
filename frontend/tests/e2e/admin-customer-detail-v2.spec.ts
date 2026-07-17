@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
-import { LONG_ACCOUNT_ID, installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  LONG_ACCOUNT_ID,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 test('customer detail v2 keeps governed commercial and audited credit operations in their task tabs', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -40,13 +44,13 @@ test('customer detail failure preserves the PC shell and bounded retry', async (
     await route.fulfill({
       status: 503,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'error', message: 'customer unavailable' }),
+      body: JSON.stringify(buildAdminApiErrorEnvelope('customer unavailable')),
     });
   });
   await page.goto(`/admin/accounts/${LONG_ACCOUNT_ID}`);
 
   await expect(page.getByRole('heading', { name: /Customer detail is temporarily unavailable|客户详情暂时不可用/i })).toBeVisible();
-  await expect(page.getByRole('alert').filter({ hasText: /Failed to load|加载数据失败/i })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'customer unavailable' })).toBeVisible();
   await page.getByRole('button', { name: /^Retry$|^重试$/i }).click();
   await expect.poll(() => attempts).toBe(2);
   await expect(page).toHaveURL(new RegExp(`/admin/accounts/${LONG_ACCOUNT_ID}$`));

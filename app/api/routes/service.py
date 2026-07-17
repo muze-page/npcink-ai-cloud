@@ -4442,6 +4442,11 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
     )
     return build_envelope(
         status="ok" if result.get("ok") else "error",
+        error_code=(
+            ""
+            if result.get("ok")
+            else str(result.get("error_code") or "provider_connection.test_failed")
+        ),
         message=str(result.get("message") or "provider connection tested"),
         data=_merge_receipt(
             result,

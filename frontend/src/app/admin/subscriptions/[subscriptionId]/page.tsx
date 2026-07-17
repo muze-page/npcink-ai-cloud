@@ -6,11 +6,11 @@ import { useParams } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { localizeAdminCommercialCopy } from '@/lib/admin-commercial-copy';
 import { resolveAdminPackageLabel } from '@/lib/admin-plan-copy';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { normalizeStatusToken, translateStatusLabel } from '@/lib/status-display';
-import { readResponsePayload } from '@/lib/safe-response';
 import {
   BackofficeMetricStrip,
   BackofficeDiagnosticNotice,
@@ -127,6 +127,8 @@ type SubscriptionBillingSnapshotRebuildResult = {
   receipt?: AdminMutationReceiptPayload;
 };
 
+const subscriptionDetailClient = createApiClient({ idempotencyPrefix: 'admin_subscription_detail' });
+
 function SubscriptionDetailContent() {
   const params = useParams();
   const { t } = useLocale();
@@ -147,18 +149,12 @@ function SubscriptionDetailContent() {
       setError(null);
 
       try {
-        const response = await fetch(`/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}`, {
-          credentials: 'include',
-        });
-
-        if (!response.ok) {
-          throw new Error(t('error.failed_load'));
-        }
-
-        const payload = await response.json();
-        setDetail((payload?.data ?? null) as SubscriptionDetailPayload | null);
+        const payload = (await subscriptionDetailClient.request<SubscriptionDetailPayload>(
+          `/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}`
+        )).data;
+        setDetail(payload);
       } catch (err) {
-        setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+        setError(resolveUiErrorMessage(err, t('error.failed_load')));
       } finally {
         setIsLoading(false);
       }
@@ -168,14 +164,10 @@ function SubscriptionDetailContent() {
   }, [loadVersion, subscriptionId, t]);
 
   const reloadDetail = async () => {
-    const response = await fetch(`/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}`, {
-      credentials: 'include',
-    });
-    if (!response.ok) {
-      throw new Error(t('error.failed_load'));
-    }
-    const payload = await response.json();
-    setDetail((payload?.data ?? null) as SubscriptionDetailPayload | null);
+    const payload = (await subscriptionDetailClient.request<SubscriptionDetailPayload>(
+      `/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}`
+    )).data;
+    setDetail(payload);
   };
 
   const normalized = useMemo(() => {
@@ -341,20 +333,13 @@ function SubscriptionDetailContent() {
     setSnapshotRefreshError(null);
     setIsSnapshotRefreshSaving(true);
     try {
-      const response = await fetch(
+      const data = (await subscriptionDetailClient.request<SubscriptionBillingSnapshotRebuildResult>(
         `/api/admin/subscriptions/${encodeURIComponent(normalized.subscriptionId)}/billing-snapshots/rebuild`,
         {
           method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
+          body: {},
         }
-      );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload?.message ?? null, t('error.failed_save', {}, 'Failed to save.')));
-      }
-      const data = (payload?.data || {}) as SubscriptionBillingSnapshotRebuildResult;
+      )).data;
       setLastReceipt(data.receipt || null);
       toast.success(
         t(
@@ -367,7 +352,7 @@ function SubscriptionDetailContent() {
       await reloadDetail();
     } catch (err) {
       setSnapshotRefreshError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save', {}, 'Failed to save.'))
+        resolveUiErrorMessage(err, t('error.failed_save', {}, 'Failed to save.'))
       );
     } finally {
       setIsSnapshotRefreshSaving(false);

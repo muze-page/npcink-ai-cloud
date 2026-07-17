@@ -68,14 +68,14 @@ assert.match(
 
 assert.match(
   source,
-  /async function readBackendPayload\(response: Response\)/,
-  'service settings page must parse backend responses through a safe helper'
+  /createApiClient[\s\S]*serviceSettingsClient\.request<ServiceSettingsData>/,
+  'service settings page must parse backend responses through the shared strict client'
 );
 
 assert.match(
   source,
-  /contentType\.includes\('application\/json'\)/,
-  'safe response helper must inspect content-type before JSON parsing'
+  /function serviceSettingsRequestErrorMessage[\s\S]*error instanceof ApiError/,
+  'service settings page must preserve structured backend error handling'
 );
 
 assert.doesNotMatch(

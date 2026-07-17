@@ -14,7 +14,7 @@ const proxySource = readFileSync(proxyPath, 'utf8');
 
 assert.match(
   pageSource,
-  /fetch\(`\/api\/admin\/portal-users\?\$\{requestKey\}`/,
+  /createApiClient[\s\S]*`\/api\/admin\/portal-users\?\$\{requestKey\}`/,
   'portal users page must load users through the admin proxy'
 );
 

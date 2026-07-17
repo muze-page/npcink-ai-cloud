@@ -43,7 +43,7 @@ assert.match(
 );
 assert.match(
   layoutSource,
-  /fetch\('\/admin\/session'[\s\S]*response\.ok[\s\S]*setAdminSessionReady\(true\)[\s\S]*window\.location\.replace\(`\/admin\/login\?redirect=/,
+  /createApiClient[\s\S]*\.request\('\/admin\/session'\)[\s\S]*setAdminSessionReady\(true\)[\s\S]*window\.location\.replace\(`\/admin\/login\?redirect=/,
   'Admin layout must validate the session before showing protected navigation'
 );
 assert.match(

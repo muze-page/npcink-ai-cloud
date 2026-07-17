@@ -9,8 +9,11 @@ import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusB
 import { BackofficeTag, type BackofficeTagTone } from '@/components/backoffice/BackofficeTag';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { formatDate, formatNumber } from '@/lib/utils';
+
+const agentFeedbackClient = createApiClient({ idempotencyPrefix: 'agent_feedback' });
 
 type CountMap = Record<string, number>;
 
@@ -299,17 +302,11 @@ function AgentFeedbackQualityDashboard() {
       if (siteIdFilter.trim()) {
         params.set('site_id', siteIdFilter.trim());
       }
-      const response = await fetch(`/api/admin/agent-feedback?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
+      const response = await agentFeedbackClient.request<unknown>(`/api/admin/agent-feedback?${params.toString()}`, {
         signal: controller.signal,
       });
-      const payload = await response.json();
-      if (!response.ok || payload?.status === 'error') {
-        throw payload;
-      }
       if (sequence === requestSequenceRef.current) {
-        setData(normalizeAgentFeedbackSummary(payload?.data ?? {}));
+        setData(normalizeAgentFeedbackSummary(response.data));
         hasLoadedRef.current = true;
       }
     } catch (err) {

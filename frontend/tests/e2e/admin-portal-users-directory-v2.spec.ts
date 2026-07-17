@@ -1,5 +1,9 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 type PortalUserFixture = {
   principal_id: string;
@@ -54,7 +58,11 @@ async function installPortalUsersMocks(page: Page) {
     requestCount += 1;
     if (failNext) {
       failNext = false;
-      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary user directory failure' }) });
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify(buildAdminApiErrorEnvelope('temporary user directory failure')),
+      });
       return;
     }
     const url = new URL(route.request().url());
@@ -66,7 +74,21 @@ async function installPortalUsersMocks(page: Page) {
       const searchable = [user.email, user.principal_id, user.account_name, user.site_name, user.site_url].join(' ').toLowerCase();
       return (!q || searchable.includes(q)) && (!status || user.status === status) && (!packageAlias || user.package_alias.toLowerCase().includes(packageAlias)) && (qqBound === null || user.qq_bound === (qqBound === 'true'));
     });
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { items, total: items.length, summary: { active: users.filter((user) => user.status === 'active').length, disabled: users.filter((user) => user.status === 'disabled').length, qq_bound: users.filter((user) => user.qq_bound).length, self_registered: users.length }, pagination: { offset: 0, limit: 25, total: items.length, has_more: false } } }) });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildAdminApiEnvelope({
+        items,
+        total: items.length,
+        summary: {
+          active: users.filter((user) => user.status === 'active').length,
+          disabled: users.filter((user) => user.status === 'disabled').length,
+          qq_bound: users.filter((user) => user.qq_bound).length,
+          self_registered: users.length,
+        },
+        pagination: { offset: 0, limit: 25, total: items.length, has_more: false },
+      })),
+    });
   });
 
   await page.route('**/api/admin/portal-users/*/disable', async (route: Route) => {
@@ -77,12 +99,54 @@ async function installPortalUsersMocks(page: Page) {
     const principalId = decodeURIComponent(route.request().url().split('/').at(-2) || '');
     users = users.map((user) => user.principal_id === principalId ? { ...user, status: 'disabled', membership_status: 'revoked', qq_bound: false, qq_binding_count: 0, session_version: user.session_version + 1 } : user);
     const updated = users.find((user) => user.principal_id === principalId)!;
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { status: 'disabled', session_version: updated.session_version, receipt: { audit_event_id: 901, event_kind: 'portal_user.disable', scope_kind: 'principal', scope_id: principalId, outcome: 'succeeded', effective_summary: 'Portal access disabled.', audit_filters: { principal_id: principalId } } } }) });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildAdminApiEnvelope({
+        status: 'disabled',
+        session_version: updated.session_version,
+        receipt: {
+          audit_event_id: 901,
+          event_kind: 'portal_user.disable',
+          scope_kind: 'principal',
+          scope_id: principalId,
+          outcome: 'succeeded',
+          effective_summary: 'Portal access disabled.',
+          audit_filters: { principal_id: principalId },
+        },
+      })),
+    });
   });
 
   await page.route('**/api/admin/portal-users/*/audit?*', async (route) => {
     const principalId = decodeURIComponent(route.request().url().split('/').at(-2) || '');
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { principal: { principal_id: principalId, email: users.find((user) => user.principal_id === principalId)?.email, status: 'active', session_version: 2 }, summary: { events: 2, succeeded: 2, failed: 0, registration_events: 1, disable_events: 0 }, items: [{ event_id: 11, event_kind: 'portal.registration', outcome: 'succeeded', actor_kind: 'principal', actor_ref: principalId, method: 'POST', path: '/portal/v1/register', trace_id: 'trace-11', idempotency_key: 'idem-11', scope_kind: 'principal', scope_id: principalId, created_at: '2026-07-08T08:00:00Z' }] } }) });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(buildAdminApiEnvelope({
+        principal: {
+          principal_id: principalId,
+          email: users.find((user) => user.principal_id === principalId)?.email,
+          status: 'active',
+          session_version: 2,
+        },
+        summary: { events: 2, succeeded: 2, failed: 0, registration_events: 1, disable_events: 0 },
+        items: [{
+          event_id: 11,
+          event_kind: 'portal.registration',
+          outcome: 'succeeded',
+          actor_kind: 'principal',
+          actor_ref: principalId,
+          method: 'POST',
+          path: '/portal/v1/register',
+          trace_id: 'trace-11',
+          idempotency_key: 'idem-11',
+          scope_kind: 'principal',
+          scope_id: principalId,
+          created_at: '2026-07-08T08:00:00Z',
+        }],
+      })),
+    });
   });
 
   return { getRequestCount: () => requestCount, failNextRequest: () => { failNext = true; } };

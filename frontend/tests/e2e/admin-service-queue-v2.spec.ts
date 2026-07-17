@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import { buildAdminApiErrorEnvelope, installAdminMocks } from './helpers/admin-operator-fixture';
 
 test('service risk queue keeps filters and inspector focus in the URL on PC', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -41,11 +41,13 @@ test('service risk queue keeps filters and inspector focus in the URL on PC', as
     await route.fulfill({
       status: 503,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'error', message: 'temporary queue refresh failure' }),
+      body: JSON.stringify(buildAdminApiErrorEnvelope('temporary queue refresh failure')),
     });
   });
   await page.getByRole('button', { name: /Refresh queue|刷新队列/i }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(
+    page.getByRole('alert').filter({ hasText: /temporary queue refresh failure/i })
+  ).toBeVisible();
   await expect(page.locator('[data-ui="coverage-queue-item"]')).toHaveCount(1);
   await expect(page.getByLabel(/^Search$|^搜索$/i)).toHaveValue('Uncovered');
 

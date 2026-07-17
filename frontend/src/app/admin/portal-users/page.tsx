@@ -19,6 +19,7 @@ import { ListPagination } from '@/components/ui/ListPagination';
 import { ConfirmModal, Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
 
@@ -143,6 +144,11 @@ type PortalUserSort = 'access_risk' | 'recent_login' | 'recent_registration';
 type PortalUserRisk = 'access_issue' | 'onboarding' | 'active' | 'disabled';
 
 type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
+const portalUsersClient = createApiClient({
+  cache: 'default',
+  idempotencyPrefix: 'admin_portal_users',
+});
 
 function sourceLabel(source: string, t: Translator): string {
   if (source === 'portal_self_registration') {
@@ -324,13 +330,11 @@ function PortalUsersContent() {
     else setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/admin/portal-users?${requestKey}`, { credentials: 'include', cache: 'no-store' });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('admin.portal_users.load_failed', {}, 'Failed to load Portal users.'));
-      }
+      const data = (await portalUsersClient.request<PortalUsersResponse>(
+        `/api/admin/portal-users?${requestKey}`,
+        { cache: 'no-store' }
+      )).data;
       if (sequence !== requestSequenceRef.current) return;
-      const data = (payload.data || {}) as PortalUsersResponse;
       setUsers(Array.isArray(data.items) ? data.items : []);
       setSummary(data.summary || {});
       setTotal(Number(data.total || 0));
@@ -344,7 +348,7 @@ function PortalUsersContent() {
       });
     } catch (err) {
       if (sequence !== requestSequenceRef.current) return;
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('admin.portal_users.load_failed', {}, 'Failed to load Portal users.')));
+      setError(resolveUiErrorMessage(err, t('admin.portal_users.load_failed', {}, 'Failed to load Portal users.')));
     } finally {
       if (sequence === requestSequenceRef.current) {
         activeRequestKeyRef.current = '';
@@ -415,20 +419,13 @@ function PortalUsersContent() {
     setActionError(null);
     setLastReceipt(null);
     try {
-      const response = await fetch(
+      const data = (await portalUsersClient.request<PortalUserDisableResult>(
         `/api/admin/portal-users/${encodeURIComponent(user.principal_id)}/disable`,
         {
           method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: disableReason.trim() }),
+          body: { reason: disableReason.trim() },
         }
-      );
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('admin.portal_users.disable_failed', {}, 'Failed to disable user.'));
-      }
-      const data = (payload.data || {}) as PortalUserDisableResult;
+      )).data;
       setUsers((current) =>
         current.map((item) =>
           item.principal_id === user.principal_id
@@ -452,7 +449,7 @@ function PortalUsersContent() {
       setDisableReason('');
       void loadUsers(true);
     } catch (err) {
-      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('admin.portal_users.disable_failed', {}, 'Failed to disable user.')));
+      setActionError(resolveUiErrorMessage(err, t('admin.portal_users.disable_failed', {}, 'Failed to disable user.')));
     } finally {
       setSavingPrincipalId(null);
     }
@@ -464,17 +461,12 @@ function PortalUsersContent() {
     setAuditError(null);
     setAuditLoading(true);
     try {
-      const response = await fetch(
-        `/api/admin/portal-users/${encodeURIComponent(user.principal_id)}/audit?limit=50`,
-        { credentials: 'include' }
-      );
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('admin.portal_users.audit_load_failed', {}, 'Failed to load user audit.'));
-      }
-      setAuditDetail((payload.data || {}) as PortalUserAuditDetail);
+      const data = (await portalUsersClient.request<PortalUserAuditDetail>(
+        `/api/admin/portal-users/${encodeURIComponent(user.principal_id)}/audit?limit=50`
+      )).data;
+      setAuditDetail(data);
     } catch (err) {
-      setAuditError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('admin.portal_users.audit_load_failed', {}, 'Failed to load user audit.')));
+      setAuditError(resolveUiErrorMessage(err, t('admin.portal_users.audit_load_failed', {}, 'Failed to load user audit.')));
     } finally {
       setAuditLoading(false);
     }
@@ -510,20 +502,16 @@ function PortalUsersContent() {
     setActionError(null);
     setLastReceipt(null);
     try {
-      const response = await fetch('/api/admin/portal-users/batch-disable', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          principal_ids: principalIds,
-          reason,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('admin.portal_users.batch_disable_failed', {}, 'Batch disable failed.'));
-      }
-      const data = (payload.data || {}) as BatchDisableResult;
+      const data = (await portalUsersClient.request<BatchDisableResult>(
+        '/api/admin/portal-users/batch-disable',
+        {
+          method: 'POST',
+          body: {
+            principal_ids: principalIds,
+            reason,
+          },
+        }
+      )).data;
       const disabledIds = new Set(
         (data.items || [])
           .filter((item) => item.outcome === 'disabled' || item.outcome === 'already_disabled')
@@ -555,7 +543,7 @@ function PortalUsersContent() {
       );
       void loadUsers(true);
     } catch (err) {
-      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('admin.portal_users.batch_disable_failed', {}, 'Batch disable failed.')));
+      setActionError(resolveUiErrorMessage(err, t('admin.portal_users.batch_disable_failed', {}, 'Batch disable failed.')));
     } finally {
       setBatchSaving(false);
     }

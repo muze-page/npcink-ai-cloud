@@ -1,5 +1,11 @@
 import { expect, test, type Locator } from '@playwright/test';
-import { FREE_PLAN_ID, LONG_ACCOUNT_ID, LONG_PLAN_ID, installAdminMocks } from './helpers/admin-operator-fixture';
+import {
+  buildAdminApiErrorEnvelope,
+  FREE_PLAN_ID,
+  LONG_ACCOUNT_ID,
+  LONG_PLAN_ID,
+  installAdminMocks,
+} from './helpers/admin-operator-fixture';
 
 test('admin login validates the session before redirecting or showing the token form', async ({ page }) => {
   await installAdminMocks(page);
@@ -14,11 +20,12 @@ test('an invalid admin cookie does not expose navigation or trap the login page'
     await route.fulfill({
       status: 401,
       contentType: 'application/json',
-      body: JSON.stringify({
-        status: 'error',
-        error_code: 'auth.admin_session_invalid',
-        message: 'admin session is invalid',
-      }),
+      body: JSON.stringify(
+        buildAdminApiErrorEnvelope(
+          'admin session is invalid',
+          'auth.admin_session_invalid'
+        )
+      ),
     });
   });
   await page.goto('/admin/login');

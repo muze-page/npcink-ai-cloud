@@ -26,6 +26,9 @@ assert.match(
 assert.match(overview, /BackofficeDiagnosticNotice/, 'overview loading failure must remain scoped and retryable');
 assert.match(overview, /BackofficeLayer[\s\S]*admin\.home_loading_desc/, 'overview loading state must preserve its route shell');
 assert.match(overview, /setTimeout\(\(\) => controller\.abort\(\), 12000\)/, 'overview request must not remain loading indefinitely');
+assert.match(overview, /createApiClient\(\{ idempotencyPrefix: 'admin_overview' \}\)/, 'overview must use the shared strict ApiClient');
+assert.doesNotMatch(overview, /\bfetch\s*\(/, 'overview must not bypass the shared strict ApiClient');
+assert.doesNotMatch(overview, /platformCreditSummary|platform_credit_summary/, 'overview must not load deep platform credit detail');
 assert.match(overview, /overviewRuntimeAlertTitle\(overview\.runtimeTelemetry\.alerts\[0\], t\)/, 'overview watch items must localize known runtime alerts');
 assert.match(overview, /overviewRuntimeAlertSummary\(alert, t\)/, 'overview evidence must localize known runtime summaries');
 

@@ -25,8 +25,11 @@ import {
   type CloudWorkflowMetadata,
 } from '@/components/backoffice/CloudWorkflowMetadataPanel';
 import { AnalyticsBarChart, AnalyticsLineChart } from '@/components/ui/EChartsWrapper';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { formatDate, formatNumber } from '@/lib/utils';
+
+const mediaObservabilityClient = createApiClient({ idempotencyPrefix: 'media_observability' });
 
 type MediaObservabilityData = {
   generatedAt: string;
@@ -325,17 +328,11 @@ function AdminMediaObservabilityContent() {
       if (targetFormat) {
         params.set('target_format', targetFormat);
       }
-      const response = await fetch(`/api/admin/media-observability?${params.toString()}`, {
-        credentials: 'include',
-        cache: 'no-store',
+      const response = await mediaObservabilityClient.request<unknown>(`/api/admin/media-observability?${params.toString()}`, {
         signal: controller.signal,
       });
-      const payload = await response.json();
-      if (!response.ok || payload?.status === 'error') {
-        throw payload;
-      }
       if (sequence !== requestSequenceRef.current) return;
-      setData(normalizeMediaObservability(payload?.data ?? {}));
+      setData(normalizeMediaObservability(response.data));
       hasLoadedRef.current = true;
     } catch (err) {
       if (sequence !== requestSequenceRef.current) return;

@@ -1471,7 +1471,7 @@ async function installPortalMocks(
 
 test('portal workspace interaction path: account overview to site detail and service pages', async ({
   page,
-}) => {
+}, testInfo) => {
   await installPortalMocks(page);
 
   await page.goto('/portal');
@@ -1501,11 +1501,19 @@ test('portal workspace interaction path: account overview to site detail and ser
   const sitesWorkspace = page.locator('[data-portal-home="sites-workspace"]');
   await expect(sitesWorkspace.getByText(/^1 (?:Needs attention|需要关注)$/i)).toBeVisible();
   await expect(sitesWorkspace.getByText(/^Needs attention$|^需要关注$/i)).toHaveCount(1);
+  await testInfo.attach('p4-e03-portal-service-home', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
 
   await expect(page.locator('a[href="/portal/sites/site_attention#service-status"]').first()).toBeVisible();
   await page.goto('/portal/sites/site_attention');
   await expect(page).toHaveURL(/\/portal\/sites\/site_attention$/);
   await expect(page.getByRole('heading', { level: 1, name: /attention site/i })).toBeVisible();
+  await testInfo.attach('p4-e03-portal-site-health', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
 
   await page.goto('/portal/usage');
   await expect(page.getByRole('heading', { level: 1, name: /^Usage$|^用量$/i })).toBeVisible();
@@ -1523,6 +1531,10 @@ test('portal workspace interaction path: account overview to site detail and ser
   await expect(trendPanel.getByRole('tab', { name: /24 hours|最近 24 小时/i })).toHaveAttribute('aria-selected', 'true');
   await expect(trendPanel.locator('[data-trend-window="24h"]')).toHaveAttribute('data-trend-points', '24');
   await expect(trendPanel.getByText(/24 points used|共使用 24 点/i)).toBeVisible();
+  await testInfo.attach('p4-e03-portal-usage', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
   for (const range of [
     { name: /1 hour|最近 1 小时/i, value: '1h', points: '12' },
     { name: /7 days|最近 7 天/i, value: '7d', points: '7' },
@@ -1559,6 +1571,10 @@ test('portal workspace interaction path: account overview to site detail and ser
 
   await page.goto('/portal/billing');
   await expect(page.getByRole('heading', { level: 1, name: /Package|套餐/i })).toBeVisible();
+  await testInfo.attach('p4-e03-portal-package-entitlement', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
   await expect(page.getByRole('link', { name: /Submit ticket|提交工单|提交工單/i })).toHaveCount(0);
   await page.getByRole('button', { name: /Upgrade package|升级套餐/i }).click();
   const packageDialog = page.getByRole('dialog', { name: /Choose a package|选择套餐/i });

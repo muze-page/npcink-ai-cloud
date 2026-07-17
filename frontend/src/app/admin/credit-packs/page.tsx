@@ -15,9 +15,9 @@ import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { ADMIN_CURRENCY } from '@/lib/currency';
 import { resolveUiErrorMessage } from '@/lib/errors';
-import { readResponsePayload } from '@/lib/safe-response';
 import { cn, formatDate, formatNumber } from '@/lib/utils';
 
 type CreditPackItem = {
@@ -43,6 +43,7 @@ type CreditPackCatalogPayload = {
 type PackStatusFilter = 'all' | 'active' | 'inactive';
 
 const MANAGED_TIERS = ['free', 'plus', 'pro', 'agency'] as const;
+const creditPacksClient = createApiClient({ idempotencyPrefix: 'admin_credit_packs' });
 
 function normalizeItem(item: CreditPackItem): CreditPackItem {
   return {
@@ -68,20 +69,15 @@ function formatPackAmount(item: CreditPackItem): string {
   }).format(item.amount);
 }
 
-async function fetchCatalog(): Promise<Response> {
-  return fetch('/api/admin/credit-packs', {
-    credentials: 'include',
-    cache: 'no-store',
-  });
+async function fetchCatalog(): Promise<CreditPackCatalogPayload> {
+  return (await creditPacksClient.request<CreditPackCatalogPayload>('/api/admin/credit-packs')).data;
 }
 
-async function saveCatalog(items: CreditPackItem[]): Promise<Response> {
-  return fetch('/api/admin/credit-packs', {
+async function saveCatalog(items: CreditPackItem[]): Promise<CreditPackCatalogPayload> {
+  return (await creditPacksClient.request<CreditPackCatalogPayload>('/api/admin/credit-packs', {
     method: 'PATCH',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items }),
-  });
+    body: { items },
+  })).data;
 }
 
 export default function AdminCreditPacksPage() {
@@ -122,19 +118,15 @@ export default function AdminCreditPacksPage() {
     else setIsLoading(true);
     setError(null);
     try {
-      const response = await fetchCatalog();
-      const payload = await readResponsePayload<{ data?: CreditPackCatalogPayload; message?: string }>(response);
-      if (!response.ok || !('data' in payload) || !payload.data) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_load')));
-      }
+      const payload = await fetchCatalog();
       if (sequence !== requestSequenceRef.current) return;
-      setCatalog(payload.data);
-      setItems((payload.data.items || []).map(normalizeItem));
+      setCatalog(payload);
+      setItems((payload.items || []).map(normalizeItem));
       setLoadedAt(new Date());
       hasLoadedRef.current = true;
     } catch (err) {
       if (sequence !== requestSequenceRef.current) return;
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+      setError(resolveUiErrorMessage(err, t('error.failed_load')));
     } finally {
       if (sequence === requestSequenceRef.current) {
         requestActiveRef.current = false;
@@ -183,13 +175,9 @@ export default function AdminCreditPacksPage() {
     setError(null);
     try {
       const nextItems = items.map((item) => item.pack_id === draft.pack_id ? normalizeItem(draft) : normalizeItem(item));
-      const response = await saveCatalog(nextItems);
-      const payload = await readResponsePayload<{ data?: CreditPackCatalogPayload; message?: string }>(response);
-      if (!response.ok || !('data' in payload) || !payload.data) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_save')));
-      }
-      setCatalog(payload.data);
-      setItems((payload.data.items || []).map(normalizeItem));
+      const payload = await saveCatalog(nextItems);
+      setCatalog(payload);
+      setItems((payload.items || []).map(normalizeItem));
       setLoadedAt(new Date());
       setDraft(null);
       toast.success(
@@ -197,7 +185,7 @@ export default function AdminCreditPacksPage() {
         t('admin.credit_packs_saved_title', {}, 'Credit pack updated')
       );
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+      setError(resolveUiErrorMessage(err, t('error.failed_save')));
     } finally {
       setIsSaving(false);
     }

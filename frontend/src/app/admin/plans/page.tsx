@@ -24,10 +24,10 @@ import {
   localizeTierLabel,
   localizeUsageBand,
 } from '@/lib/admin-plan-copy';
+import { createApiClient } from '@/lib/api-client';
 import { ADMIN_CURRENCY } from '@/lib/currency';
-import { readResponsePayload } from '@/lib/safe-response';
 import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
-import { resolveUiErrorMessage } from '@/lib/errors';
+import { ApiError, resolveUiErrorMessage } from '@/lib/errors';
 
 type PlanVersionRecord = {
   plan_version_id: string;
@@ -87,11 +87,17 @@ type CanonicalTierCoverageItem = {
   isPresent: boolean;
 };
 
+type PlanCatalogPayload = {
+  items?: PlanListItem[];
+  tier_templates?: TierSummary[];
+};
+
 const PLAN_CATALOG_LOAD_TIMEOUT_MS = 10_000;
 type PlanCatalogState = 'missing' | 'unpublished' | 'ready';
 type PlanCatalogSort = 'attention' | 'tier' | 'subscriptions';
 const PLAN_SORTS = new Set<PlanCatalogSort>(['attention', 'tier', 'subscriptions']);
 const TIER_ORDER = new Map([['free', 0], ['plus', 1], ['pro', 2], ['agency', 3]]);
+const plansClient = createApiClient({ idempotencyPrefix: 'admin_plans' });
 
 function normalizePlanSort(value: string | null): PlanCatalogSort {
   return value && PLAN_SORTS.has(value as PlanCatalogSort) ? (value as PlanCatalogSort) : 'attention';
@@ -138,14 +144,13 @@ function latestMetadataValue(
   return numericValue(metadata[key] ?? fallback);
 }
 
-async function fetchPlanCatalog(): Promise<Response> {
+async function fetchPlanCatalog(): Promise<PlanCatalogPayload> {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), PLAN_CATALOG_LOAD_TIMEOUT_MS);
   try {
-    return await fetch('/api/admin/plans', {
-      credentials: 'include',
+    return (await plansClient.request<PlanCatalogPayload>('/api/admin/plans', {
       signal: controller.signal,
-    });
+    })).data;
   } finally {
     window.clearTimeout(timeoutId);
   }
@@ -215,23 +220,22 @@ function PlansContent() {
     else setIsLoading(true);
     setError(null);
     try {
-      const response = await fetchPlanCatalog();
-      const payload = await readResponsePayload<{ data?: { items?: PlanListItem[]; tier_templates?: TierSummary[] }; message?: string }>(response);
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_load')));
-      }
+      const payload = await fetchPlanCatalog();
       if (sequence !== requestSequenceRef.current) return;
-      setPlans((('data' in payload ? payload.data?.items : []) || []) as PlanListItem[]);
-      setTierTemplates((('data' in payload ? payload.data?.tier_templates : []) || []) as TierSummary[]);
+      setPlans(payload.items || []);
+      setTierTemplates(payload.tier_templates || []);
       setLoadedAt(new Date());
       hasLoadedRef.current = true;
     } catch (err) {
       if (sequence !== requestSequenceRef.current) return;
-      const isAbort = err instanceof DOMException && err.name === 'AbortError';
+      const isAbort =
+        err instanceof ApiError &&
+        err.cause instanceof DOMException &&
+        err.cause.name === 'AbortError';
       setError(
         isAbort
           ? t('admin.plans.load_timeout', {}, 'Package catalog did not finish loading. Retry, then check the admin plans endpoint if it repeats.')
-          : resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load'))
+          : resolveUiErrorMessage(err, t('error.failed_load'))
       );
     } finally {
       if (sequence === requestSequenceRef.current) {
@@ -255,16 +259,10 @@ function PlansContent() {
     setIsSaving(true);
     setError(null);
     try {
-      const response = await fetch('/api/admin/plans', {
+      await plansClient.request<Record<string, unknown>>('/api/admin/plans', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: form,
       });
-      const payload = await readResponsePayload<{ message?: string }>(response);
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_save', {}, 'Failed to save.')));
-      }
       toast.success(
         t('admin.plan_saved_notice', {}, 'Plan saved. Publish a plan version next to make it selectable for subscriptions.'),
         t('admin.plans.plan_saved_title', {}, 'Package record saved')
@@ -273,7 +271,7 @@ function PlansContent() {
       await loadPlans(true);
     } catch (err) {
       setError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save', {}, 'Failed to save.'))
+        resolveUiErrorMessage(err, t('error.failed_save', {}, 'Failed to save.'))
       );
     } finally {
       setIsSaving(false);
@@ -296,30 +294,20 @@ function PlansContent() {
         source: 'canonical_package_shell_v1',
       };
 
-      const planResponse = await fetch('/api/admin/plans', {
+      await plansClient.request<Record<string, unknown>>('/api/admin/plans', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           plan_id: shell.tier_id,
           name: localizedAlias,
           status: 'active',
           description: localizedPositioning,
           metadata,
-        }),
+        },
       });
-      const planPayload = await readResponsePayload<{ message?: string }>(planResponse);
-      if (!planResponse.ok) {
-        throw new Error(
-          resolveUiErrorMessage('message' in planPayload ? planPayload.message : null, t('error.failed_save', {}, 'Failed to save.'))
-        );
-      }
 
-      const versionResponse = await fetch(`/api/admin/plans/${encodeURIComponent(shell.tier_id)}/versions`, {
+      await plansClient.request<Record<string, unknown>>(`/api/admin/plans/${encodeURIComponent(shell.tier_id)}/versions`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           plan_version_id: `${shell.tier_id}_v1`,
           version_label: 'v1',
           status: 'published',
@@ -342,14 +330,8 @@ function PlansContent() {
             package_operator_note: localizedOperatorNote,
             baseline_version: 'v1',
           },
-        }),
+        },
       });
-      const versionPayload = await readResponsePayload<{ message?: string }>(versionResponse);
-      if (!versionResponse.ok) {
-        throw new Error(
-          resolveUiErrorMessage('message' in versionPayload ? versionPayload.message : null, t('error.failed_save', {}, 'Failed to save.'))
-        );
-      }
 
       toast.success(
         t(
@@ -362,7 +344,7 @@ function PlansContent() {
       await loadPlans(true);
     } catch (err) {
       setError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save', {}, 'Failed to save.'))
+        resolveUiErrorMessage(err, t('error.failed_save', {}, 'Failed to save.'))
       );
     } finally {
       setIsBootstrapping(false);

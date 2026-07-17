@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import { buildAdminApiErrorEnvelope, installAdminMocks } from './helpers/admin-operator-fixture';
 
 async function installPlanDirectoryHarness(page: Page) {
   await installAdminMocks(page);
@@ -13,7 +13,7 @@ async function installPlanDirectoryHarness(page: Page) {
     requestCount += 1;
     if (failNext) {
       failNext = false;
-      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary package catalog failure' }) });
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('temporary package catalog failure')) });
       return;
     }
     await route.fallback();

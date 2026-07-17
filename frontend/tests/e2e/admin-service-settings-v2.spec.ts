@@ -1,4 +1,8 @@
 import { expect, test } from '@playwright/test';
+import {
+  buildAdminApiEnvelope,
+  buildAdminApiErrorEnvelope,
+} from './helpers/admin-operator-fixture';
 
 const BASE_URL =
   process.env.NPCINK_CLOUD_FRONTEND_BASE_URL ||
@@ -36,7 +40,10 @@ test('service settings v2 preserves dirty input, guards navigation, validates, s
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ principal_id: 'platform:operator-e2e', identity_type: 'platform_admin' }),
+      body: JSON.stringify(buildAdminApiEnvelope({
+        principal_id: 'platform:operator-e2e',
+        identity_type: 'platform_admin',
+      })),
     });
   });
   await page.route('**/api/admin/service-settings**', async (route) => {
@@ -46,34 +53,31 @@ test('service settings v2 preserves dirty input, guards navigation, validates, s
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          status: 'ok',
-          data: {
-            settings: {
-              portal_public: setting('portal_public', 'ready', { public_base_url: publicBaseUrl }),
-              qq_login: setting('portal_qq_login', 'disabled', { client_id: '', redirect_uri: '' }, {
-                client_secret: { configured: false, display: '' },
-              }),
-              portal_email: setting('portal_email', 'ready', {
-                smtp_host: 'smtp.example.test',
-                smtp_port: 465,
-                smtp_username: 'mail@example.test',
-                smtp_use_ssl: true,
-                smtp_use_starttls: false,
-                smtp_timeout_seconds: 20,
-                from_email: 'mail@example.test',
-                from_name: 'Npcink AI Cloud',
-                reply_to: '',
-              }, { smtp_password: { configured: true, display: '••••••••' } }),
-              alipay_payment: setting('payment_alipay', 'disabled', {
-                app_id: '', notify_url: '', return_url: '',
-              }, {
-                private_key: { configured: false, display: '' },
-                public_key: { configured: false, display: '' },
-              }),
-            },
+        body: JSON.stringify(buildAdminApiEnvelope({
+          settings: {
+            portal_public: setting('portal_public', 'ready', { public_base_url: publicBaseUrl }),
+            qq_login: setting('portal_qq_login', 'disabled', { client_id: '', redirect_uri: '' }, {
+              client_secret: { configured: false, display: '' },
+            }),
+            portal_email: setting('portal_email', 'ready', {
+              smtp_host: 'smtp.example.test',
+              smtp_port: 465,
+              smtp_username: 'mail@example.test',
+              smtp_use_ssl: true,
+              smtp_use_starttls: false,
+              smtp_timeout_seconds: 20,
+              from_email: 'mail@example.test',
+              from_name: 'Npcink AI Cloud',
+              reply_to: '',
+            }, { smtp_password: { configured: true, display: '••••••••' } }),
+            alipay_payment: setting('payment_alipay', 'disabled', {
+              app_id: '', notify_url: '', return_url: '',
+            }, {
+              private_key: { configured: false, display: '' },
+              public_key: { configured: false, display: '' },
+            }),
           },
-        }),
+        })),
       });
       return;
     }
@@ -83,7 +87,7 @@ test('service settings v2 preserves dirty input, guards navigation, validates, s
         await route.fulfill({
           status: 503,
           contentType: 'application/json',
-          body: JSON.stringify({ status: 'error', message: 'temporary service settings failure' }),
+          body: JSON.stringify(buildAdminApiErrorEnvelope('temporary service settings failure')),
         });
         return;
       }
@@ -92,11 +96,11 @@ test('service settings v2 preserves dirty input, guards navigation, validates, s
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ status: 'ok', data: setting('portal_public', 'ready', { public_base_url: publicBaseUrl }) }),
+        body: JSON.stringify(buildAdminApiEnvelope(setting('portal_public', 'ready', { public_base_url: publicBaseUrl }))),
       });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: {} }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(buildAdminApiEnvelope({})) });
   });
 
   await page.goto('/admin/service-settings');
@@ -209,7 +213,10 @@ test('service settings initial failure preserves the PC shell and bounded retry'
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ principal_id: 'platform:operator-e2e', identity_type: 'platform_admin' }),
+      body: JSON.stringify(buildAdminApiEnvelope({
+        principal_id: 'platform:operator-e2e',
+        identity_type: 'platform_admin',
+      })),
     });
   });
   await page.route('**/api/admin/service-settings', async (route) => {
@@ -217,7 +224,7 @@ test('service settings initial failure preserves the PC shell and bounded retry'
     await route.fulfill({
       status: 503,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'error', message: 'service settings unavailable' }),
+      body: JSON.stringify(buildAdminApiErrorEnvelope('service settings unavailable')),
     });
   });
 

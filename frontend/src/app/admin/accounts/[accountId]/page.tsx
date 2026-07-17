@@ -29,9 +29,10 @@ import {
   type PackageKind,
 } from '@/lib/customer-package-display';
 import { localizePackageAlias } from '@/lib/admin-plan-copy';
+import { createApiClient } from '@/lib/api-client';
 import { formatAdminCurrency } from '@/lib/currency';
 import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
-import { resolveUiErrorMessage } from '@/lib/errors';
+import { ApiError, resolveUiErrorMessage } from '@/lib/errors';
 import { translateStatusLabel } from '@/lib/status-display';
 
 interface AccountDetail {
@@ -262,6 +263,61 @@ type AccountCreditLedger = {
   items: AccountCreditLedgerEntry[];
 };
 
+type AccountDetailApiPayload = {
+  account?: {
+    account_id?: string;
+    name?: string;
+    status?: string;
+    metadata?: Record<string, unknown>;
+    created_at?: string;
+  };
+  sites?: Array<{ site_id?: string; status?: string; name?: string }>;
+  subscriptions?: Array<
+    { subscription?: Record<string, unknown> } | Record<string, unknown>
+  >;
+};
+
+type SiteRuntimeApiPayload = {
+  usage_summary?: {
+    cost_estimate?: number;
+    tokens_total?: number;
+  };
+  runtime_summary?: {
+    total_runs?: number;
+    failed_runs?: number;
+    last_run_at?: string | null;
+  };
+  commercial_policy?: {
+    usage_totals?: {
+      cost_usd?: number;
+      tokens_total?: number;
+      provider_calls?: number;
+    };
+    budget_state?: Record<string, BudgetStateMetric>;
+    entitlement_snapshot?: { site_limit?: number };
+  };
+  coverage?: {
+    site_limit?: number;
+    subscription_status?: string;
+    coverage_state?: string;
+    display_package_label?: string;
+  };
+  site_keys?: Array<{ status?: string }>;
+  subscription?: { status?: string };
+};
+
+type AccountQuotaSummaryPayload = Omit<Partial<AccountQuotaSummary>, 'credit'> & {
+  credit?: AccountQuotaMetric;
+};
+
+type AccountCreditLedgerPayload = Partial<AccountCreditLedger>;
+
+type AdminMutationPayload = {
+  receipt?: AdminMutationReceiptPayload | null;
+  status?: string;
+  metadata?: Record<string, unknown>;
+};
+
 type PendingConfirmation = {
   title: string;
   message: string;
@@ -285,6 +341,7 @@ function selectPrimarySubscription(account: AccountDetail | null): AccountDetail
 }
 
 const MALFORMED_ACCOUNT_TEXT_RE = /Fatal error|Stack trace|Command line code|Uncaught ValueError|Path must not be empty/i;
+const accountDetailClient = createApiClient({ idempotencyPrefix: 'admin_account_detail' });
 
 function prettifyAccountId(accountId: string): string {
   if (MALFORMED_ACCOUNT_TEXT_RE.test(accountId)) {
@@ -531,17 +588,15 @@ function AccountDetailContent() {
     }
     packagePlansRequestedRef.current = true;
     try {
-      const response = await fetch('/api/admin/plans', {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        packagePlansRequestedRef.current = false;
+      const payload = (await accountDetailClient.request<{ items?: PackagePlanListItem[] }>(
+        '/api/admin/plans'
+      )).data;
+      setPackagePlans(Array.isArray(payload.items) ? payload.items : []);
+    } catch (error) {
+      packagePlansRequestedRef.current = false;
+      if (error instanceof ApiError && error.statusCode > 0) {
         return;
       }
-      const data = await response.json();
-      setPackagePlans(Array.isArray(data.data?.items) ? (data.data.items as PackagePlanListItem[]) : []);
-    } catch {
-      packagePlansRequestedRef.current = false;
       setPackagePlans([]);
     }
   }, []);
@@ -561,12 +616,9 @@ function AccountDetailContent() {
     await Promise.all(
       siteIds.map(async (siteId) => {
         try {
-          const response = await fetch(`/api/admin/sites/${encodeURIComponent(siteId)}`, {
-            credentials: 'include',
-          });
-          if (!response.ok) return;
-          const data = await response.json();
-          const siteData = data.data || {};
+          const siteData = (await accountDetailClient.request<SiteRuntimeApiPayload>(
+            `/api/admin/sites/${encodeURIComponent(siteId)}`
+          )).data;
           const usageSummary = siteData.usage_summary || {};
           const runtimeSummary = siteData.runtime_summary || {};
           const commercialPolicy = siteData.commercial_policy || {};
@@ -602,7 +654,10 @@ function AccountDetailContent() {
             coverageState: String(coverage.coverage_state || 'unknown'),
             packageLabel: String(coverage.display_package_label || ''),
           };
-        } catch {
+        } catch (error) {
+          if (error instanceof ApiError && error.statusCode > 0) {
+            return;
+          }
           results[siteId] = {
             totalRuns: 0,
             failedRuns: 0,
@@ -629,16 +684,9 @@ function AccountDetailContent() {
     }
     quotaSummaryRequestedRef.current = true;
     try {
-      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(accountId)}/quota-summary`, {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        quotaSummaryRequestedRef.current = false;
-        setQuotaSummary(null);
-        return;
-      }
-      const data = await response.json();
-      const payload = data.data || {};
+      const payload = (await accountDetailClient.request<AccountQuotaSummaryPayload>(
+        `/api/admin/accounts/${encodeURIComponent(accountId)}/quota-summary`
+      )).data;
       if (!payload.credit) {
         quotaSummaryRequestedRef.current = false;
         setQuotaSummary(null);
@@ -680,16 +728,9 @@ function AccountDetailContent() {
     }
     creditLedgerRequestedRef.current = true;
     try {
-      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(accountId)}/credit-ledger?limit=12`, {
-        credentials: 'include',
-      });
-      if (!response.ok) {
-        creditLedgerRequestedRef.current = false;
-        setCreditLedger(null);
-        return;
-      }
-      const data = await response.json();
-      const payload = data.data || {};
+      const payload = (await accountDetailClient.request<AccountCreditLedgerPayload>(
+        `/api/admin/accounts/${encodeURIComponent(accountId)}/credit-ledger?limit=12`
+      )).data;
       setCreditLedger({
         account_id: String(payload.account_id || accountId),
         generated_at: String(payload.generated_at || ''),
@@ -715,16 +756,9 @@ function AccountDetailContent() {
     setError(null);
 
     try {
-      const accountResponse = await fetch(`/api/admin/accounts/${accountId}`, {
-        credentials: 'include',
-      });
-
-      if (!accountResponse.ok) {
-        throw new Error(t('error.failed_load'));
-      }
-
-      const data = await accountResponse.json();
-      const payload = data.data || {};
+      const payload = (await accountDetailClient.request<AccountDetailApiPayload>(
+        `/api/admin/accounts/${accountId}`
+      )).data;
       const accountData = payload.account || {};
       const accountMetadata =
         accountData.metadata && typeof accountData.metadata === 'object'
@@ -819,7 +853,7 @@ function AccountDetailContent() {
 
     } catch (err) {
       accountRequestedRef.current = false;
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+      setError(resolveUiErrorMessage(err, t('error.failed_load')));
     } finally {
       setIsLoading(false);
     }
@@ -849,22 +883,16 @@ function AccountDetailContent() {
     setAccountMetaNotice(null);
     setAccountMetaError(null);
     try {
-      const response = await fetch('/api/admin/accounts', {
+      await accountDetailClient.request<Record<string, unknown>>('/api/admin/accounts', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           account_id: account.account_id,
           name: account.name || account.account_id,
           status: account.status || 'active',
           metadata,
           bind_default_free: false,
-        }),
+        },
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
-      }
       setAccount((current) =>
         current
           ? {
@@ -879,7 +907,7 @@ function AccountDetailContent() {
         t('admin.account_detail.operator_profile_saved_notice', undefined, 'Operator note has been saved.')
       );
     } catch (err) {
-      setAccountMetaError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+      setAccountMetaError(resolveUiErrorMessage(err, t('error.failed_save')));
     } finally {
       setIsSavingAccountMeta(false);
     }
@@ -910,11 +938,10 @@ function AccountDetailContent() {
     setPackageActionNotice(null);
     setPackageActionReceipt(null);
     try {
-      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(accountId)}/subscription`, {
+      const payload = await accountDetailClient.request<AdminMutationPayload>(
+        `/api/admin/accounts/${encodeURIComponent(accountId)}/subscription`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           subscription_id: packageForm.subscription_id || undefined,
           account_id: accountId,
           plan_id: selectedPlanId,
@@ -932,12 +959,8 @@ function AccountDetailContent() {
             tier_id: selectedTierId || undefined,
             package_alias: selectedPackageAlias || undefined,
           },
-        }),
+        },
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
-      }
       setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         t(
@@ -956,7 +979,7 @@ function AccountDetailContent() {
       ]);
     } catch (err) {
       setPackageActionError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
+        resolveUiErrorMessage(err, t('error.failed_save'))
       );
     } finally {
       setPackageActionPending(null);
@@ -969,19 +992,13 @@ function AccountDetailContent() {
     setPackageActionNotice(null);
     setPackageActionReceipt(null);
     try {
-      const response = await fetch(
+      const payload = await accountDetailClient.request<AdminMutationPayload>(
         `/api/admin/accounts/${encodeURIComponent(accountId)}/subscription/${action}`,
         {
           method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
+          body: {},
         }
       );
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
-      }
       setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         action === 'suspend'
@@ -1004,7 +1021,7 @@ function AccountDetailContent() {
       ]);
     } catch (err) {
       setPackageActionError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
+        resolveUiErrorMessage(err, t('error.failed_save'))
       );
     } finally {
       setPackageActionPending(null);
@@ -1027,19 +1044,13 @@ function AccountDetailContent() {
         : {
             trial_credit_limit: Number(agencyForm.trial_credit_limit),
           };
-      const response = await fetch(
+      await accountDetailClient.request<Record<string, unknown>>(
         `/api/admin/accounts/${encodeURIComponent(accountId)}/${endpoint}`,
         {
           method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body,
         }
       );
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
-      }
       setAgencyActionNotice(
         action === 'quote'
           ? t('admin.account_detail.agency_quote_created', undefined, 'Agency quote is ready in the customer Portal.')
@@ -1053,7 +1064,7 @@ function AccountDetailContent() {
       ]);
     } catch (err) {
       setAgencyActionError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
+        resolveUiErrorMessage(err, t('error.failed_save'))
       );
     } finally {
       setAgencyActionPending(null);
@@ -1069,18 +1080,13 @@ function AccountDetailContent() {
     setAccountStatusError(null);
     setAccountStatusReceipt(null);
     try {
-      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(account.account_id)}/${action}`, {
+      const payload = await accountDetailClient.request<AdminMutationPayload>(
+        `/api/admin/accounts/${encodeURIComponent(account.account_id)}/${action}`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           reason: action === 'suspend' ? suspendReason.trim() : '',
-        }),
+        },
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
-      }
       setAccountStatusReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       const nextStatus = String(payload.data?.status || (action === 'restore' ? 'active' : 'suspended'));
       const metadata = payload.data?.metadata && typeof payload.data.metadata === 'object'
@@ -1103,7 +1109,7 @@ function AccountDetailContent() {
       );
       await loadAccount(selectedSiteId, true);
     } catch (err) {
-      setAccountStatusError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+      setAccountStatusError(resolveUiErrorMessage(err, t('error.failed_save')));
     } finally {
       setAccountStatusPending(null);
       setSuspendReason('');
@@ -1129,11 +1135,10 @@ function AccountDetailContent() {
     setPackageActionNotice(null);
     setPackageActionReceipt(null);
     try {
-      const response = await fetch(`/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}/topup`, {
+      const payload = await accountDetailClient.request<AdminMutationPayload>(
+        `/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}/topup`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           target_period_start_at: packageForm.current_period_start_at || null,
           target_period_end_at: packageForm.current_period_end_at || null,
           ai_credits_increment: pack.ai_credits_increment,
@@ -1142,12 +1147,8 @@ function AccountDetailContent() {
           cost_increment: pack.cost_increment,
           reason: 'operator_overage_buffer',
           note: `Applied ${pack.pack_id} from account coverage screen.`,
-        }),
+        },
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
-      }
       setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         t(
@@ -1164,7 +1165,7 @@ function AccountDetailContent() {
       ]);
     } catch (err) {
       setPackageActionError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
+        resolveUiErrorMessage(err, t('error.failed_save'))
       );
     } finally {
       setTopUpActionPending(null);
@@ -1201,27 +1202,18 @@ function AccountDetailContent() {
     setPackageActionNotice(null);
     setPackageActionReceipt(null);
     try {
-      const response = await fetch(
+      const payload = await accountDetailClient.request<AdminMutationPayload>(
         `/api/admin/accounts/${encodeURIComponent(accountId)}/credit-ledger/adjustments`,
         {
           method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'Idempotency-Key': crypto.randomUUID(),
-          },
-          body: JSON.stringify({
+          body: {
             event_type: creditAdjustmentForm.event_type,
             credit_delta: creditDelta,
             reason: creditAdjustmentForm.reason.trim(),
             note: creditAdjustmentForm.note.trim(),
-          }),
+          },
         }
       );
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
-      }
       setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         t(
@@ -1244,7 +1236,7 @@ function AccountDetailContent() {
       ]);
     } catch (err) {
       setPackageActionError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
+        resolveUiErrorMessage(err, t('error.failed_save'))
       );
     } finally {
       setCreditAdjustmentPending(false);

@@ -13,7 +13,10 @@ import {
 import { AdminRouteSkeleton } from '@/components/admin/AdminRouteSkeleton';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { useLocale } from '@/contexts/LocaleContext';
-import { resolveUiErrorMessage } from '@/lib/errors';
+import { createApiClient } from '@/lib/api-client';
+import { ApiError, resolveUiErrorMessage } from '@/lib/errors';
+
+const vectorSettingsClient = createApiClient({ idempotencyPrefix: 'vector_settings' });
 
 type VectorProfile = {
   profile_id: string;
@@ -101,24 +104,17 @@ export default function VectorSettingsPage() {
   const loadProfile = useCallback(async () => {
     setError('');
     try {
-      const response = await fetch('/api/admin/site-knowledge-vector-profile', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(
-          payload,
-          copy('admin.vector_settings.load_error', '加载向量服务失败。', 'Failed to load the vector service.')
-        ));
-      }
-      const nextProfile = payload?.data as VectorProfile;
+      const response = await vectorSettingsClient.request<VectorProfile>(
+        '/api/admin/site-knowledge-vector-profile'
+      );
+      const nextProfile = response.data;
       setProfile(nextProfile);
       setZillizEndpoint(nextProfile?.vector_store?.endpoint || '');
     } catch (loadError) {
-      setError(loadError instanceof Error
-        ? loadError.message
-        : copy('admin.vector_settings.load_error', '加载向量服务失败。', 'Failed to load the vector service.'));
+      setError(resolveUiErrorMessage(
+        loadError,
+        copy('admin.vector_settings.load_error', '加载向量服务失败。', 'Failed to load the vector service.')
+      ));
     } finally {
       setLoading(false);
     }
@@ -149,20 +145,11 @@ export default function VectorSettingsPage() {
     setError('');
     setMessage('');
     try {
-      const response = await fetch('/api/admin/site-knowledge-vector-profile', {
+      const response = await vectorSettingsClient.request<VectorProfile>('/api/admin/site-knowledge-vector-profile', {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential: credential.trim() || null }),
+        body: { credential: credential.trim() || null },
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.status === 'error') {
-        throw new Error(resolveUiErrorMessage(
-          payload,
-          copy('admin.vector_settings.save_error', '保存并验证失败。', 'Save and verification failed.')
-        ));
-      }
-      setProfile(payload?.data as VectorProfile);
+      setProfile(response.data);
       setCredential('');
       setMessage(copy(
         'admin.vector_settings.saved',
@@ -170,9 +157,10 @@ export default function VectorSettingsPage() {
         'SiliconFlow passed the live BGE-M3 1024-dimension probe and is now active.'
       ));
     } catch (saveError) {
-      setError(saveError instanceof Error
-        ? saveError.message
-        : copy('admin.vector_settings.save_error', '保存并验证失败。', 'Save and verification failed.'));
+      setError(resolveUiErrorMessage(
+        saveError,
+        copy('admin.vector_settings.save_error', '保存并验证失败。', 'Save and verification failed.')
+      ));
     } finally {
       setSaving(false);
     }
@@ -199,30 +187,36 @@ export default function VectorSettingsPage() {
     setError('');
     setMessage('');
     try {
-      const response = await fetch('/api/admin/site-knowledge-vector-profile/vector-store', {
+      const response = await vectorSettingsClient.request<VectorProfile>('/api/admin/site-knowledge-vector-profile/vector-store', {
         method: 'PUT',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           endpoint: zillizEndpoint.trim(),
           token: zillizToken.trim() || null,
-        }),
+        },
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.status === 'error') {
-        const errorCode = String(payload?.error_code || '');
-        const knownMessage = errorCode === 'site_knowledge_vector_profile.zilliz_endpoint_invalid'
+      const nextProfile = response.data;
+      setProfile(nextProfile);
+      setZillizEndpoint(nextProfile?.vector_store?.endpoint || zillizEndpoint.trim());
+      setZillizToken('');
+      setMessage(copy(
+        'admin.vector_settings.zilliz_saved',
+        'Zilliz Cloud 已连接，固定 Collection 已通过 1024 维 COSINE 检测。',
+        'Zilliz Cloud is connected and the fixed collection passed its 1024-dimension COSINE check.'
+      ));
+    } catch (saveError) {
+      const errorCode = saveError instanceof ApiError ? saveError.errorCode : '';
+      const knownMessage = errorCode === 'site_knowledge_vector_profile.zilliz_endpoint_invalid'
+        ? copy(
+          'admin.vector_settings.zilliz_endpoint_invalid',
+          'Endpoint 格式不正确，请粘贴 Zilliz 集群详情中的公共 Endpoint。',
+          'The endpoint is invalid. Paste the public endpoint from the Zilliz cluster details.'
+        )
+        : errorCode === 'site_knowledge_vector_profile.zilliz_sdk_unavailable'
           ? copy(
-            'admin.vector_settings.zilliz_endpoint_invalid',
-            'Endpoint 格式不正确，请粘贴 Zilliz 集群详情中的公共 Endpoint。',
-            'The endpoint is invalid. Paste the public endpoint from the Zilliz cluster details.'
+            'admin.vector_settings.zilliz_sdk_unavailable',
+            '当前 Cloud 服务缺少 Zilliz 运行组件，请联系部署管理员重建服务镜像后重试。',
+            'This Cloud instance is missing the Zilliz runtime component. Ask the deployment operator to rebuild the service image, then retry.'
           )
-          : errorCode === 'site_knowledge_vector_profile.zilliz_sdk_unavailable'
-            ? copy(
-              'admin.vector_settings.zilliz_sdk_unavailable',
-              '当前 Cloud 服务缺少 Zilliz 运行组件，请联系部署管理员重建服务镜像后重试。',
-              'This Cloud instance is missing the Zilliz runtime component. Ask the deployment operator to rebuild the service image, then retry.'
-            )
           : errorCode === 'site_knowledge_vector_profile.zilliz_schema_incompatible'
             ? copy(
               'admin.vector_settings.zilliz_schema_incompatible',
@@ -236,32 +230,14 @@ export default function VectorSettingsPage() {
                 'Could not connect to Zilliz. Check the public endpoint, token permissions, and cluster status.'
               )
               : '';
-        throw new Error(knownMessage || resolveUiErrorMessage(
-          payload?.message,
-          copy(
-            'admin.vector_settings.zilliz_save_error',
-            'Zilliz 保存并检测失败。',
-            'Zilliz save and verification failed.'
-          )
-        ));
-      }
-      const nextProfile = payload?.data as VectorProfile;
-      setProfile(nextProfile);
-      setZillizEndpoint(nextProfile?.vector_store?.endpoint || zillizEndpoint.trim());
-      setZillizToken('');
-      setMessage(copy(
-        'admin.vector_settings.zilliz_saved',
-        'Zilliz Cloud 已连接，固定 Collection 已通过 1024 维 COSINE 检测。',
-        'Zilliz Cloud is connected and the fixed collection passed its 1024-dimension COSINE check.'
-      ));
-    } catch (saveError) {
-      setError(saveError instanceof Error
-        ? saveError.message
-        : copy(
+      setError(knownMessage || resolveUiErrorMessage(
+        saveError,
+        copy(
           'admin.vector_settings.zilliz_save_error',
           'Zilliz 保存并检测失败。',
           'Zilliz save and verification failed.'
-        ));
+        )
+      ));
     } finally {
       setSavingVectorStore(false);
     }
@@ -272,40 +248,11 @@ export default function VectorSettingsPage() {
     setError('');
     setMessage('');
     try {
-      const response = await fetch('/api/admin/site-knowledge-vector-profile/index-rebuilds', {
+      const response = await vectorSettingsClient.request<VectorProfile>('/api/admin/site-knowledge-vector-profile/index-rebuilds', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirmation: 'rebuild_site_knowledge_index' }),
+        body: { confirmation: 'rebuild_site_knowledge_index' },
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.status === 'error') {
-        const errorCode = String(payload?.error_code || '');
-        const knownMessage = errorCode === 'site_knowledge_vector_profile.embedding_space_mismatch'
-          ? copy(
-            'admin.vector_settings.embedding_space_mismatch',
-            '现有资料来自旧向量来源，不能直接迁移。请从站点端执行一次全量 Site Knowledge 同步。',
-            'Existing content belongs to an older vector source and cannot be copied. Run a full Site Knowledge sync from the site.'
-          )
-          : errorCode === 'site_knowledge_vector_profile.embedding_invalid'
-            || errorCode === 'site_knowledge_vector_profile.dimension_mismatch'
-            ? copy(
-              'admin.vector_settings.stored_embedding_invalid',
-              '现有资料的向量不符合固定档案，请从站点端执行一次全量 Site Knowledge 同步。',
-              'Existing vectors do not match the fixed profile. Run a full Site Knowledge sync from the site.'
-            )
-            : '';
-        await loadProfile();
-        throw new Error(knownMessage || resolveUiErrorMessage(
-          payload,
-          copy(
-            'admin.vector_settings.rebuild_error',
-            '索引重建失败，请查看向量诊断后重试。',
-            'Index rebuild failed. Review vector diagnostics and retry.'
-          )
-        ));
-      }
-      const nextProfile = payload?.data as VectorProfile;
+      const nextProfile = response.data;
       setProfile(nextProfile);
       setMessage(nextProfile?.validation?.index?.status === 'awaiting_site_sync'
         ? copy(
@@ -319,13 +266,32 @@ export default function VectorSettingsPage() {
           'The Zilliz index was rebuilt and passed its round-trip check. Run a normal Site Knowledge search to complete retrieval validation.'
         ));
     } catch (rebuildError) {
-      setError(rebuildError instanceof Error
-        ? rebuildError.message
-        : copy(
+      const errorCode = rebuildError instanceof ApiError ? rebuildError.errorCode : '';
+      const knownMessage = errorCode === 'site_knowledge_vector_profile.embedding_space_mismatch'
+        ? copy(
+          'admin.vector_settings.embedding_space_mismatch',
+          '现有资料来自旧向量来源，不能直接迁移。请从站点端执行一次全量 Site Knowledge 同步。',
+          'Existing content belongs to an older vector source and cannot be copied. Run a full Site Knowledge sync from the site.'
+        )
+        : errorCode === 'site_knowledge_vector_profile.embedding_invalid'
+          || errorCode === 'site_knowledge_vector_profile.dimension_mismatch'
+          ? copy(
+            'admin.vector_settings.stored_embedding_invalid',
+            '现有资料的向量不符合固定档案，请从站点端执行一次全量 Site Knowledge 同步。',
+            'Existing vectors do not match the fixed profile. Run a full Site Knowledge sync from the site.'
+          )
+          : '';
+      if (rebuildError instanceof ApiError && rebuildError.statusCode > 0 && !errorCode.startsWith('client.')) {
+        await loadProfile();
+      }
+      setError(knownMessage || resolveUiErrorMessage(
+        rebuildError,
+        copy(
           'admin.vector_settings.rebuild_error',
           '索引重建失败，请查看向量诊断后重试。',
           'Index rebuild failed. Review vector diagnostics and retry.'
-        ));
+        )
+      ));
     } finally {
       setRebuilding(false);
     }

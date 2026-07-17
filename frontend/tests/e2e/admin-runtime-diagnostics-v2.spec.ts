@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { installAdminMocks } from './helpers/admin-operator-fixture';
+import { buildAdminApiErrorEnvelope, installAdminMocks } from './helpers/admin-operator-fixture';
 
-test('runtime diagnostics is telemetry-driven, URL-backed, and mobile safe', async ({ page }) => {
+test('runtime diagnostics is telemetry-driven, URL-backed, and mobile safe', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await installAdminMocks(page);
   const telemetryRequests: string[] = [];
@@ -12,7 +12,7 @@ test('runtime diagnostics is telemetry-driven, URL-backed, and mobile safe', asy
       return;
     }
     failNextTelemetry = false;
-    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ status: 'error', message: 'temporary diagnostic failure' }) });
+    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify(buildAdminApiErrorEnvelope('temporary diagnostic failure')) });
   });
   page.on('request', (request) => {
     if (request.url().includes('/api/admin/runtime-telemetry')) telemetryRequests.push(request.url());
@@ -38,6 +38,10 @@ test('runtime diagnostics is telemetry-driven, URL-backed, and mobile safe', asy
   await expect(metadata).not.toHaveAttribute('open', '');
   await metadata.locator('summary').click();
   await expect(metadata.getByText(/Runtime resolution|运行时解析/i)).toBeVisible();
+  await testInfo.attach('p4-e03-admin-runtime-diagnostics', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
 
   failNextTelemetry = true;
   await page.getByRole('button', { name: /^Refresh$|^刷新$/i }).click();
