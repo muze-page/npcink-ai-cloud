@@ -7,6 +7,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.envelope import build_envelope
+from app.api.portal_idempotency_middleware import PortalIdempotencyMiddleware
 from app.api.routes.agent_feedback import router as agent_feedback_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.catalog import router as catalog_router
@@ -42,6 +43,7 @@ def create_app(services: CloudServices | None = None) -> FastAPI:
     trusted_hosts = sorted(settings.trusted_hosts())
     if trusted_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts)
+    app.add_middleware(PortalIdempotencyMiddleware, settings=settings)
 
     @app.middleware("http")
     async def trace_requests(request: Request, call_next):  # type: ignore[no-untyped-def]

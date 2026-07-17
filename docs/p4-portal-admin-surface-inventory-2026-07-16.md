@@ -244,11 +244,53 @@ Integrated verification on the final working tree:
 - `pnpm run check:anti-drift`: passed.
 - Python Ruff and mypy: passed, 227 source files checked by mypy.
 
+## P4-E Durable Portal Mutation Idempotency — 2026-07-17
+
+The declared Portal write contract is now enforced without a compatibility
+path:
+
+- all 15 routes that declare `require_idempotency=True` atomically claim a
+  durable receipt scoped by canonical `principal_id` and caller key before the
+  business mutation runs;
+- request fingerprints bind method, path, query, normalized JSON body, and the
+  authenticated selected-site context. Same-key conflicts and concurrent
+  requests fail closed;
+- exact completed responses are replayed only after current account, site,
+  action, or support-request authorization is checked again;
+- response bytes are encrypted at rest before the receipt is completed. This
+  protects customer-authored response projections and the addon connection's
+  short-lived one-time delivery URL;
+- a processing receipt whose lease expires is deliberately not reclaimed or
+  automatically deleted. Because the business transaction and receipt
+  completion are separate transactions, it returns
+  `portal.idempotency_indeterminate` for operator reconciliation instead of
+  risking a duplicate side effect;
+- non-participating Portal writes remain streaming pass-through and are not
+  truncated by the receipt response bound;
+- the shared frontend transport generates one bounded safe key for every write,
+  preserves explicit retry keys byte-for-byte, rejects invalid or empty
+  explicit keys before `fetch`, and never projects session tokens into keys.
+
+Focused acceptance on the integrated tree: 77 Portal/idempotency/migration API
+tests and 33 frontend transport tests passed. Independent review found no
+remaining P0-P2 issue after the response-encryption, pass-through, and
+indeterminate-state fixes. ADR-017 records the guarantee and its honest crash
+boundary.
+
+Final gates on this batch:
+
+- `pnpm run check:fast`: 146 contract passed, 1 skipped; 597 domain passed,
+  3 skipped;
+- `pnpm run check:seam`: 732 API passed; perimeter 9 passed;
+- `pnpm run check:perimeter`: 9 passed;
+- `pnpm run check:anti-drift`: passed;
+- Python Ruff and mypy: passed, 229 source files checked by mypy;
+- frontend static contracts, TypeScript, full ESLint, and Vitest: passed;
+- migration `0067` completed a real PostgreSQL upgrade/downgrade/upgrade
+  round trip with the expected encrypted-response column and constraints.
+
 Still required before declaring P4 complete:
 
-- enforce the declared Portal mutation idempotency requirement at the request
-  boundary; `require_idempotency` and the current write guard do not yet provide
-  that security/replay guarantee;
 - migrate the remaining raw Admin page fetches to the shared client in bounded
   page batches;
 - replace `/admin/ability-models` with the Cloud-owned runtime-profile surface,

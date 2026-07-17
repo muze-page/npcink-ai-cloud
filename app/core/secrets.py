@@ -153,6 +153,55 @@ def decrypt_addon_connection_payload(
     return payload if isinstance(payload, dict) else {}
 
 
+def encrypt_portal_idempotency_response(
+    response_body: bytes,
+    *,
+    settings: Settings,
+) -> str:
+    return (
+        _build_fernet(
+            _resolve_encryption_secret(
+                (
+                    settings.admin_session_secret,
+                    settings.portal_jwt_secret,
+                    settings.internal_auth_token,
+                ),
+                error_message="Portal idempotency response secret is not configured",
+            ),
+            purpose="portal_idempotency_response",
+        )
+        .encrypt(bytes(response_body))
+        .decode("utf-8")
+    )
+
+
+def decrypt_portal_idempotency_response(
+    ciphertext: str | None,
+    *,
+    settings: Settings,
+) -> bytes:
+    token = str(ciphertext or "").strip()
+    if not token:
+        raise RuntimeError("Portal idempotency response is missing")
+    try:
+        return (
+            _build_fernet(
+                _resolve_encryption_secret(
+                    (
+                        settings.admin_session_secret,
+                        settings.portal_jwt_secret,
+                        settings.internal_auth_token,
+                    ),
+                    error_message="Portal idempotency response secret is not configured",
+                ),
+                purpose="portal_idempotency_response",
+            )
+            .decrypt(token.encode("utf-8"))
+        )
+    except InvalidToken as error:
+        raise RuntimeError("Portal idempotency response could not be decrypted") from error
+
+
 def encrypt_runtime_execution_input(
     input_payload: dict[str, object],
     *,

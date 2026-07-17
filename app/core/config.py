@@ -123,6 +123,21 @@ class Settings(BaseSettings):
     portal_login_code_ttl_seconds: int = Field(default=10 * 60)
     portal_login_code_max_attempts: int = Field(default=5)
     portal_oauth_state_ttl_seconds: int = Field(default=10 * 60)
+    portal_idempotency_ttl_seconds: int = Field(
+        default=24 * 60 * 60,
+        ge=5 * 60,
+        le=30 * 24 * 60 * 60,
+    )
+    portal_idempotency_processing_lease_seconds: int = Field(
+        default=5 * 60,
+        ge=30,
+        le=60 * 60,
+    )
+    portal_idempotency_max_response_bytes: int = Field(
+        default=256 * 1024,
+        ge=1024,
+        le=1024 * 1024,
+    )
     otel_service_name: str = Field(default="npcink-ai-cloud")
     otel_exporter_otlp_endpoint: str | None = Field(default=None)
     otel_trace_sink_otlp_endpoint: str | None = Field(default=None)
@@ -379,6 +394,14 @@ class Settings(BaseSettings):
             )
         if self.portal_oauth_state_ttl_seconds < 60:
             raise ValueError("portal_oauth_state_ttl_seconds must be at least 60")
+        if (
+            self.portal_idempotency_ttl_seconds
+            <= self.portal_idempotency_processing_lease_seconds
+        ):
+            raise ValueError(
+                "portal_idempotency_ttl_seconds must exceed "
+                "portal_idempotency_processing_lease_seconds"
+            )
         if self.ops_cadence_poll_seconds < 5:
             raise ValueError("ops_cadence_poll_seconds must be at least 5")
         if self.runtime_callback_worker_poll_seconds < 1:

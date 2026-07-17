@@ -27,6 +27,7 @@ from app.api.portal_session import (
     build_new_portal_session_metadata,
     clear_portal_session_cookies,
     portal_cookie_secure,
+    portal_idempotency_replay_response,
     portal_json_error,
     project_portal_subscription,
     resolve_portal_login_session_ttl_seconds,
@@ -47,7 +48,7 @@ from app.domain.agent_workflow_metadata import (
     get_workflow_metadata,
 )
 from app.domain.commercial.audit_context import ServiceAuditContext
-from app.domain.commercial.errors import CommercialServiceError
+from app.domain.commercial.errors import CommercialPermissionError, CommercialServiceError
 from app.domain.commercial.identity import (
     USER_ALLOWED_ACTION_PROVISION_SITES,
     USER_ALLOWED_ACTION_REMOVE_SITES,
@@ -59,6 +60,7 @@ from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.site_monitoring_overview import SiteMonitoringOverviewService
+from app.domain.portal_idempotency import build_portal_business_idempotency_key
 from app.domain.service_settings import (
     resolve_portal_qq_runtime_config,
 )
@@ -1141,6 +1143,12 @@ def _build_portal_audit_context(request: Request, principal_id: str) -> ServiceA
     audit_context = _build_audit_context(request)
     audit_context.actor_kind = "principal"
     audit_context.actor_ref = principal_id
+    raw_idempotency_key = request.headers.get("Idempotency-Key", "")
+    if raw_idempotency_key:
+        audit_context.idempotency_key = build_portal_business_idempotency_key(
+            principal_id=principal_id,
+            idempotency_key=raw_idempotency_key,
+        )
     return audit_context
 
 
@@ -1947,6 +1955,42 @@ def _resolve_selected_portal_account_access(
     return access
 
 
+def _resolve_portal_addon_account_access(
+    request: Request,
+    *,
+    principal_id: str,
+    account_id: str,
+) -> dict[str, object] | JSONResponse:
+    try:
+        accounts = _get_commercial_service(request).list_portal_accounts(
+            principal_id=principal_id,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    normalized_account_id = str(account_id or "").strip()
+    for raw_item in _object_list(accounts.get("items")):
+        item = _dict_value(raw_item)
+        allowed_actions = {
+            str(action).strip()
+            for action in _object_list(item.get("allowed_actions"))
+            if str(action).strip()
+        }
+        if (
+            str(item.get("account_id") or "").strip() == normalized_account_id
+            and str(item.get("status") or "").strip() == "active"
+            and str(item.get("membership_status") or "").strip() == "active"
+            and USER_ALLOWED_ACTION_PROVISION_SITES in allowed_actions
+        ):
+            return item
+    return _service_error_response(
+        CommercialPermissionError(
+            "service.principal_access_required",
+            "portal account access is required",
+        ),
+        request=request,
+    )
+
+
 def _portal_account_site_ids(
     request: Request,
     *,
@@ -2244,6 +2288,9 @@ async def request_portal_email_change_code(
     )
     if isinstance(auth, JSONResponse):
         return auth
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     new_email = payload.new_email.strip()
     locale = resolve_portal_email_locale(request, payload.locale)
     if not new_email:
@@ -2320,6 +2367,9 @@ async def verify_portal_email_change_code(
     )
     if isinstance(auth, JSONResponse):
         return auth
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     new_email = payload.new_email.strip()
     code = payload.code.strip()
     if not new_email or not code:
@@ -2674,6 +2724,9 @@ async def start_portal_account_plan_trial(
     )
     if isinstance(account_access, JSONResponse):
         return account_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     account_id = str(account_access.get("account_id") or "")
     try:
         result = _get_commercial_service(request).start_account_plan_trial(
@@ -2722,6 +2775,9 @@ async def create_portal_account_subscription_order(
     )
     if isinstance(account_access, JSONResponse):
         return account_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     account_id = str(account_access.get("account_id") or "")
     try:
         result = _get_commercial_service(request).create_account_subscription_payment_order(
@@ -2764,6 +2820,9 @@ async def cancel_portal_account_subscription_order(
     )
     if isinstance(account_access, JSONResponse):
         return account_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     account_id = str(account_access.get("account_id") or "")
     try:
         result = _get_commercial_service(request).cancel_account_subscription_payment_order(
@@ -2802,6 +2861,9 @@ async def schedule_portal_account_free_downgrade(request: Request) -> Any:
     )
     if isinstance(account_access, JSONResponse):
         return account_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     account_id = str(account_access.get("account_id") or "")
     try:
         result = _get_commercial_service(request).schedule_account_free_downgrade(
@@ -3128,6 +3190,9 @@ async def create_portal_account_credit_pack_order(
     )
     if isinstance(account_access, JSONResponse):
         return account_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     account_id = str(account_access.get("account_id") or "")
     try:
         order = _get_commercial_service(request).create_credit_pack_payment_order(
@@ -3241,6 +3306,9 @@ async def cancel_portal_account_payment_order(
     )
     if isinstance(account_access, JSONResponse):
         return account_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     account_id = str(account_access.get("account_id") or "")
     try:
         result = _get_commercial_service(request).cancel_account_payment_order(
@@ -3339,6 +3407,9 @@ async def create_portal_support_request(
             error_code="service.portal_site_account_mismatch",
             message="support request site is outside the selected account context",
         )
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     try:
         result = _get_commercial_service(request).create_portal_support_request(
             principal_id=auth.principal_id,
@@ -3425,6 +3496,9 @@ async def create_portal_support_request_message(
     )
     if isinstance(request_access, JSONResponse):
         return request_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     try:
         result = _get_commercial_service(request).create_portal_support_request_message(
             principal_id=auth.principal_id,
@@ -3475,6 +3549,9 @@ async def create_portal_support_request_attachment(
     )
     if isinstance(request_access, JSONResponse):
         return request_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     try:
         result = _get_commercial_service(request).create_portal_support_request_attachment(
             principal_id=auth.principal_id,
@@ -3571,6 +3648,9 @@ async def submit_portal_support_request_feedback(
     )
     if isinstance(request_access, JSONResponse):
         return request_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     try:
         result = _get_commercial_service(request).submit_portal_support_request_feedback(
             principal_id=auth.principal_id,
@@ -3650,6 +3730,16 @@ async def create_portal_addon_connection(
         return auth
 
     service = _get_commercial_service(request)
+    account_access = _resolve_portal_addon_account_access(
+        request,
+        principal_id=auth.principal_id,
+        account_id=payload.account_id,
+    )
+    if isinstance(account_access, JSONResponse):
+        return account_access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     audit_context = _build_portal_audit_context(request, auth.principal_id)
     try:
         result = service.create_wordpress_addon_connection(
@@ -3712,6 +3802,9 @@ async def remove_portal_site(request: Request, site_id: str) -> Any:
     )
     if isinstance(access, JSONResponse):
         return access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     try:
         result = _get_commercial_service(request).remove_portal_site(
             site_id,
@@ -4257,6 +4350,9 @@ async def create_portal_site_credit_pack_order(
     )
     if isinstance(access, JSONResponse):
         return access
+    replay = portal_idempotency_replay_response(request)
+    if replay is not None:
+        return replay
     try:
         order = _get_commercial_service(request).create_credit_pack_payment_order(
             account_id=str(access.get("account_id") or ""),

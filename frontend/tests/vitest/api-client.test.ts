@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiClient } from '@/lib/api-client';
 import { ApiError } from '@/lib/errors';
+import {
+  generateIdempotencyKey,
+  IdempotencyKeys,
+  isValidIdempotencyKey,
+} from '@/lib/idempotency';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -138,7 +143,28 @@ describe('ApiClient', () => {
     });
   });
 
-  it('always sends a valid idempotency key for writes', async () => {
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE'] as const)(
+    'automatically sends one valid idempotency key for %s writes',
+    async (method) => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(successEnvelope({ saved: true })));
+      vi.stubGlobal('fetch', fetchMock);
+      const client = new ApiClient({
+        idempotencyPrefix: 'admin_write',
+        idempotencyKeyFactory: (prefix) => `${prefix}.${method.toLowerCase()}:fixed`,
+      });
+
+      await client.request('/api/admin/accounts', { method });
+
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      const headers = new Headers(init.headers);
+      expect(headers.get('idempotency-key')).toBe(
+        `admin_write.${method.toLowerCase()}:fixed`
+      );
+      expect(headers.get('idempotency-key')).toMatch(/^[A-Za-z0-9._:-]{1,128}$/);
+    }
+  );
+
+  it('serializes write bodies without changing the generated idempotency key', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(successEnvelope({ saved: true })));
     vi.stubGlobal('fetch', fetchMock);
     const client = new ApiClient({
@@ -156,14 +182,127 @@ describe('ApiClient', () => {
     expect(headers.get('idempotency-key')).toBe('admin_write_fixed');
     expect(headers.get('content-type')).toBe('application/json');
     expect(init.body).toBe(JSON.stringify({ name: 'Example' }));
+  });
+
+  it('reuses an explicit idempotency key byte-for-byte across caller retries', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(jsonResponse(successEnvelope({ saved: true })))
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ApiClient({
+      idempotencyKeyFactory: () => 'must_not_be_used',
+    });
+    const retryKey = 'Portal.retry:ABC-001';
+
+    await client.request('/api/portal/support-requests', {
+      method: 'POST',
+      idempotencyKey: retryKey,
+    });
+    await client.request('/api/portal/support-requests', {
+      method: 'POST',
+      idempotencyKey: retryKey,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls as [string, RequestInit][]) {
+      expect(new Headers(init.headers).get('idempotency-key')).toBe(retryKey);
+    }
+  });
+
+  it.each([
+    '',
+    ' leading-space',
+    'trailing-space ',
+    'contains spaces',
+    'contains/slash',
+    '非-ascii',
+    'x'.repeat(129),
+  ])('fails closed before fetch for an invalid explicit idempotency key: %j', async (key) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      client.request('/api/admin/accounts', {
+      new ApiClient().request('/api/admin/accounts', {
         method: 'PATCH',
-        idempotencyKey: 'contains spaces',
+        idempotencyKey: key,
       })
     ).rejects.toBeInstanceOf(TypeError);
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when an idempotency key factory returns an invalid key', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      new ApiClient({ idempotencyKeyFactory: () => 'invalid factory key' }).request(
+        '/api/admin/accounts',
+        { method: 'DELETE' }
+      )
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for an explicitly empty Idempotency-Key header', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      new ApiClient().request('/api/admin/accounts', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': '' },
+      })
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['GET', 'HEAD'] as const)(
+    'rejects Idempotency-Key from request options for %s reads',
+    async (method) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(
+        new ApiClient().request('/api/portal/session', {
+          method,
+          idempotencyKey: 'read_key',
+        })
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['GET', 'HEAD'] as const)(
+    'rejects Idempotency-Key from headers for %s reads',
+    async (method) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(
+        new ApiClient().request('/api/portal/session', {
+          method,
+          headers: { 'Idempotency-Key': 'read_key' },
+        })
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it('generates a bounded safe key from an unsafe oversized prefix', () => {
+    const key = generateIdempotencyKey(` portal/write:${'x'.repeat(200)}/unsafe `);
+
+    expect(key.length).toBeLessThanOrEqual(128);
+    expect(isValidIdempotencyKey(key)).toBe(true);
+    expect(isValidIdempotencyKey('safe.key:with_all-allowed_chars')).toBe(true);
+    expect(isValidIdempotencyKey('x'.repeat(129))).toBe(false);
+  });
+
+  it('does not expose a session token in the logout idempotency key', () => {
+    const sessionToken = 'session-token-must-remain-secret';
+    const key = IdempotencyKeys.logout(sessionToken);
+
+    expect(isValidIdempotencyKey(key)).toBe(true);
+    expect(key).not.toContain(sessionToken);
   });
 
   it('wraps network failures in the same ApiError model', async () => {

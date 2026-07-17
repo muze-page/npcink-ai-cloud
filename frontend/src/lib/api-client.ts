@@ -1,5 +1,8 @@
 import { ApiError } from './errors';
-import { generateIdempotencyKey } from './idempotency';
+import {
+  generateIdempotencyKey,
+  isValidIdempotencyKey,
+} from './idempotency';
 
 export type ApiMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -35,7 +38,6 @@ export interface ApiRequestOptions {
   idempotencyKey?: string;
 }
 
-const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const SAFE_METHODS = new Set<ApiMethod>(['GET', 'HEAD']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -87,13 +89,12 @@ function normalizeIdempotencyPrefix(value: string): string {
 }
 
 function assertIdempotencyKey(value: string): string {
-  const normalized = String(value || '').trim();
-  if (!IDEMPOTENCY_KEY_PATTERN.test(normalized)) {
+  if (!isValidIdempotencyKey(value)) {
     throw new TypeError(
       'Idempotency-Key must contain 1-128 letters, numbers, dots, underscores, colons, or hyphens'
     );
   }
-  return normalized;
+  return value;
 }
 
 function extractEnvelopeEvidence(value: unknown): {
@@ -154,8 +155,9 @@ export class ApiClient {
       const requestedKey =
         options.idempotencyKey !== undefined
           ? options.idempotencyKey
-          : headers.get('Idempotency-Key') ||
-            this.idempotencyKeyFactory(this.idempotencyPrefix);
+          : headers.has('Idempotency-Key')
+            ? headers.get('Idempotency-Key') || ''
+            : this.idempotencyKeyFactory(this.idempotencyPrefix);
       headers.set('Idempotency-Key', assertIdempotencyKey(requestedKey));
     } else if (options.idempotencyKey !== undefined || headers.has('Idempotency-Key')) {
       throw new TypeError(`Idempotency-Key is not valid for ${method} requests`);

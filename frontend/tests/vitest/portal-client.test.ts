@@ -36,12 +36,32 @@ describe('PortalClient shared transport', () => {
           data: {},
           meta: { trace_id: 'trace-logout', revision: 'm6' },
         })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 'ok',
+          error_code: '',
+          message: 'selected',
+          data: { site_id: 'site_1', sites: [] },
+          meta: { trace_id: 'trace-select', revision: 'm6' },
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 'ok',
+          error_code: '',
+          message: 'cancelled',
+          data: {},
+          meta: { trace_id: 'trace-cancel', revision: 'm6' },
+        })
       );
     vi.stubGlobal('fetch', fetchMock);
 
     const client = new PortalClient('/api/portal');
     const session = await client.getSession();
     await client.logout();
+    await client.selectSite('site_1');
+    await client.cancelSubscriptionOrder('order_1');
 
     expect(session.meta.trace_id).toBe('trace-session');
     const [sessionUrl, sessionInit] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -52,6 +72,20 @@ describe('PortalClient shared transport', () => {
     const [logoutUrl, logoutInit] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(logoutUrl).toBe('/api/portal/logout');
     expect(new Headers(logoutInit.headers).get('idempotency-key')).toMatch(
+      /^[A-Za-z0-9._:-]{1,128}$/
+    );
+
+    const [selectUrl, selectInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(selectUrl).toBe('/api/portal/session/site');
+    expect(selectInit.method).toBe('POST');
+    expect(new Headers(selectInit.headers).get('idempotency-key')).toMatch(
+      /^[A-Za-z0-9._:-]{1,128}$/
+    );
+
+    const [cancelUrl, cancelInit] = fetchMock.mock.calls[3] as [string, RequestInit];
+    expect(cancelUrl).toBe('/api/portal/account/subscription-orders/order_1');
+    expect(cancelInit.method).toBe('DELETE');
+    expect(new Headers(cancelInit.headers).get('idempotency-key')).toMatch(
       /^[A-Za-z0-9._:-]{1,128}$/
     );
   });

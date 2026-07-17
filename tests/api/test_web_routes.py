@@ -578,6 +578,7 @@ def test_web_portal_email_code_and_addon_connection_with_jwt(tmp_path: Path) -> 
     addon_state = "web-addon-state"
     connection_response = client.post(
         "/portal/v1/addon-connections",
+        headers={"Idempotency-Key": "web-addon-connection"},
         json={
             "account_id": account_id,
             "site_url": "https://web.example.test",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.auth import (
@@ -26,6 +26,13 @@ from app.core.models import SITE_STATUS_ACTIVE, SITE_STATUS_ARCHIVED
 from app.core.security import extract_trace_id
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService
+from app.domain.portal_idempotency import (
+    PortalIdempotencyClaim,
+    PortalIdempotencyError,
+    PortalIdempotencyReplay,
+    build_portal_request_fingerprint,
+    claim_portal_mutation,
+)
 
 COOKIE_SITE_ID = "npcink_portal_site_id"
 COOKIE_PORTAL_SESSION_TOKEN = "npcink_portal_session_token"
@@ -70,6 +77,13 @@ def _safe_portal_error_message(error_code: str) -> str:
         "auth.portal_login_code_invalid": "portal login code is invalid",
         "auth.portal_oauth_failed": "portal OAuth request failed",
         "portal.site_selection_required": "portal site selection is required",
+        "auth.idempotency_required": "Idempotency-Key header is required",
+        "auth.invalid_idempotency_key": "Idempotency-Key header is invalid",
+        "auth.invalid_idempotency_request": "portal idempotency request is invalid",
+        "portal.idempotency_conflict": "Idempotency-Key was used for a different request",
+        "portal.idempotency_in_progress": "a request with this Idempotency-Key is processing",
+        "portal.idempotency_indeterminate": "the original request result requires reconciliation",
+        "portal.idempotency_receipt_unavailable": "portal idempotency receipt is unavailable",
     }
     return messages.get(str(error_code or ""), "portal request failed")
 
@@ -423,6 +437,18 @@ def _has_portal_request_headers(request: Request) -> bool:
     )
 
 
+def portal_idempotency_replay_response(request: Request) -> Response | None:
+    replay = getattr(request.state, "portal_idempotency_replay", None)
+    if not isinstance(replay, PortalIdempotencyReplay):
+        return None
+    return Response(
+        status_code=replay.status_code,
+        content=replay.body,
+        media_type="application/json",
+        headers={"Idempotency-Replayed": "true"},
+    )
+
+
 def _resolve_portal_session_metadata(request: Request, *, principal_id: str) -> dict[str, object]:
     if _has_portal_request_headers(request):
         auth_header = request.headers.get(AUTHORIZATION_HEADER, "").strip()
@@ -479,12 +505,11 @@ async def resolve_portal_request_context(
     session_required_message: str = "portal session is required",
 ) -> PortalAuthContext | JSONResponse:
     if _has_portal_request_headers(request):
-        return await authorize_portal_request(
+        auth = await authorize_portal_request(
             request,
             require_idempotency=require_idempotency,
         )
-
-    if allow_session_cookies:
+    elif allow_session_cookies:
         try:
             session = current_portal_browser_session(
                 request,
@@ -498,12 +523,50 @@ async def resolve_portal_request_context(
                 error_code=error.error_code,
                 message=error.message,
             )
-        return PortalAuthContext(
+        auth = PortalAuthContext(
             principal_id=session["principal_id"],
             site_id=str(session.get("site_id") or ""),
         )
+    else:
+        auth = await authorize_portal_request(
+            request,
+            require_idempotency=require_idempotency,
+        )
 
-    return await authorize_portal_request(
-        request,
-        require_idempotency=require_idempotency,
-    )
+    if isinstance(auth, JSONResponse) or not require_idempotency:
+        return auth
+    try:
+        fingerprint = build_portal_request_fingerprint(
+            method=request.method,
+            route=request.url.path,
+            query_string=request.url.query,
+            body=await request.body(),
+            site_id=auth.site_id,
+        )
+        outcome = claim_portal_mutation(
+            database_url=get_cloud_services(request).settings.database_url,
+            principal_id=auth.principal_id,
+            idempotency_key=request.headers.get("Idempotency-Key", ""),
+            method=request.method,
+            route=request.url.path,
+            request_fingerprint=fingerprint,
+            lease_seconds=get_cloud_services(
+                request
+            ).settings.portal_idempotency_processing_lease_seconds,
+            ttl_seconds=get_cloud_services(request).settings.portal_idempotency_ttl_seconds,
+            settings=get_cloud_services(request).settings,
+        )
+    except PortalIdempotencyError as error:
+        return portal_json_error(
+            request,
+            status_code=error.status_code,
+            error_code=error.error_code,
+            message=error.message,
+        )
+    if isinstance(outcome, PortalIdempotencyReplay):
+        request.state.portal_idempotency_replay = outcome
+        return auth
+    if not isinstance(outcome, PortalIdempotencyClaim):
+        raise RuntimeError("unexpected Portal idempotency outcome")
+    request.state.portal_idempotency_claim = outcome
+    return auth

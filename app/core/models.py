@@ -53,6 +53,8 @@ PORTAL_OAUTH_STATE_STATUS_EXPIRED = "expired"
 
 PRINCIPAL_STATUS_ACTIVE = "active"
 PRINCIPAL_STATUS_DISABLED = "disabled"
+PORTAL_IDEMPOTENCY_STATE_PROCESSING = "processing"
+PORTAL_IDEMPOTENCY_STATE_COMPLETED = "completed"
 ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE = "active"
 ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED = "revoked"
 
@@ -406,6 +408,76 @@ class Principal(Base):
     session_version: Mapped[int] = mapped_column(Integer, default=1)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class PortalMutationIdempotencyReceipt(Base):
+    __tablename__ = "portal_mutation_idempotency_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "principal_id",
+            "idempotency_key",
+            name="uq_portal_mutation_idempotency_principal_key",
+        ),
+        CheckConstraint(
+            "state IN ('processing', 'completed')",
+            name="ck_portal_mutation_idempotency_state",
+        ),
+        CheckConstraint(
+            "retention_ttl_seconds > 0",
+            name="ck_portal_mutation_idempotency_ttl_positive",
+        ),
+        CheckConstraint(
+            "response_status IS NULL OR "
+            "(response_status >= 100 AND response_status <= 599)",
+            name="ck_portal_mutation_idempotency_response_status",
+        ),
+        CheckConstraint(
+            "((state = 'processing' AND claim_token IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL AND response_status IS NULL "
+            "AND response_body_ciphertext IS NULL AND completed_at IS NULL) OR "
+            "(state = 'completed' AND claim_token IS NULL "
+            "AND lease_expires_at IS NULL AND response_status IS NOT NULL "
+            "AND response_body_ciphertext IS NOT NULL AND completed_at IS NOT NULL))",
+            name="ck_portal_mutation_idempotency_lifecycle",
+        ),
+        Index(
+            "ix_portal_mutation_idempotency_expiry",
+            "expires_at",
+            "receipt_id",
+        ),
+        Index(
+            "ix_portal_mutation_idempotency_processing_lease",
+            "state",
+            "lease_expires_at",
+        ),
+    )
+
+    receipt_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_method: Mapped[str] = mapped_column(String(16))
+    request_path: Mapped[str] = mapped_column(String(512))
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(16))
+    claim_token: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_status: Mapped[int | None] = mapped_column(Integer)
+    response_body_ciphertext: Mapped[str | None] = mapped_column(Text)
+    retention_ttl_seconds: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
