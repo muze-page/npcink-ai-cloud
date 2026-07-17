@@ -1,0 +1,62 @@
+x-proof-environment: &proof-environment
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+  NPCINK_CLOUD_ENVIRONMENT: test
+  NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://proof:proof@postgres:5432/proof
+  NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
+  NPCINK_CLOUD_ARTIFACT_ORPHAN_CLEANUP_ENABLED: "true"
+
+x-proof-app: &proof-app
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      PACKAGE_EXTRAS: "[dev]"
+  restart: "no"
+  depends_on:
+    postgres:
+      condition: service_healthy
+  working_dir: /app
+  command:
+    - python
+    - -m
+    - pytest
+    - -qq
+    - -p
+    - no:cacheprovider
+    - tests/proof/test_media_artifact_orphan_isolation_proof.py
+  volumes:
+    - ./tests/proof:/app/tests/proof:ro
+    - artifact-proof:/var/lib/npcink-ai-cloud/artifacts
+  tmpfs:
+    - /tmp
+  stop_grace_period: 1s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: proof
+      POSTGRES_USER: proof
+      POSTGRES_PASSWORD: proof
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proof -d proof"]
+      interval: 1s
+      timeout: 1s
+      retries: 60
+
+  app-a:
+    <<: *proof-app
+    environment:
+      <<: *proof-environment
+      NPCINK_CLOUD_P3_B4C3_PROOF_ROLE: a
+
+  app-b:
+    <<: *proof-app
+    environment:
+      <<: *proof-environment
+      NPCINK_CLOUD_P3_B4C3_PROOF_ROLE: b
+
+volumes:
+  artifact-proof:

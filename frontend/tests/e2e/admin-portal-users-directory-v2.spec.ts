@@ -16,7 +16,8 @@ type PortalUserFixture = {
   site_id: string;
   site_name: string;
   site_status: string;
-  wordpress_url: string;
+  site_url: string;
+  platform_kind: 'wordpress';
   subscription_id: string;
   subscription_status: string;
   plan_id: string;
@@ -29,16 +30,16 @@ type PortalUserFixture = {
 function fixtures(): PortalUserFixture[] {
   return [
     {
-      principal_id: 'prn_access_issue', email: 'issue@example.com', status: 'active', session_version: 2, source: 'portal_self_registration', created_at: '2026-07-08T08:00:00Z', last_login_at: '2026-07-09T08:00:00Z', account_id: 'acct_issue', account_name: 'Issue Customer', account_status: 'active', membership_status: 'revoked', site_id: 'site_issue', site_name: 'Issue Site', site_status: 'active', wordpress_url: 'https://issue.example.com', subscription_id: 'sub_issue', subscription_status: 'active', plan_id: 'free', package_alias: 'Free', display_package_label: 'Free', qq_bound: false, qq_binding_count: 0,
+      principal_id: 'prn_access_issue', email: 'issue@example.com', status: 'active', session_version: 2, source: 'portal_self_registration', created_at: '2026-07-08T08:00:00Z', last_login_at: '2026-07-09T08:00:00Z', account_id: 'acct_issue', account_name: 'Issue Customer', account_status: 'active', membership_status: 'revoked', site_id: 'site_issue', site_name: 'Issue Site', site_status: 'active', site_url: 'https://issue.example.com', platform_kind: 'wordpress', subscription_id: 'sub_issue', subscription_status: 'active', plan_id: 'free', package_alias: 'Free', display_package_label: 'Free', qq_bound: false, qq_binding_count: 0,
     },
     {
-      principal_id: 'prn_onboarding', email: 'onboarding@example.com', status: 'active', session_version: 1, source: 'portal_self_registration', created_at: '2026-07-11T08:00:00Z', last_login_at: '', account_id: 'acct_onboarding', account_name: 'Onboarding Customer', account_status: 'active', membership_status: 'active', site_id: 'site_onboarding', site_name: 'Onboarding Site', site_status: 'active', wordpress_url: 'https://onboarding.example.com', subscription_id: 'sub_onboarding', subscription_status: 'active', plan_id: 'free', package_alias: 'Free', display_package_label: 'Free', qq_bound: false, qq_binding_count: 0,
+      principal_id: 'prn_onboarding', email: 'onboarding@example.com', status: 'active', session_version: 1, source: 'portal_self_registration', created_at: '2026-07-11T08:00:00Z', last_login_at: '', account_id: 'acct_onboarding', account_name: 'Onboarding Customer', account_status: 'active', membership_status: 'active', site_id: 'site_onboarding', site_name: 'Onboarding Site', site_status: 'active', site_url: 'https://onboarding.example.com', platform_kind: 'wordpress', subscription_id: 'sub_onboarding', subscription_status: 'active', plan_id: 'free', package_alias: 'Free', display_package_label: 'Free', qq_bound: false, qq_binding_count: 0,
     },
     {
-      principal_id: 'prn_active', email: 'active@example.com', status: 'active', session_version: 3, source: 'portal_self_registration', created_at: '2026-07-09T08:00:00Z', last_login_at: '2026-07-12T06:00:00Z', account_id: 'acct_active', account_name: 'Active Customer', account_status: 'active', membership_status: 'active', site_id: 'site_active', site_name: 'Active Site', site_status: 'active', wordpress_url: 'https://active.example.com', subscription_id: 'sub_active', subscription_status: 'active', plan_id: 'pro', package_alias: 'Pro', display_package_label: 'Pro', qq_bound: true, qq_binding_count: 1,
+      principal_id: 'prn_active', email: 'active@example.com', status: 'active', session_version: 3, source: 'portal_self_registration', created_at: '2026-07-09T08:00:00Z', last_login_at: '2026-07-12T06:00:00Z', account_id: 'acct_active', account_name: 'Active Customer', account_status: 'active', membership_status: 'active', site_id: 'site_active', site_name: 'Active Site', site_status: 'active', site_url: 'https://active.example.com', platform_kind: 'wordpress', subscription_id: 'sub_active', subscription_status: 'active', plan_id: 'pro', package_alias: 'Pro', display_package_label: 'Pro', qq_bound: true, qq_binding_count: 1,
     },
     {
-      principal_id: 'prn_disabled', email: 'disabled@example.com', status: 'disabled', session_version: 5, source: 'portal_self_registration', created_at: '2026-07-07T08:00:00Z', last_login_at: '2026-07-08T08:00:00Z', account_id: 'acct_disabled', account_name: 'Disabled Customer', account_status: 'active', membership_status: 'revoked', site_id: 'site_disabled', site_name: 'Disabled Site', site_status: 'active', wordpress_url: 'https://disabled.example.com', subscription_id: 'sub_disabled', subscription_status: 'active', plan_id: 'free', package_alias: 'Free', display_package_label: 'Free', qq_bound: false, qq_binding_count: 0,
+      principal_id: 'prn_disabled', email: 'disabled@example.com', status: 'disabled', session_version: 5, source: 'portal_self_registration', created_at: '2026-07-07T08:00:00Z', last_login_at: '2026-07-08T08:00:00Z', account_id: 'acct_disabled', account_name: 'Disabled Customer', account_status: 'active', membership_status: 'revoked', site_id: 'site_disabled', site_name: 'Disabled Site', site_status: 'active', site_url: 'https://disabled.example.com', platform_kind: 'wordpress', subscription_id: 'sub_disabled', subscription_status: 'active', plan_id: 'free', package_alias: 'Free', display_package_label: 'Free', qq_bound: false, qq_binding_count: 0,
     },
   ];
 }
@@ -62,7 +63,7 @@ async function installPortalUsersMocks(page: Page) {
     const packageAlias = (url.searchParams.get('package_alias') || '').toLowerCase();
     const qqBound = url.searchParams.get('qq_bound');
     const items = users.filter((user) => {
-      const searchable = [user.email, user.principal_id, user.account_name, user.site_name, user.wordpress_url].join(' ').toLowerCase();
+      const searchable = [user.email, user.principal_id, user.account_name, user.site_name, user.site_url].join(' ').toLowerCase();
       return (!q || searchable.includes(q)) && (!status || user.status === status) && (!packageAlias || user.package_alias.toLowerCase().includes(packageAlias)) && (qqBound === null || user.qq_bound === (qqBound === 'true'));
     });
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', data: { items, total: items.length, summary: { active: users.filter((user) => user.status === 'active').length, disabled: users.filter((user) => user.status === 'disabled').length, qq_bound: users.filter((user) => user.qq_bound).length, self_registered: users.length }, pagination: { offset: 0, limit: 25, total: items.length, has_more: false } } }) });

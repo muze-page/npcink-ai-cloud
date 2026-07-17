@@ -21,6 +21,7 @@ from app.core.models import (
     IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
     PLATFORM_ADMIN_STATUS_ACTIVE,
+    PLATFORM_KIND_WORDPRESS,
     PRINCIPAL_STATUS_ACTIVE,
     PRINCIPAL_STATUS_DISABLED,
     SITE_API_KEY_STATUS_ACTIVE,
@@ -843,12 +844,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             ).lower()
             if normalized_package and normalized_package not in package_blob:
                 continue
-            site_metadata = getattr(site, "metadata_json", None)
-            wordpress_url = (
-                str(site_metadata.get("wordpress_url") or "").strip()
-                if isinstance(site_metadata, dict)
-                else ""
-            )
+            site_url = str(getattr(site, "site_url", "") or "").strip()
             search_blob = " ".join(
                 [
                     principal_id,
@@ -857,7 +853,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     str(getattr(account, "name", "") or ""),
                     str(getattr(site, "site_id", "") or ""),
                     str(getattr(site, "name", "") or ""),
-                    wordpress_url,
+                    site_url,
                     str(package_summary.get("package_alias") or ""),
                 ]
             ).lower()
@@ -891,7 +887,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "site_id": str(getattr(site, "site_id", "") or ""),
                 "site_name": str(getattr(site, "name", "") or ""),
                 "site_status": str(getattr(site, "status", "") or ""),
-                "wordpress_url": wordpress_url,
+                "site_url": site_url,
+                "platform_kind": str(
+                    getattr(site, "platform_kind", "") or PLATFORM_KIND_WORDPRESS
+                ),
                 "subscription": subscription_payload,
                 "subscription_id": str(getattr(primary_subscription, "subscription_id", "") or ""),
                 "subscription_status": str(getattr(primary_subscription, "status", "") or ""),

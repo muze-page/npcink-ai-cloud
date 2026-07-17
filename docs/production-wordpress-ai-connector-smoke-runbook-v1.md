@@ -1,7 +1,14 @@
 # Production WordPress AI Connector Smoke Runbook v1
 
 Status: active.
-Date: 2026-06-29.
+Updated: 2026-07-15.
+
+P1-E05 status: operator-only pending. This runbook and its local builder tests
+are preparation, not evidence that the production title smoke passed.
+
+P1-E06 status: operator-only pending. The pre-cutover inventory, backup, and
+restore rehearsal are separate operator evidence and are not produced by this
+smoke.
 
 ## Purpose
 
@@ -13,8 +20,11 @@ The smoke proves:
 - production Cloud health is reachable;
 - WordPress AI Connector image-generation routing can resolve without executing
   image generation;
-- optional title generation execute can run through `wp-ai.short-text`;
-- runtime evidence includes the expected profile and routing intent.
+- optional title generation execute can enter through
+  `npcink-cloud/connector-runtime` and resolve to managed profile
+  `wp-ai.short-text`;
+- title execute evidence uses the current runtime fields for identity, provider
+  execution, idempotency, errors, and the reviewable suggestion contract.
 
 ## Boundary
 
@@ -81,6 +91,14 @@ Expected shape:
 Do not commit this file. Do not paste the secret into tickets, docs, logs, or
 chat output.
 
+Set the canonical WordPress site URL and deployed connector version used by
+both smoke modes:
+
+```bash
+export WORDPRESS_SITE_URL='https://wordpress.example.com'
+export CONNECTOR_VERSION='1.0.0'
+```
+
 ## Safe Resolve Smoke
 
 Run this first after deploying production Cloud:
@@ -90,16 +108,23 @@ cd /Users/muze/gitee/npcink-ai-cloud
 
 .venv/bin/python -m app.dev.production_wordpress_ai_connector_smoke \
   --secret-file .tmp/prod-cloud-api-key.secret.json \
-  --base-url https://cloud.npc.ink
+  --base-url https://cloud.npc.ink \
+  --site-url "$WORDPRESS_SITE_URL" \
+  --connector-version "$CONNECTOR_VERSION"
 ```
 
 This does:
 
 - health check;
-- signed image-generation `resolve`;
+- signed image-generation `resolve` through the independent
+  `image_generation_request.v1` contract;
 - no title execute;
 - no image execute;
 - no WordPress write.
+
+The safe image resolve intentionally remains separate from the neutral
+connector title contract. It must not be rewritten to look like a WordPress
+typed text operation.
 
 Expected signals:
 
@@ -136,16 +161,36 @@ Run:
 .venv/bin/python -m app.dev.production_wordpress_ai_connector_smoke \
   --secret-file .tmp/prod-cloud-api-key.secret.json \
   --base-url https://cloud.npc.ink \
+  --site-url "$WORDPRESS_SITE_URL" \
+  --connector-version "$CONNECTOR_VERSION" \
   --execute-title \
   --approval-file .tmp/prod-title-approval.txt
 ```
+
+The title request uses one bounded, realistic
+`operation_contract.request.source_text` value wrapped in `<content>` tags.
+`request.prompt` is absent, as are `request.post_title` and
+`request.post_excerpt`; this smoke does not exercise a compatibility shape.
 
 Expected signals:
 
 ```text
 ok=true
+title_execute.run_id=<non-empty>
+title_execute.trace_id=<non-empty>
 title_execute.run_status=succeeded
 title_execute.profile_id=wp-ai.short-text
+title_execute.provider_id=<production text provider>
+title_execute.model_id=<production text model>
+title_execute.instance_id=<production text instance>
+title_execute.provider_call_count>=1
+title_execute.idempotent_replay=false
+title_execute.error_code=<empty>
+title_execute.error_stage=<empty>
+title_execute.result_contract=cloud_connector_result.v1
+title_execute.suggestion_only=true
+title_execute.operation_contract_version=wordpress_operation.v1
+title_execute.operation_task=title_generation
 title_execute.output_text_preview=<non-empty>
 ```
 
@@ -153,15 +198,39 @@ Then inspect production Cloud run evidence and confirm:
 
 ```text
 site_id=<expected site>
-ability_name=npcink-cloud/wp-ai-connector
-channel=wordpress_ai_connector
+ability_name=npcink-cloud/connector-runtime
+contract_version=cloud_connector_runtime.v1
+channel=editor
 execution_kind=text
+run_id=<non-empty>
+trace_id=<non-empty>
 profile_id=wp-ai.short-text
-selected_model_id=<production text model>
-selected_instance_id=<production text instance>
+provider_id=<production text provider>
+model_id=<production text model>
+instance_id=<production text instance>
+provider_call_count>=1
+idempotent_replay=false
+error_code=<empty>
+error_stage=<empty>
 policy_json.routing_intent=content.short_text
 policy_json.execution_contract.routing_intent=content.short_text
+result.contract_version=cloud_connector_result.v1
+result.suggestion_only=true
+result.operation_contract.contract_version=wordpress_operation.v1
+result.operation_contract.task=title_generation
+result.output.output_text=<non-empty reviewable suggestion>
 ```
+
+Also confirm that the request input used the canonical site and connector
+fields (`site_url`, `platform_kind=wordpress`,
+`connector_id=npcink-cloud-addon`, `connector_version`, and
+`suggestion_only=true`) and that no WordPress write or approval event was
+created by Cloud.
+
+The report must retain the returned run/provider evidence without secrets. A
+real P1-E05 record must additionally attach operator-reviewed idempotency
+evidence; one successful builder or execute test does not prove replay
+behavior. Do not mark P1-E05 complete from local pytest output.
 
 ## Local Test Gate
 

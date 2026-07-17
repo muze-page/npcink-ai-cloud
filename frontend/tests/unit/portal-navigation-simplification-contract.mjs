@@ -6,10 +6,10 @@ const navbarPath = resolve(process.cwd(), 'src/components/portal/PortalNavbar.ts
 const i18nPath = resolve(process.cwd(), 'src/lib/i18n.ts');
 const aiInsightsPagePath = resolve(process.cwd(), 'src/app/portal/ai-insights/page.tsx');
 const monitoringPath = resolve(process.cwd(), 'src/app/portal/monitoring/page.tsx');
+const sitesRedirectPath = resolve(process.cwd(), 'src/app/portal/sites/page.tsx');
 const auditPath = resolve(process.cwd(), 'src/app/portal/audit/PortalAuditClient.tsx');
 const navbarSource = readFileSync(navbarPath, 'utf8');
 const i18nSource = readFileSync(i18nPath, 'utf8');
-const monitoringSource = readFileSync(monitoringPath, 'utf8');
 const auditSource = readFileSync(auditPath, 'utf8');
 
 const primaryStart = navbarSource.indexOf('const primaryNavItems');
@@ -42,11 +42,8 @@ assert.equal(
   false,
   'AI insights must not remain as a standalone customer Portal page'
 );
-assert.match(
-  monitoringSource,
-  /router\.replace\(`\/portal\/sites\/\$\{encodeURIComponent\(selectedSite\.site_id\)\}#service-status`\)/,
-  'legacy monitoring links must resolve to the canonical site service-status section'
-);
+assert.equal(existsSync(monitoringPath), false, 'retired monitoring redirect route must be deleted');
+assert.equal(existsSync(sitesRedirectPath), false, 'retired sites redirect route must be deleted');
 assert.match(
   auditSource,
   /data-portal-support-deeplink="audit"/,

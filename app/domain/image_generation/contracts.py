@@ -17,15 +17,49 @@ IMAGE_GENERATION_ABILITY_FAMILY = "vision"
 IMAGE_GENERATION_DATA_CLASSIFICATION = "internal"
 IMAGE_GENERATION_RESULT_CONTRACT = "image_generation_result.v1"
 
-ALLOWED_IMAGE_GENERATION_RESPONSE_FORMATS = frozenset({"url", "b64_json"})
 ALLOWED_IMAGE_GENERATION_ASPECT_RATIOS = frozenset(
     {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
 )
 ALLOWED_IMAGE_GENERATION_RESOLUTIONS = frozenset({"", "low", "medium", "high"})
+ALLOWED_IMAGE_GENERATION_INPUT_FIELDS = frozenset(
+    {
+        "aspect_ratio",
+        "connector_id",
+        "connector_version",
+        "contract_version",
+        "media_context",
+        "n",
+        "prompt",
+        "resolution",
+        "review",
+        "source_handoff",
+        "source_surface",
+        "task",
+    }
+)
 IMAGE_GENERATION_MAX_PROMPT_CHARS = 4000
 IMAGE_GENERATION_MAX_IMAGES = 4
 IMAGE_GENERATION_MAX_CONTEXT_CHARS = 6000
 IMAGE_GENERATION_CONTEXT_FIELDS = frozenset({"media_context", "review", "source_handoff"})
+
+FORBIDDEN_IMAGE_GENERATION_PROVIDER_MEDIA_KEYS = frozenset(
+    {
+        "b64",
+        "b64_json",
+        "base64",
+        "bytes",
+        "content_bytes",
+        "data_url",
+        "download_url",
+        "fetch",
+        "fetch_url",
+        "image_url",
+        "provider_response_format",
+        "response_format",
+        "source_url",
+        "url",
+    }
+)
 
 FORBIDDEN_IMAGE_GENERATION_KEYS = frozenset(
     {
@@ -86,7 +120,7 @@ def validate_image_generation_runtime_contract(
             "image_generation.invalid_input",
             "image generation input must be an object",
         )
-    if str(input_payload.get("contract_version") or contract_version) != IMAGE_GENERATION_CONTRACT:
+    if str(input_payload.get("contract_version") or "") != IMAGE_GENERATION_CONTRACT:
         raise ImageGenerationContractViolation(
             "image_generation.input_contract_mismatch",
             "image generation input contract_version does not match runtime contract",
@@ -98,7 +132,30 @@ def validate_image_generation_runtime_contract(
             "image generation input may not include provider secret or write/control "
             f"field '{forbidden_path}'",
         )
-    prompt = str(input_payload.get("prompt") or input_payload.get("text") or "").strip()
+    provider_media_path = find_forbidden_image_generation_provider_media_field(input_payload)
+    if provider_media_path:
+        raise ImageGenerationContractViolation(
+            "image_generation.provider_media_field_forbidden",
+            "image generation input may not select or carry provider media field "
+            f"'{provider_media_path}'",
+        )
+    unknown_fields = sorted(
+        str(key)
+        for key in input_payload
+        if not isinstance(key, str) or key not in ALLOWED_IMAGE_GENERATION_INPUT_FIELDS
+    )
+    if unknown_fields:
+        raise ImageGenerationContractViolation(
+            "image_generation.unknown_input_field",
+            f"image generation input field '{unknown_fields[0]}' is not supported",
+        )
+    raw_prompt = input_payload.get("prompt")
+    if raw_prompt is not None and not isinstance(raw_prompt, str):
+        raise ImageGenerationContractViolation(
+            "image_generation.prompt_invalid",
+            "image generation prompt must be a string",
+        )
+    prompt = (raw_prompt or "").strip()
     if not prompt:
         raise ImageGenerationContractViolation(
             "image_generation.prompt_required",
@@ -110,25 +167,37 @@ def validate_image_generation_runtime_contract(
             "image generation prompt must be "
             f"{IMAGE_GENERATION_MAX_PROMPT_CHARS} characters or fewer",
         )
-    image_count = _coerce_int(input_payload.get("n"), default=1)
+    raw_image_count = input_payload.get("n", 1)
+    if isinstance(raw_image_count, bool) or not isinstance(raw_image_count, int):
+        raise ImageGenerationContractViolation(
+            "image_generation.image_count_invalid",
+            f"image generation n must be an integer between 1 and {IMAGE_GENERATION_MAX_IMAGES}",
+        )
+    image_count = raw_image_count
     if image_count < 1 or image_count > IMAGE_GENERATION_MAX_IMAGES:
         raise ImageGenerationContractViolation(
             "image_generation.image_count_invalid",
             f"image generation n must be between 1 and {IMAGE_GENERATION_MAX_IMAGES}",
         )
-    response_format = str(input_payload.get("response_format") or "url").strip()
-    if response_format not in ALLOWED_IMAGE_GENERATION_RESPONSE_FORMATS:
+    raw_aspect_ratio = input_payload.get("aspect_ratio", "1:1")
+    if not isinstance(raw_aspect_ratio, str):
         raise ImageGenerationContractViolation(
-            "image_generation.response_format_invalid",
-            "image generation response_format must be url or b64_json",
+            "image_generation.aspect_ratio_invalid",
+            "image generation aspect_ratio must be a string",
         )
-    aspect_ratio = str(input_payload.get("aspect_ratio") or "1:1").strip()
+    aspect_ratio = raw_aspect_ratio.strip() or "1:1"
     if aspect_ratio not in ALLOWED_IMAGE_GENERATION_ASPECT_RATIOS:
         raise ImageGenerationContractViolation(
             "image_generation.aspect_ratio_invalid",
             "image generation aspect_ratio is not supported",
         )
-    resolution = str(input_payload.get("resolution") or "").strip()
+    raw_resolution = input_payload.get("resolution", "")
+    if not isinstance(raw_resolution, str):
+        raise ImageGenerationContractViolation(
+            "image_generation.resolution_invalid",
+            "image generation resolution must be a string",
+        )
+    resolution = raw_resolution.strip()
     if resolution not in ALLOWED_IMAGE_GENERATION_RESOLUTIONS:
         raise ImageGenerationContractViolation(
             "image_generation.resolution_invalid",
@@ -157,8 +226,6 @@ def find_forbidden_image_generation_field(value: Any, *, path: str = "") -> str:
             normalized_key = str(key or "").strip().lower()
             current_path = f"{path}.{normalized_key}" if path else normalized_key
             if normalized_key in FORBIDDEN_IMAGE_GENERATION_KEYS:
-                if normalized_key == "direct_wordpress_write" and item is False:
-                    continue
                 return current_path
             nested = find_forbidden_image_generation_field(item, path=current_path)
             if nested:
@@ -171,11 +238,44 @@ def find_forbidden_image_generation_field(value: Any, *, path: str = "") -> str:
     return ""
 
 
-def _coerce_int(value: Any, *, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+def find_forbidden_image_generation_provider_media_field(
+    value: Any,
+    *,
+    path: str = "",
+) -> str:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = str(key or "").strip().lower()
+            current_path = f"{path}.{normalized_key}" if path else normalized_key
+            if _is_forbidden_image_generation_provider_media_key(normalized_key):
+                return current_path
+            nested = find_forbidden_image_generation_provider_media_field(
+                item,
+                path=current_path,
+            )
+            if nested:
+                return nested
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            nested = find_forbidden_image_generation_provider_media_field(
+                item,
+                path=f"{path}[{index}]",
+            )
+            if nested:
+                return nested
+    return ""
+
+
+def _is_forbidden_image_generation_provider_media_key(value: str) -> bool:
+    compact = value.replace("_", "").replace("-", "")
+    return (
+        value in FORBIDDEN_IMAGE_GENERATION_PROVIDER_MEDIA_KEYS
+        or value.endswith(("_url", "_urls", "_bytes"))
+        or value in {"urls"}
+        or "fetch" in compact
+        or "base64" in compact
+        or compact.startswith("b64")
+    )
 
 
 def _serialized_size(value: Any) -> int:

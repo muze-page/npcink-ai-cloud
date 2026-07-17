@@ -1233,6 +1233,7 @@ def test_image_source_candidate_suggested_filename_is_safe(monkeypatch: Any) -> 
     assert handoff["runtime"]["profile_id"] == "grok-imagine-image-quality"
     assert handoff["runtime"]["execution_kind"] == "image_generation"
     assert handoff["input_defaults"]["aspect_ratio"] == "16:9"
+    assert "response_format" not in handoff["input_defaults"]
     assert handoff["required_local_fields"] == ["prompt"]
     assert handoff["prompt_prefill_plan"]["mode"] == "local_context_prefill"
     assert handoff["prompt_prefill_plan"]["owner"] == "local_plugin_ui"

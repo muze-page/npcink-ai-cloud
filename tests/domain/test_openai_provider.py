@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import base64
 import json
 
 import httpx
+import pytest
 
+from app.adapters.providers import openai as openai_provider
 from app.adapters.providers.base import ProviderExecutionError, ProviderExecutionRequest
 from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.domain.hosted_model_defaults import GROK_IMAGINE_IMAGE_MODEL_ID
@@ -127,6 +130,13 @@ def test_openai_adapter_sample_catalog_includes_hosted_image_generation() -> Non
     assert model.feature == "image_generation"
     assert model.instances[0].endpoint_variant == "image_generations"
     assert "z-image" in model.instances[0].capability_tags
+    assert model.raw_json is not None
+    assert "response_formats" not in model.raw_json
+
+
+def test_openai_adapter_rejects_non_exact_image_output_hosts() -> None:
+    with pytest.raises(ValueError, match="exact host names"):
+        OpenAIProviderAdapter(image_output_hosts=["*.provider.example"])
 
 
 def test_openai_adapter_tags_free_gpt55_from_http_catalog() -> None:
@@ -253,6 +263,32 @@ def _build_request(
         price_input=0.4,
         price_output=1.6,
     )
+
+
+def test_provider_execution_request_repr_hides_input_payload() -> None:
+    request = _build_request(
+        execution_kind="vision",
+        endpoint_variant="responses",
+        model_id="gpt-4.1",
+        input_payload={
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,c2Vuc2l0aXZlLWltYWdl",
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    serialized = repr(request)
+
+    assert "input_payload" not in serialized
+    assert "c2Vuc2l0aXZlLWltYWdl" not in serialized
 
 
 def test_openai_adapter_executes_chat_completions_over_http() -> None:
@@ -681,12 +717,17 @@ def test_openai_adapter_executes_image_generation_over_http() -> None:
                 "usage": {
                     "prompt_tokens": 12,
                     "cost_in_usd_ticks": 130000,
+                    "url": "https://provider.example/raw-usage",
+                    "b64_json": "must-not-escape",
+                    "provider_response_format": "url",
                 },
             },
         )
 
     adapter = OpenAIProviderAdapter(
         api_key="test-api-key",
+        image_output_hosts=["EXAMPLE.test."],
+        image_response_format="url",
         transport=httpx.MockTransport(handler),
     )
 
@@ -699,18 +740,403 @@ def test_openai_adapter_executes_image_generation_over_http() -> None:
                 "prompt": "A clean product photo of a red running shoe",
                 "aspect_ratio": "16:9",
                 "resolution": "high",
-                "response_format": "url",
                 "n": 2,
             },
         )
     )
 
-    assert result.output["artifact_type"] == "image_generation_candidates"
-    assert result.output["direct_wordpress_write"] is False
-    assert result.output["images"][0]["url"] == "https://example.test/generated-one.png"
+    assert result.output == {
+        "model_id": GROK_IMAGINE_IMAGE_MODEL_ID,
+        "candidate_count": 1,
+        "usage": {"prompt_tokens": 12, "cost_in_usd_ticks": 130000},
+    }
+    assert len(result.media_candidates) == 1
+    candidate = result.media_candidates[0]
+    assert candidate.source_url == "https://example.test/generated-one.png"
+    assert candidate.content_bytes is None
+    assert candidate.image_output_hosts == ("example.test",)
+    assert candidate.claimed_mime_type == "image/png"
+    assert candidate.revised_prompt == "A clean studio product photo"
+    assert "generated-one.png" not in repr(candidate)
     assert result.tokens_in == 12
     assert result.tokens_out == 0
     assert result.cost == 0.0013
+
+
+def test_openai_adapter_records_direct_image_cost_in_usd() -> None:
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(
+                                openai_provider.SAMPLE_IMAGE_PNG
+                            ).decode("ascii")
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 11, "cost_in_usd": 0.004321},
+                },
+            )
+        ),
+    )
+
+    result = adapter.execute(
+        _build_request(
+            execution_kind="image_generation",
+            endpoint_variant="image_generations",
+            model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+            input_payload={"prompt": "A small web illustration"},
+        )
+    )
+
+    assert result.tokens_in == 11
+    assert result.cost == 0.004321
+    assert result.output["usage"] == {
+        "prompt_tokens": 11,
+        "cost_in_usd": 0.004321,
+    }
+
+
+def test_openai_adapter_discards_non_finite_image_usage_and_dimensions() -> None:
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                content=json.dumps(
+                    {
+                        "data": [
+                            {
+                                "b64_json": base64.b64encode(
+                                    openai_provider.SAMPLE_IMAGE_PNG
+                                ).decode("ascii"),
+                                "width": float("inf"),
+                                "height": float("nan"),
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": float("nan"),
+                            "total_tokens": float("-inf"),
+                            "cost_in_usd": float("inf"),
+                        },
+                    }
+                ).encode("utf-8"),
+            )
+        ),
+    )
+
+    result = adapter.execute(
+        _build_request(
+            execution_kind="image_generation",
+            endpoint_variant="image_generations",
+            model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+            input_payload={"prompt": "A small web illustration"},
+        )
+    )
+
+    assert result.tokens_in == 0
+    assert result.cost == 0.0
+    assert result.output["usage"] == {}
+    assert result.media_candidates[0].claimed_width is None
+    assert result.media_candidates[0].claimed_height is None
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_error_code", "expected_retryable"),
+    [
+        (400, "provider.invalid_request", False),
+        (500, "provider.upstream_error", True),
+    ],
+)
+def test_openai_adapter_never_exposes_image_generation_error_bodies(
+    status_code: int,
+    expected_error_code: str,
+    expected_retryable: bool,
+) -> None:
+    leaked_body = {
+        "error": {
+            "message": (
+                "private prompt https://images.provider.test/generated.png?sig=secret "
+                'b64_json="c2Vuc2l0aXZlLWltYWdl"'
+            )
+        }
+    }
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(status_code, json=leaked_body)
+        ),
+    )
+
+    with pytest.raises(ProviderExecutionError) as error:
+        adapter.execute(
+            _build_request(
+                execution_kind="image_generation",
+                endpoint_variant="image_generations",
+                model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+                input_payload={"prompt": "A private product concept"},
+            )
+        )
+
+    assert error.value.error_code == expected_error_code
+    assert error.value.message == openai_provider.IMAGE_GENERATION_PROVIDER_ERROR_MESSAGE
+    assert error.value.retryable is expected_retryable
+    serialized_error = repr(error.value.args)
+    assert "images.provider.test" not in serialized_error
+    assert "b64_json" not in serialized_error
+    assert "private prompt" not in serialized_error
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_error_code", "expected_retryable"),
+    [
+        (400, "provider.invalid_request", False),
+        (500, "provider.upstream_error", True),
+    ],
+)
+def test_openai_adapter_never_exposes_vision_error_bodies(
+    status_code: int,
+    expected_error_code: str,
+    expected_retryable: bool,
+) -> None:
+    leaked_marker = "c2Vuc2l0aXZlLWltYWdl"
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                status_code,
+                json={
+                    "error": {
+                        "message": (
+                            "private image echoed as "
+                            f"data:image/png;base64,{leaked_marker}"
+                        )
+                    }
+                },
+            )
+        ),
+    )
+
+    with pytest.raises(ProviderExecutionError) as error:
+        adapter.execute(
+            _build_request(
+                execution_kind="vision",
+                endpoint_variant="responses",
+                model_id="gpt-4.1",
+                input_payload={
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_image",
+                                    "image_url": f"data:image/png;base64,{leaked_marker}",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+        )
+
+    assert error.value.error_code == expected_error_code
+    assert error.value.message == openai_provider.VISION_PROVIDER_ERROR_MESSAGE
+    assert error.value.retryable is expected_retryable
+    assert leaked_marker not in repr(error.value.args)
+
+
+def test_openai_adapter_strictly_decodes_provider_base64_without_serializing_it() -> None:
+    image_bytes = b"provider-image-bytes"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["response_format"] == "b64_json"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "b64_json": base64.b64encode(image_bytes).decode("ascii"),
+                        "mime_type": "image/webp",
+                        "width": 512,
+                        "height": 256,
+                    }
+                ]
+            },
+        )
+
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        image_response_format="b64_json",
+        transport=httpx.MockTransport(handler),
+    )
+    result = adapter.execute(
+        _build_request(
+            execution_kind="image_generation",
+            endpoint_variant="image_generations",
+            model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+            input_payload={"prompt": "A small web illustration"},
+        )
+    )
+
+    assert result.output == {
+        "model_id": GROK_IMAGINE_IMAGE_MODEL_ID,
+        "candidate_count": 1,
+        "usage": {},
+    }
+    assert "b64_json" not in json.dumps(result.output)
+    candidate = result.media_candidates[0]
+    assert candidate.content_bytes == image_bytes
+    assert candidate.source_url is None
+    assert candidate.claimed_mime_type == "image/webp"
+    assert candidate.claimed_width == 512
+    assert candidate.claimed_height == 256
+    assert "provider-image-bytes" not in repr(candidate)
+
+
+@pytest.mark.parametrize(
+    "candidate_payload",
+    [
+        {"b64_json": "not strict base64"},
+        {
+            "b64_json": base64.b64encode(b"image").decode("ascii"),
+            "url": "https://cdn.example.test/image.png",
+        },
+    ],
+)
+def test_openai_adapter_rejects_invalid_or_ambiguous_image_sources(
+    candidate_payload: dict[str, str],
+) -> None:
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={
+                    "data": [candidate_payload],
+                    "usage": {"prompt_tokens": 7, "cost_in_usd_ticks": 230000},
+                },
+            )
+        ),
+    )
+
+    with pytest.raises(ProviderExecutionError) as error:
+        adapter.execute(
+            _build_request(
+                execution_kind="image_generation",
+                endpoint_variant="image_generations",
+                model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+                input_payload={"prompt": "A small web illustration"},
+            )
+        )
+
+    assert error.value.error_code == "provider.output_contract_invalid"
+    assert error.value.tokens_in == 7
+    assert error.value.cost == 0.0023
+
+
+def test_openai_adapter_enforces_decoded_image_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(openai_provider, "MAX_PROVIDER_IMAGE_BYTES", 4)
+    monkeypatch.setattr(openai_provider, "MAX_PROVIDER_IMAGE_BASE64_CHARS", 8)
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={"data": [{"b64_json": base64.b64encode(b"12345").decode("ascii")}]},
+            )
+        ),
+    )
+
+    with pytest.raises(ProviderExecutionError) as error:
+        adapter.execute(
+            _build_request(
+                execution_kind="image_generation",
+                endpoint_variant="image_generations",
+                model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+                input_payload={"prompt": "A small web illustration"},
+            )
+        )
+
+    assert error.value.error_code == "provider.output_contract_invalid"
+    assert "decoded byte limit" in error.value.message
+
+
+def test_openai_adapter_enforces_candidate_count_and_aggregate_image_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encoded_image = base64.b64encode(b"1234").decode("ascii")
+    responses = iter(
+        [
+            {"data": [{"b64_json": encoded_image}] * 5},
+            {"data": [{"b64_json": encoded_image}, {"b64_json": encoded_image}]},
+        ]
+    )
+    monkeypatch.setattr(openai_provider, "MAX_PROVIDER_IMAGE_TOTAL_BYTES", 7)
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=next(responses))),
+    )
+    request = _build_request(
+        execution_kind="image_generation",
+        endpoint_variant="image_generations",
+        model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+        input_payload={"prompt": "A small web illustration"},
+    )
+
+    with pytest.raises(ProviderExecutionError, match="exceeds 4 candidates"):
+        adapter.execute(request)
+    with pytest.raises(ProviderExecutionError, match="aggregate decoded byte limit"):
+        adapter.execute(request)
+
+
+def test_openai_adapter_rejects_oversized_image_response_before_json_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(openai_provider, "MAX_PROVIDER_IMAGE_RESPONSE_BYTES", 16)
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=b"x" * 17)),
+    )
+
+    with pytest.raises(ProviderExecutionError) as error:
+        adapter.execute(
+            _build_request(
+                execution_kind="image_generation",
+                endpoint_variant="image_generations",
+                model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+                input_payload={"prompt": "A small web illustration"},
+            )
+        )
+
+    assert error.value.error_code == "provider.output_contract_invalid"
+    assert "encoded response byte limit" in error.value.message
+
+
+def test_openai_adapter_sample_image_uses_typed_static_bytes() -> None:
+    adapter = OpenAIProviderAdapter()
+
+    result = adapter.execute(
+        _build_request(
+            execution_kind="image_generation",
+            endpoint_variant="image_generations",
+            model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+            input_payload={"prompt": "A sample image"},
+        )
+    )
+
+    assert result.output == {
+        "model_id": GROK_IMAGINE_IMAGE_MODEL_ID,
+        "candidate_count": 1,
+    }
+    assert result.media_candidates[0].content_bytes == openai_provider.SAMPLE_IMAGE_PNG
+    assert result.media_candidates[0].source_url is None
 
 
 def test_openai_adapter_executes_responses_with_hosted_params_tools_and_text_format() -> None:

@@ -29,37 +29,6 @@ def build_customer_api_key(*, site_id: str, key_id: str, secret: str) -> str:
     return f"mak1_{encoded.rstrip('=')}"
 
 
-def serialize_portal_site_key(
-    key_payload: dict[str, object],
-    *,
-    cloud_api_key: str | None = None,
-) -> dict[str, object]:
-    return {
-        "site_id": str(key_payload.get("site_id") or ""),
-        "key_id": str(key_payload.get("key_id") or ""),
-        "label": str(key_payload.get("label") or ""),
-        "status": str(key_payload.get("status") or ""),
-        "scopes": _string_list(key_payload.get("scopes")),
-        "last_four": _last_four(str(key_payload.get("key_id") or "")),
-        "issued_at": str(key_payload.get("created_at") or ""),
-        "created_at": str(key_payload.get("created_at") or ""),
-        "expires_at": key_payload.get("expires_at"),
-        "last_used_at": key_payload.get("last_used_at"),
-        **({"cloud_api_key": cloud_api_key} if cloud_api_key else {}),
-    }
-
-
-def _last_four(value: str) -> str:
-    normalized = str(value or "")
-    return normalized[-4:] if normalized else ""
-
-
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
 def expand_api_key_scopes(scopes: list[str] | None) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()

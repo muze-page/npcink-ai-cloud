@@ -10,6 +10,8 @@ from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
 
 
 class Settings(BaseSettings):
+    artifact_store_root: str = Field(default="/tmp/npcink-ai-cloud-artifacts")
+    artifact_store_chunk_bytes: int = Field(default=64 * 1024, ge=4096, le=1024 * 1024)
     model_config = SettingsConfigDict(
         env_prefix="NPCINK_CLOUD_",
         env_file=(".env", ".env.local"),
@@ -45,12 +47,25 @@ class Settings(BaseSettings):
     latency_probe_interval_seconds: int = Field(default=900)
     alert_provider_degradation_interval_seconds: int = Field(default=900)
     provider_health_scan_interval_seconds: int = Field(default=900)
-    media_derivative_max_body_bytes: int = Field(default=51 * 1024 * 1024)
+    media_upload_max_body_bytes: int = Field(
+        default=51 * 1024 * 1024,
+        ge=1,
+        le=51 * 1024 * 1024,
+    )
     media_derivative_batch_default_chunk_size: int = Field(default=10)
     media_derivative_batch_max_chunk_size: int = Field(default=20)
     media_derivative_site_queued_limit: int = Field(default=100)
     media_derivative_site_running_limit: int = Field(default=2)
     artifact_cleanup_interval_seconds: int = Field(default=3600)
+    artifact_reconciliation_interval_seconds: int = Field(default=3600, ge=60)
+    artifact_reconciliation_safety_window_seconds: int = Field(default=86400, ge=3600)
+    artifact_reconciliation_page_size: int = Field(default=200, ge=1, le=500)
+    artifact_reconciliation_lease_seconds: int = Field(default=300, ge=300, le=3600)
+    artifact_orphan_cleanup_enabled: bool = Field(default=False)
+    artifact_orphan_cleanup_batch_size: int = Field(default=25, ge=1, le=100)
+    artifact_orphan_claim_lease_seconds: int = Field(default=300, ge=30, le=3600)
+    artifact_orphan_retry_base_seconds: int = Field(default=30, ge=1, le=3600)
+    artifact_orphan_retry_max_seconds: int = Field(default=3600, ge=1, le=86400)
     router_performance_worker_window_hours: int = Field(default=1)
     router_performance_worker_site_limit: int = Field(default=100)
     router_diagnostics_worker_recent_minutes: int = Field(default=60)
@@ -68,6 +83,10 @@ class Settings(BaseSettings):
     public_post_max_requests_per_window: int = Field(default=120)
     public_post_max_requests_per_key_window: int = Field(default=90)
     public_post_max_requests_per_ip_window: int = Field(default=150)
+    public_pull_rate_limit_window_seconds: int = Field(default=60)
+    public_pull_max_requests_per_window: int = Field(default=120)
+    public_pull_max_requests_per_key_window: int = Field(default=90)
+    public_pull_max_requests_per_ip_window: int = Field(default=150)
     public_guard_cooldown_window_seconds: int = Field(default=1800)
     public_guard_max_reject_events_per_site_window: int = Field(default=20)
     public_guard_max_reject_events_per_key_window: int = Field(default=16)
@@ -126,9 +145,6 @@ class Settings(BaseSettings):
     audio_generation_artifact_ttl_minutes: int = Field(default=60)
     audio_generation_artifact_max_bytes: int = Field(default=24 * 1024 * 1024)
     audio_generation_artifact_download_timeout_seconds: float = Field(default=20.0)
-    audio_asset_playback_url_ttl_seconds: int = Field(default=15 * 60)
-    audio_asset_playback_url_max_ttl_seconds: int = Field(default=60 * 60)
-    audio_asset_playback_token_secret: str | None = Field(default=None)
     litellm_provider_enabled: bool = Field(default=False)
     litellm_base_url: str | None = Field(default=None)
     litellm_api_key: str | None = Field(default=None)
@@ -281,8 +297,7 @@ class Settings(BaseSettings):
 
     def trusted_hosts(self) -> set[str]:
         hosts = {
-            self._normalize_host(item)
-            for item in str(self.trusted_host_allowlist or "").split(",")
+            self._normalize_host(item) for item in str(self.trusted_host_allowlist or "").split(",")
         }
         hosts = {host for host in hosts if host}
         environment = str(self.environment or "").strip().lower()
@@ -378,6 +393,11 @@ class Settings(BaseSettings):
             raise ValueError("plugin_observability_cleanup_interval_seconds must be at least 60")
         if self.artifact_cleanup_interval_seconds < 60:
             raise ValueError("artifact_cleanup_interval_seconds must be at least 60")
+        if self.artifact_orphan_retry_max_seconds < self.artifact_orphan_retry_base_seconds:
+            raise ValueError(
+                "artifact_orphan_retry_max_seconds must not be less than "
+                "artifact_orphan_retry_base_seconds"
+            )
         if self.media_derivative_batch_default_chunk_size < 1:
             raise ValueError("media_derivative_batch_default_chunk_size must be at least 1")
         if not 1 <= self.media_derivative_batch_max_chunk_size <= 100:

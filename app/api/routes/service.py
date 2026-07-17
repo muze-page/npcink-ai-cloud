@@ -138,10 +138,13 @@ class AdminSupportRequestAttachmentPayload(BaseModel):
 
 
 class SiteProvisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     site_id: str
     account_id: str
     name: str = ""
     status: str = "provisioning"
+    site_url: str | None = Field(default=None, max_length=2048)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1317,6 +1320,7 @@ async def provision_site(
             account_id=payload.account_id,
             name=payload.name,
             status=payload.status,
+            site_url=payload.site_url,
             metadata_json=payload.metadata,
             audit_context=audit_context,
         )

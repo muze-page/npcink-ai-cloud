@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { installAdminMocks } from './helpers/admin-operator-fixture';
 
 const mediaData = {
+  contract_version: 'magick-media-observability-summary-v2',
   generated_at: '2026-07-12T12:00:00Z',
   workflow_metadata: {},
   window: { hours: 24, start_at: '2026-07-11T12:00:00Z', end_at: '2026-07-12T12:00:00Z' },
@@ -17,7 +18,11 @@ const mediaData = {
     output_bytes_total: 9000000,
     bytes_saved_total: 9000000,
     compression_ratio: 0.5,
-    artifact_download_count: 7,
+    delivery_started_count: 7,
+    delivery_stream_completed_count: 6,
+    delivery_acknowledged_count: 5,
+    stream_completion_rate: 0.8571,
+    acknowledgement_rate: 0.8333,
     last_finished_at: '2026-07-12T11:58:00Z',
     active_site_count: 2,
     active_account_count: 1,

@@ -44,7 +44,11 @@ type MediaObservabilityData = {
     outputBytesTotal: number;
     bytesSavedTotal: number;
     compressionRatio: number;
-    artifactDownloadCount: number;
+    deliveryStartedCount: number;
+    deliveryStreamCompletedCount: number;
+    deliveryAcknowledgedCount: number;
+    streamCompletionRate: number;
+    acknowledgementRate: number;
     lastFinishedAt: string;
     activeSiteCount: number;
     activeAccountCount: number;
@@ -136,7 +140,11 @@ function normalizeMediaObservability(raw: any): MediaObservabilityData {
       outputBytesTotal: Number(totals.output_bytes_total ?? 0),
       bytesSavedTotal: Number(totals.bytes_saved_total ?? 0),
       compressionRatio: Number(totals.compression_ratio ?? 0),
-      artifactDownloadCount: Number(totals.artifact_download_count ?? 0),
+      deliveryStartedCount: Number(totals.delivery_started_count ?? 0),
+      deliveryStreamCompletedCount: Number(totals.delivery_stream_completed_count ?? 0),
+      deliveryAcknowledgedCount: Number(totals.delivery_acknowledged_count ?? 0),
+      streamCompletionRate: Number(totals.stream_completion_rate ?? 0),
+      acknowledgementRate: Number(totals.acknowledgement_rate ?? 0),
       lastFinishedAt: String(totals.last_finished_at ?? ''),
       activeSiteCount: Number(totals.active_site_count ?? 0),
       activeAccountCount: Number(totals.active_account_count ?? 0),
@@ -511,12 +519,19 @@ function AdminMediaObservabilityContent() {
                     size: 'compact',
                   },
                   {
-                    label: t('admin.media_obs.downloads', {}, 'Downloads'),
-                    value: formatNumber(data?.totals.artifactDownloadCount || 0),
+                    label: t('admin.media_obs.delivery_started', {}, 'Deliveries started'),
+                    value: formatNumber(data?.totals.deliveryStartedCount || 0),
                     detail: t(
-                      'admin.media_obs.watermark_jobs_detail',
-                      { count: formatNumber(data?.totals.watermarkJobCount || 0) },
-                      '{{count}} watermark jobs'
+                      'admin.media_obs.delivery_detail',
+                      {
+                        completed: formatNumber(data?.totals.deliveryStreamCompletedCount || 0),
+                        completion_rate: formatPercent(data?.totals.streamCompletionRate || 0),
+                        acknowledged: formatNumber(data?.totals.deliveryAcknowledgedCount || 0),
+                        acknowledgement_rate: formatPercent(
+                          data?.totals.acknowledgementRate || 0
+                        ),
+                      },
+                      '{{completed}} stream-complete ({{completion_rate}}) · {{acknowledged}} receipt-verified ({{acknowledgement_rate}})'
                     ),
                   },
                 ]}

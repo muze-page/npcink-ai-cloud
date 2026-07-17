@@ -27,8 +27,8 @@ def test_site_grant_drop_migration_fails_closed_when_rows_exist() -> None:
 
 
 def test_addon_login_keeps_complete_portal_return_path() -> None:
-    sites_page = (ROOT / "frontend/src/app/portal/sites/page.tsx").read_text(
-        encoding="utf-8"
-    )
-    assert "encodeURIComponent(currentPath)" in sites_page
-    assert "actionHref={`/portal/login?redirect=" in sites_page
+    session_boundary = (
+        ROOT / "frontend/src/components/portal/PortalSessionBoundary.tsx"
+    ).read_text(encoding="utf-8")
+    assert "const returnTo = `${pathname}${window.location.search}`" in session_boundary
+    assert "`/portal/login?redirect=${encodeURIComponent(returnTo)}`" in session_boundary

@@ -149,10 +149,32 @@ assert.match(
   /available_actions\?: Array<'continue_payment' \| 'cancel'>[\s\S]*async cancelAccountPaymentOrder[\s\S]*\/account\/payment-orders\/\$\{encodeURIComponent\(orderId\)\}\/cancellation/,
   'Portal payment order contract must expose server-owned actions and unified cancellation'
 );
+const usageBundleSource = portalClientSource.match(
+  /async getUsageBundle[\s\S]*?\n  }\n\n  async getAccountCommercialBundle/
+)?.[0] || '';
 assert.match(
-  portalClientSource,
-  /getUsageBundle[\s\S]*listAccountPaymentOrders\(\{ statusGroup: 'all', limit: 10 \}\)/,
-  'Portal usage bundle must use account-level payment orders so Pro checkout orders are visible without a site'
+  usageBundleSource,
+  /getAccountUsageSummary\(\)[\s\S]*getAccountEntitlements\(\)/,
+  'Portal usage bundle must load only the usage and entitlement data consumed by the usage page'
+);
+assert.doesNotMatch(
+  usageBundleSource,
+  /getAccountCreditLedger|listAccountCreditPacks|listAccountPaymentOrders/,
+  'Portal usage bundle must not issue unconsumed commercial or payment requests'
+);
+
+const commercialBundleSource = portalClientSource.match(
+  /async getAccountCommercialBundle[\s\S]*?\n  }\n\n  async getAuditBundle/
+)?.[0] || '';
+assert.match(
+  commercialBundleSource,
+  /getAccountEntitlements\(\)[\s\S]*listAccountCreditPacks\(\)[\s\S]*listAccountPlanOffers\(\)/,
+  'Portal commercial bundle must load the catalog data consumed by the billing workspace'
+);
+assert.doesNotMatch(
+  commercialBundleSource,
+  /getAccountCreditLedger|listAccountPaymentOrders/,
+  'Portal commercial bundle must not issue unconsumed ledger or payment requests'
 );
 assert.doesNotMatch(
   paymentReturnNoticeSource,

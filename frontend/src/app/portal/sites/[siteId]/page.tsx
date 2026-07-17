@@ -19,7 +19,7 @@ import { portalClient, type PortalSiteSummaryRecord, type Site } from '@/lib/por
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import {
   getPortalSiteDisplayName,
-  getPortalSiteWordPressUrl,
+  getPortalSiteUrl,
 } from '@/lib/portal-site-display';
 import { formatDate } from '@/lib/utils';
 
@@ -98,7 +98,7 @@ function PortalSiteRecordContent() {
     status: (summary.site?.status || sessionSite?.status || 'inactive') as Site['status'],
     created_at: summary.site?.created_at || sessionSite?.created_at || '',
   };
-  const siteUrl = getPortalSiteWordPressUrl(site);
+  const siteUrl = getPortalSiteUrl(site);
   const monitoringNeedsAttention = siteMonitoring.overview
     ? siteMonitoring.overview.health.status !== 'ok'
       || siteMonitoring.overview.action_required.length > 0
@@ -129,7 +129,7 @@ function PortalSiteRecordContent() {
     try {
       await portalClient.removeSite(site.site_id);
       await refresh();
-      router.push('/portal/sites');
+      router.push('/portal#sites');
     } catch (err) {
       setRemoveError(
         formatPortalErrorMessage(

@@ -1439,7 +1439,7 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
         if not candidate:
             sites = repository.list_sites(account_id=account_id, limit=1)
             if sites:
-                candidate = str(getattr(sites[0], "wordpress_url", "") or "")
+                candidate = str(getattr(sites[0], "site_url", "") or "")
         parsed = urlparse(candidate if "://" in candidate else f"https://{candidate}")
         return str(parsed.hostname or "").strip().lower()
 

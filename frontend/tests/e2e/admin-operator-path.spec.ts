@@ -269,8 +269,8 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByText(/已发布|published/i).first()).toBeVisible();
 
   await page.goto('/admin/ai-resources', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: /^Suppliers$|^供应商$/i })).toBeVisible();
-  await expect(page.getByRole('tab', { name: /Model suppliers|模型供应商|模型供應商/i })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('heading', { name: /^Model suppliers$|^模型供应商$|^模型供應商$/i })).toBeVisible();
+  await expect(page.getByRole('tab')).toHaveCount(0);
   await expect(page.getByRole('tab', { name: /All suppliers|全部供应商|全部供應商/i })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: /Diagnostics|诊断|診斷/i })).toHaveCount(0);
   await expect(page.getByText(/run_records/i).first()).toHaveCount(0);
@@ -385,15 +385,17 @@ test('admin navigation stays customer-first', async ({ page }) => {
   const adminNav = page.getByRole('navigation', { name: /管理后台|admin/i });
   const adminPrimaryNav = page.locator('[data-ui="admin-primary-nav"]');
   const primaryLinks = adminPrimaryNav.locator('a.admin-nav-link');
-  await expect(primaryLinks).toHaveCount(8);
+  await expect(primaryLinks).toHaveCount(10);
   await expect(primaryLinks.nth(0)).toHaveAttribute('href', '/admin');
   await expect(primaryLinks.nth(1)).toHaveAttribute('href', '/admin/accounts');
   await expect(primaryLinks.nth(2)).toHaveAttribute('href', '/admin/support-requests');
   await expect(primaryLinks.nth(3)).toHaveAttribute('href', '/admin/coverage');
   await expect(primaryLinks.nth(4)).toHaveAttribute('href', '/admin/plans');
   await expect(primaryLinks.nth(5)).toHaveAttribute('href', '/admin/ai-resources');
-  await expect(primaryLinks.nth(6)).toHaveAttribute('href', '/admin/troubleshooting');
-  await expect(primaryLinks.nth(7)).toHaveAttribute('href', '/admin/service-settings');
+  await expect(primaryLinks.nth(6)).toHaveAttribute('href', '/admin/external-services');
+  await expect(primaryLinks.nth(7)).toHaveAttribute('href', '/admin/vector-settings');
+  await expect(primaryLinks.nth(8)).toHaveAttribute('href', '/admin/troubleshooting');
+  await expect(primaryLinks.nth(9)).toHaveAttribute('href', '/admin/service-settings');
   await expect(adminPrimaryNav.getByText(/^Workspace$|^工作台$/i)).toBeVisible();
   await expect(adminPrimaryNav.getByText(/^Customer Ops$|^客户运营$/i)).toBeVisible();
   await expect(adminPrimaryNav.getByText(/^Runtime Plane$|^运行面$/i)).toBeVisible();
@@ -402,7 +404,7 @@ test('admin navigation stays customer-first', async ({ page }) => {
   await expect(adminNav.getByRole('link', { name: /^Customers$|^客户$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Sites$|^站点$|^站點$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Packages \/ Service Status$|^套餐\/服务状态$|^方案\/服務狀態$/i })).toHaveCount(0);
-  await expect(adminNav.getByRole('link', { name: /^Providers$|^供应商$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Model suppliers$|^模型供应商$|^模型供應商$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Model Binding$|^模型绑定$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Runtime Diagnostics$|^运行诊断$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Hosted Models$|^托管模型$|^託管模型$/i })).toHaveCount(0);

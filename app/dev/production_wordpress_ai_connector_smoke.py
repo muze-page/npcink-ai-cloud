@@ -106,12 +106,18 @@ def redact_report(value: object) -> object:
     return value
 
 
-def build_title_execute_payload() -> dict[str, object]:
+def build_title_execute_payload(
+    *,
+    site_id: str,
+    site_url: str,
+    connector_version: str,
+) -> dict[str, object]:
     return {
-        "ability_name": "npcink-cloud/wp-ai-connector",
-        "contract_version": "wp_ai_connector_runtime.v1",
-        "channel": "wordpress_ai_connector",
-        "execution_kind": "wordpress_ai_connector",
+        "site_id": site_id,
+        "ability_name": "npcink-cloud/connector-runtime",
+        "contract_version": "cloud_connector_runtime.v1",
+        "channel": "editor",
+        "execution_kind": "text",
         "profile_id": "text.balanced",
         "execution_pattern": "inline",
         "storage_mode": "result_only",
@@ -120,21 +126,21 @@ def build_title_execute_payload() -> dict[str, object]:
         "retry_max": 0,
         "retention_ttl": 86400,
         "input": {
-            "contract_version": "wp_ai_connector_runtime.v1",
-            "source_surface": "wordpress_ai_connector",
-            "connector_id": "npcink-cloud",
-            "task": "title_generation",
-            "write_posture": "suggestion_only",
-            "direct_wordpress_write": False,
-            "no_conversation": True,
-            "expected_response_contract": "wp_ai_connector_result.v1",
-            "request": {
-                "post_title": "Production Cloud ability-model routing verification",
-                "post_excerpt": (
-                    "Verify production Cloud WordPress AI Connector title generation "
-                    "uses the managed ability-model route."
-                ),
-                "prompt": "Suggest one concise title for this WordPress post.",
+            "site_url": site_url,
+            "platform_kind": "wordpress",
+            "connector_id": "npcink-cloud-addon",
+            "connector_version": connector_version,
+            "suggestion_only": True,
+            "operation_contract": {
+                "contract_version": "wordpress_operation.v1",
+                "task": "title_generation",
+                "request": {
+                    "source_text": (
+                        "<content>Production Cloud runtime verification confirms that "
+                        "WordPress title suggestions use the managed hosted route and "
+                        "remain reviewable without a Cloud-side WordPress write.</content>"
+                    ),
+                },
             },
         },
         "policy": {"allow_fallback": False},
@@ -160,7 +166,6 @@ def build_image_resolve_payload() -> dict[str, object]:
             "task": "image_generation",
             "prompt": "A clean media-library illustration of a WordPress editor workspace.",
             "n": 1,
-            "response_format": "url",
             "aspect_ratio": "16:9",
             "resolution": "medium",
         },
@@ -176,6 +181,8 @@ def build_smoke_report(
     timeout_seconds: int,
     execute_title: bool,
     approval_text: str,
+    site_url: str,
+    connector_version: str,
     resolve_image: bool = True,
     http_get: HttpGet = get_json,
     http_post: HttpPost = post_json,
@@ -217,7 +224,11 @@ def build_smoke_report(
         title_result = _signed_post(
             base_url=base_url,
             path="/v1/runtime/execute",
-            payload=build_title_execute_payload(),
+            payload=build_title_execute_payload(
+                site_id=secret_payload["site_id"],
+                site_url=site_url,
+                connector_version=connector_version,
+            ),
             secret_payload=secret_payload,
             trace_id="prodtitle" + trace_seed[:23],
             idempotency_key=f"prod-wp-ai-title-execute-{trace_seed[:16]}",
@@ -244,8 +255,8 @@ def build_smoke_report(
         },
         "checks": checks,
         "health": _redact_result(health_result),
-        "image_resolve": _summarize_runtime_response(image_result),
-        "title_execute": _summarize_runtime_response(title_result),
+        "image_resolve": _summarize_runtime_response(image_result, execute=False),
+        "title_execute": _summarize_runtime_response(title_result, execute=True),
         "next_steps": _next_steps(checks, execute_title=execute_title),
     }
 
@@ -319,50 +330,115 @@ def _build_title_execute_check(result: dict[str, object]) -> dict[str, object]:
     response = _dict(result.get("response"))
     data = _dict(response.get("data"))
     result_payload = _dict(data.get("result"))
+    operation = _dict(result_payload.get("operation_contract"))
+    output = _dict(result_payload.get("output"))
+    provider_call_count = data.get("provider_call_count")
+    error_code = data.get("error_code")
+    error_stage = data.get("error_stage")
     ok = (
         bool(result.get("ok"))
         and response.get("status") == "ok"
         and data.get("status") == "succeeded"
+        and bool(_text(data.get("run_id")))
+        and bool(_text(data.get("trace_id")))
         and data.get("profile_id") == "wp-ai.short-text"
-        and bool(_text(result_payload.get("output_text")))
+        and bool(_text(data.get("provider_id")))
+        and bool(_text(data.get("model_id")))
+        and bool(_text(data.get("instance_id")))
+        and isinstance(provider_call_count, int)
+        and not isinstance(provider_call_count, bool)
+        and provider_call_count >= 1
+        and data.get("idempotent_replay") is False
+        and isinstance(error_code, str)
+        and error_code == ""
+        and isinstance(error_stage, str)
+        and error_stage == ""
+        and result_payload.get("contract_version") == "cloud_connector_result.v1"
+        and result_payload.get("suggestion_only") is True
+        and operation.get("contract_version") == "wordpress_operation.v1"
+        and operation.get("task") == "title_generation"
+        and bool(_text(output.get("output_text")))
     )
     return {
         "name": "wordpress_ai_title_execute",
         "ok": ok,
         "run_id": data.get("run_id"),
+        "trace_id": data.get("trace_id"),
         "profile_id": data.get("profile_id"),
         "status": data.get("status"),
-        "output_text_present": bool(_text(result_payload.get("output_text"))),
-        "error_code": response.get("error_code"),
+        "provider_id": data.get("provider_id"),
+        "model_id": data.get("model_id"),
+        "instance_id": data.get("instance_id"),
+        "provider_call_count": provider_call_count,
+        "idempotent_replay": data.get("idempotent_replay"),
+        "error_code": error_code,
+        "error_stage": error_stage,
+        "result_contract": result_payload.get("contract_version"),
+        "suggestion_only": result_payload.get("suggestion_only"),
+        "operation_contract_version": operation.get("contract_version"),
+        "operation_task": operation.get("task"),
+        "output_text_present": bool(_text(output.get("output_text"))),
     }
 
 
-def _summarize_runtime_response(result: dict[str, object]) -> dict[str, object]:
+def _summarize_runtime_response(
+    result: dict[str, object],
+    *,
+    execute: bool,
+) -> dict[str, object]:
     if result.get("skipped"):
         return {"skipped": True, "reason": result.get("reason")}
     response = _dict(result.get("response"))
     data = _dict(response.get("data"))
-    selected = _dict(data.get("selected_candidate"))
     result_payload = _dict(data.get("result"))
+    operation = _dict(result_payload.get("operation_contract"))
+    output = _dict(result_payload.get("output"))
     policy = _dict(data.get("policy"))
-    return {
+    summary: dict[str, object] = {
         "ok": bool(result.get("ok")),
         "status_code": result.get("status_code", 0),
         "response_status": response.get("status"),
-        "error_code": response.get("error_code"),
         "message": response.get("message"),
-        "trace_id": result.get("trace_id"),
         "idempotency_key": result.get("idempotency_key"),
         "run_id": data.get("run_id"),
         "run_status": data.get("status"),
         "profile_id": data.get("profile_id"),
         "execution_kind": data.get("execution_kind"),
-        "selected_provider_id": selected.get("provider_id"),
-        "selected_model_id": selected.get("model_id") or data.get("selected_model_id"),
-        "selected_instance_id": selected.get("instance_id") or data.get("selected_instance_id"),
         "routing_intent": policy.get("routing_intent"),
-        "output_text_preview": _text(result_payload.get("output_text"))[:200],
+        "result_contract": result_payload.get("contract_version"),
+        "suggestion_only": result_payload.get("suggestion_only"),
+        "operation_contract_version": operation.get("contract_version"),
+        "operation_task": operation.get("task"),
+        "output_text_preview": _text(output.get("output_text"))[:200],
     }
+    if execute:
+        summary.update(
+            {
+                "error_code": data.get("error_code"),
+                "error_stage": data.get("error_stage"),
+                "trace_id": data.get("trace_id"),
+                "idempotent_replay": data.get("idempotent_replay"),
+                "provider_id": data.get("provider_id"),
+                "model_id": data.get("model_id"),
+                "instance_id": data.get("instance_id"),
+                "provider_call_count": data.get("provider_call_count"),
+            }
+        )
+    else:
+        selected = _dict(data.get("selected_candidate"))
+        summary.update(
+            {
+                "error_code": response.get("error_code"),
+                "trace_id": result.get("trace_id"),
+                "provider_id": selected.get("provider_id"),
+                "model_id": selected.get("model_id"),
+                "instance_id": selected.get("instance_id"),
+                "selected_provider_id": selected.get("provider_id"),
+                "selected_model_id": selected.get("model_id"),
+                "selected_instance_id": selected.get("instance_id"),
+            }
+        )
+    return summary
 
 
 def _redact_result(result: dict[str, object]) -> dict[str, object]:
@@ -408,6 +484,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=int, default=90)
     parser.add_argument("--skip-image-resolve", action="store_true")
     parser.add_argument("--execute-title", action="store_true")
+    parser.add_argument("--site-url", required=True)
+    parser.add_argument("--connector-version", required=True)
     parser.add_argument("--approval-text", default="")
     parser.add_argument("--approval-file", type=Path, default=None)
     return parser
@@ -428,6 +506,8 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=max(1, int(args.timeout_seconds)),
             execute_title=bool(args.execute_title),
             approval_text=approval_text,
+            site_url=str(args.site_url),
+            connector_version=str(args.connector_version),
             resolve_image=not bool(args.skip_image_resolve),
         )
     except (SmokeError, ValueError) as exc:

@@ -10,6 +10,11 @@ const metadataPanelSource = readFileSync(
   resolve(process.cwd(), 'src/components/backoffice/CloudWorkflowMetadataPanel.tsx'),
   'utf8'
 );
+const portalClientSource = readFileSync(resolve(process.cwd(), 'src/lib/portal-client.ts'), 'utf8');
+const portalPanelSource = readFileSync(
+  resolve(process.cwd(), 'src/components/portal/PortalMediaProcessingPanel.tsx'),
+  'utf8'
+);
 const i18nSource = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8');
 const zhStart = i18nSource.indexOf("'zh-CN': {");
 
@@ -80,6 +85,33 @@ assert.doesNotMatch(
   pageSource,
   /detail:\s*data\.health\.summary/,
   'Media Observability must not render backend English health summary directly'
+);
+
+assert.doesNotMatch(
+  `${pageSource}\n${portalClientSource}\n${portalPanelSource}`,
+  /artifactDownloadCount|artifact_download_count|admin\.media_obs\.downloads|\bdownloads\b/i,
+  'Media Observability must not retain the retired derivative download counter'
+);
+
+for (const field of [
+  'delivery_started_count',
+  'delivery_stream_completed_count',
+  'delivery_acknowledged_count',
+  'stream_completion_rate',
+  'acknowledgement_rate',
+]) {
+  assert.match(pageSource, new RegExp(field), `${field} must be projected into the admin UI`);
+  assert.match(
+    portalClientSource,
+    new RegExp(field),
+    `${field} must be declared in the portal client contract`
+  );
+}
+
+assert.match(
+  portalPanelSource,
+  /delivery_stream_completed_count[\s\S]*delivery_acknowledged_count/,
+  'Portal media panel must show stream completion and verified receipt evidence'
 );
 
 assert.doesNotMatch(

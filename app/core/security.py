@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -32,6 +34,8 @@ PUBLIC_RUNTIME_MAX_NONCE_LENGTH = 128
 NONCE_HEADER = "X-Npcink-Nonce"
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 NONCE_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+HMAC_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SECRET_HASH_ALGORITHM = "pbkdf2_sha256"
 SECRET_HASH_ITERATIONS = 210_000
 SECRET_HASH_SALT = b"npcink-ai-cloud-secret-hash-v2"
@@ -39,6 +43,11 @@ REPLAY_SCOPE_PUBLIC_POST_SITE = "public_post_site"
 REPLAY_SCOPE_PUBLIC_POST_KEY = "public_post_key"
 REPLAY_SCOPE_PUBLIC_POST_IP = "public_post_ip"
 REPLAY_SCOPE_PUBLIC_POST = REPLAY_SCOPE_PUBLIC_POST_SITE
+REPLAY_SCOPE_PUBLIC_PULL_SITE = "public_pull_site"
+REPLAY_SCOPE_PUBLIC_PULL_KEY = "public_pull_key"
+REPLAY_SCOPE_PUBLIC_PULL_IP = "public_pull_ip"
+PUBLIC_REPLAY_POLICY_METHOD_DEFAULT = "method_default"
+PUBLIC_REPLAY_POLICY_MEDIA_PULL = "media_pull"
 REPLAY_SCOPE_INTERNAL_POST_TOKEN = "internal_post_token"
 REPLAY_SCOPE_INTERNAL_POST_IP = "internal_post_ip"
 REPLAY_SCOPE_INTERNAL_POST = REPLAY_SCOPE_INTERNAL_POST_TOKEN
@@ -57,6 +66,15 @@ class RequestAuthContext:
     idempotency_key: str
     timestamp: str
     body_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class PrehashedRequestBody:
+    sha256_hex: str
+    byte_size: int
+
+
+RequestBodyEvidenceLoader = Callable[[], Awaitable[PrehashedRequestBody]]
 
 
 class RequestAuthError(ValueError):
@@ -140,6 +158,15 @@ def normalize_signature(signature: str) -> str:
     if normalized.startswith("sha256="):
         normalized = normalized[7:]
     return normalized.lower()
+
+
+def _validate_signature_format(signature: str) -> None:
+    if not HMAC_SHA256_PATTERN.fullmatch(signature):
+        raise RequestAuthError(
+            401,
+            "auth.invalid_signature",
+            "request signature is invalid",
+        )
 
 
 def parse_request_timestamp(timestamp: str) -> datetime:
@@ -249,11 +276,34 @@ def _validate_payload_size(
     *,
     max_body_bytes: int = PUBLIC_RUNTIME_MAX_BODY_BYTES,
 ) -> None:
-    if len(body) > max_body_bytes:
+    _validate_payload_byte_size(len(body), max_body_bytes=max_body_bytes)
+
+
+def _validate_payload_byte_size(
+    byte_size: int,
+    *,
+    max_body_bytes: int = PUBLIC_RUNTIME_MAX_BODY_BYTES,
+) -> None:
+    if byte_size > max_body_bytes:
         raise RequestAuthError(
             413,
             "auth.payload_too_large",
             "request payload exceeds the accepted size limit",
+        )
+    if byte_size < 0:
+        raise RequestAuthError(
+            400,
+            "auth.invalid_body_digest",
+            "prehashed request body byte size is invalid",
+        )
+
+
+def _validate_prehashed_body_digest(body_digest: str) -> None:
+    if not SHA256_HEX_PATTERN.fullmatch(body_digest):
+        raise RequestAuthError(
+            400,
+            "auth.invalid_body_digest",
+            "prehashed request body digest is invalid",
         )
 
 
@@ -292,6 +342,25 @@ def _validate_site_and_key(
         )
 
     return api_key
+
+
+def _preflight_site_and_key(
+    *,
+    database_url: str,
+    site_id: str,
+    key_id: str,
+    required_scope: str | None,
+    now: datetime,
+) -> None:
+    with get_session(database_url) as session:
+        _validate_site_and_key(
+            site=session.get(Site, site_id),
+            api_key=session.get(SiteApiKey, key_id),
+            site_id=site_id,
+            key_id=key_id,
+            required_scope=required_scope,
+            now=now,
+        )
 
 
 def _log_auth_rejection(
@@ -349,27 +418,37 @@ def _reserve_replay_receipt(
     ttl_seconds: int,
 ) -> None:
     receipt = session.scalar(
-        select(ReplayReceipt).where(
+        select(ReplayReceipt)
+        .where(
             ReplayReceipt.scope_kind == scope_kind,
             ReplayReceipt.scope_id == scope_id,
             ReplayReceipt.replay_key == replay_key,
         )
+        .with_for_update()
     )
     expires_at = now + timedelta(seconds=max(1, ttl_seconds))
     if receipt is None:
-        session.add(
-            ReplayReceipt(
-                scope_kind=scope_kind,
-                scope_id=scope_id,
-                replay_key=replay_key,
-                method=method.upper(),
-                path=path,
-                trace_id=trace_id,
-                created_at=now,
-                expires_at=expires_at,
-            )
-        )
-        session.flush()
+        try:
+            with session.begin_nested():
+                session.add(
+                    ReplayReceipt(
+                        scope_kind=scope_kind,
+                        scope_id=scope_id,
+                        replay_key=replay_key,
+                        method=method.upper(),
+                        path=path,
+                        trace_id=trace_id,
+                        created_at=now,
+                        expires_at=expires_at,
+                    )
+                )
+                session.flush()
+        except IntegrityError as error:
+            raise RequestAuthError(
+                409,
+                "auth.replay_blocked",
+                "request replay marker has already been consumed",
+            ) from error
         return
 
     if _normalize_datetime(receipt.expires_at) > now:
@@ -480,6 +559,7 @@ def _build_runtime_guard_scope_pairs(
     site_id: str,
     key_id: str,
     client_ref: str,
+    replay_policy: str = PUBLIC_REPLAY_POLICY_METHOD_DEFAULT,
 ) -> list[tuple[str, str]]:
     if auth_surface == RUNTIME_GUARD_SURFACE_INTERNAL:
         return _normalize_guard_scope_pairs(
@@ -489,11 +569,24 @@ def _build_runtime_guard_scope_pairs(
             ]
         )
 
+    if replay_policy == PUBLIC_REPLAY_POLICY_MEDIA_PULL:
+        scope_kinds = (
+            REPLAY_SCOPE_PUBLIC_PULL_SITE,
+            REPLAY_SCOPE_PUBLIC_PULL_KEY,
+            REPLAY_SCOPE_PUBLIC_PULL_IP,
+        )
+    else:
+        scope_kinds = (
+            REPLAY_SCOPE_PUBLIC_POST_SITE,
+            REPLAY_SCOPE_PUBLIC_POST_KEY,
+            REPLAY_SCOPE_PUBLIC_POST_IP,
+        )
+
     return _normalize_guard_scope_pairs(
         [
-            (REPLAY_SCOPE_PUBLIC_POST_SITE, site_id),
-            (REPLAY_SCOPE_PUBLIC_POST_KEY, key_id),
-            (REPLAY_SCOPE_PUBLIC_POST_IP, client_ref),
+            (scope_kinds[0], site_id),
+            (scope_kinds[1], key_id),
+            (scope_kinds[2], client_ref),
         ]
     )
 
@@ -543,6 +636,7 @@ def record_runtime_guard_rejection(
     key_id: str = "",
     trace_id: str = "",
     required_scope: str | None = None,
+    replay_policy: str = PUBLIC_REPLAY_POLICY_METHOD_DEFAULT,
 ) -> None:
     client_ref = resolve_client_scope_id(request)
     scope_pairs = _build_runtime_guard_scope_pairs(
@@ -550,6 +644,7 @@ def record_runtime_guard_rejection(
         site_id=site_id,
         key_id=key_id,
         client_ref=client_ref,
+        replay_policy=replay_policy,
     )
     if not scope_pairs:
         return
@@ -557,7 +652,7 @@ def record_runtime_guard_rejection(
     payload_json: dict[str, object] = {
         "message": error.message,
         "required_scope": required_scope or "",
-        "query": request.url.query,
+        "has_query": bool(request.url.query),
         "has_nonce": bool(request.headers.get(NONCE_HEADER, "").strip()),
         "has_idempotency_key": bool(request.headers.get("Idempotency-Key", "").strip()),
     }
@@ -607,6 +702,12 @@ async def authorize_request(
     require_idempotency: bool,
     required_scope: str | None = None,
     max_body_bytes: int = PUBLIC_RUNTIME_MAX_BODY_BYTES,
+    body_evidence_loader: RequestBodyEvidenceLoader | None = None,
+    replay_policy: str = PUBLIC_REPLAY_POLICY_METHOD_DEFAULT,
+    public_pull_rate_limit_window_seconds: int = 60,
+    public_pull_max_requests_per_window: int = 120,
+    public_pull_max_requests_per_key_window: int = 90,
+    public_pull_max_requests_per_ip_window: int = 150,
 ) -> RequestAuthContext:
     site_id = ""
     key_id = ""
@@ -633,16 +734,47 @@ async def authorize_request(
 
         nonce = request.headers.get(NONCE_HEADER, "").strip()
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
-        require_nonce = request.method.upper() == "POST"
+        if replay_policy not in {
+            PUBLIC_REPLAY_POLICY_METHOD_DEFAULT,
+            PUBLIC_REPLAY_POLICY_MEDIA_PULL,
+        }:
+            raise ValueError(f"unsupported public replay policy: {replay_policy}")
+        require_nonce = (
+            request.method.upper() == "POST"
+            or replay_policy == PUBLIC_REPLAY_POLICY_MEDIA_PULL
+        )
         _validate_nonce(nonce, required=require_nonce)
         _validate_idempotency_key(idempotency_key, required=require_idempotency)
 
         signature = normalize_signature(
             _require_header(request, "X-Npcink-Signature", "auth.signature_required")
         )
-        body = await request.body()
-        _validate_payload_size(body, max_body_bytes=max_body_bytes)
-        body_digest = build_body_digest(body)
+        _validate_signature_format(signature)
+        preflight_now = datetime.now(UTC)
+        _validate_timestamp(
+            timestamp,
+            now=preflight_now,
+            tolerance_seconds=timestamp_tolerance_seconds,
+        )
+        if body_evidence_loader is not None:
+            _preflight_site_and_key(
+                database_url=database_url,
+                site_id=site_id,
+                key_id=key_id,
+                required_scope=required_scope,
+                now=preflight_now,
+            )
+            body_evidence = await body_evidence_loader()
+            _validate_payload_byte_size(
+                body_evidence.byte_size,
+                max_body_bytes=max_body_bytes,
+            )
+            _validate_prehashed_body_digest(body_evidence.sha256_hex)
+            body_digest = body_evidence.sha256_hex
+        else:
+            body = await request.body()
+            _validate_payload_size(body, max_body_bytes=max_body_bytes)
+            body_digest = build_body_digest(body)
         canonical_request = build_canonical_request(
             method=request.method,
             path=request.url.path,
@@ -694,38 +826,62 @@ async def authorize_request(
                 replay_ttl_seconds = _resolve_replay_receipt_ttl_seconds(
                     timestamp_tolerance_seconds
                 )
+                if replay_policy == PUBLIC_REPLAY_POLICY_MEDIA_PULL:
+                    scope_kinds = (
+                        REPLAY_SCOPE_PUBLIC_PULL_SITE,
+                        REPLAY_SCOPE_PUBLIC_PULL_KEY,
+                        REPLAY_SCOPE_PUBLIC_PULL_IP,
+                    )
+                    rate_window_seconds = public_pull_rate_limit_window_seconds
+                    rate_limits = (
+                        public_pull_max_requests_per_window,
+                        public_pull_max_requests_per_key_window,
+                        public_pull_max_requests_per_ip_window,
+                    )
+                else:
+                    scope_kinds = (
+                        REPLAY_SCOPE_PUBLIC_POST_SITE,
+                        REPLAY_SCOPE_PUBLIC_POST_KEY,
+                        REPLAY_SCOPE_PUBLIC_POST_IP,
+                    )
+                    rate_window_seconds = public_post_rate_limit_window_seconds
+                    rate_limits = (
+                        public_post_max_requests_per_window,
+                        public_post_max_requests_per_key_window,
+                        public_post_max_requests_per_ip_window,
+                    )
                 cooldown_scopes = [
                     (
-                        REPLAY_SCOPE_PUBLIC_POST_SITE,
+                        scope_kinds[0],
                         site_id,
                         public_guard_max_reject_events_per_site_window,
                     ),
                     (
-                        REPLAY_SCOPE_PUBLIC_POST_KEY,
+                        scope_kinds[1],
                         key_id,
                         public_guard_max_reject_events_per_key_window,
                     ),
                     (
-                        REPLAY_SCOPE_PUBLIC_POST_IP,
+                        scope_kinds[2],
                         client_scope_id,
                         public_guard_max_reject_events_per_ip_window,
                     ),
                 ]
                 replay_scopes = [
                     (
-                        REPLAY_SCOPE_PUBLIC_POST_SITE,
+                        scope_kinds[0],
                         site_id,
-                        public_post_max_requests_per_window,
+                        rate_limits[0],
                     ),
                     (
-                        REPLAY_SCOPE_PUBLIC_POST_KEY,
+                        scope_kinds[1],
                         key_id,
-                        public_post_max_requests_per_key_window,
+                        rate_limits[1],
                     ),
                     (
-                        REPLAY_SCOPE_PUBLIC_POST_IP,
+                        scope_kinds[2],
                         client_scope_id,
-                        public_post_max_requests_per_ip_window,
+                        rate_limits[2],
                     ),
                 ]
                 for scope_kind, scope_id, max_events in cooldown_scopes:
@@ -743,7 +899,7 @@ async def authorize_request(
                         scope_kind=scope_kind,
                         scope_id=scope_id,
                         now=now,
-                        window_seconds=public_post_rate_limit_window_seconds,
+                        window_seconds=rate_window_seconds,
                         max_requests=max_requests,
                     )
                 for scope_kind, scope_id, _ in replay_scopes:
@@ -781,6 +937,7 @@ async def authorize_request(
             key_id=key_id,
             trace_id=trace_id,
             required_scope=required_scope,
+            replay_policy=replay_policy,
         )
         raise
 

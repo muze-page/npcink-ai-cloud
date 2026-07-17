@@ -158,13 +158,13 @@ assert.match(
 );
 assert.match(
   adminProxySource,
-  /PATCH[\s\S]*\^support-requests\\\/\[\^\/\]\+\$/,
-  'Admin proxy must route support request status updates to the admin service namespace'
+  /methods: \['PATCH'\],[\s\S]*?pattern: \/\^support-requests\\\/\[\^\/\]\+\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_accounts'/,
+  'Admin proxy must explicitly allowlist support request status updates with account-management authority'
 );
 assert.match(
   adminProxySource,
-  /POST[\s\S]*\^support-requests\\\/\[\^\/\]\+\\\/messages\$/,
-  'Admin proxy must route support request message creation to the admin service namespace'
+  /methods: \['POST'\],[\s\S]*?pattern: \/\^support-requests\\\/\[\^\/\]\+\\\/\(\?:messages\|attachments\)\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_accounts'/,
+  'Admin proxy must explicitly allowlist support request message and attachment creation with account-management authority'
 );
 assert.match(
   i18nSource,

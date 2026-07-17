@@ -17,11 +17,10 @@ const portalLayoutSource = readFileSync(portalLayoutPath, 'utf8');
 const portalSessionBoundarySource = readFileSync(portalSessionBoundaryPath, 'utf8');
 
 for (const headerName of [
+  'accept-language',
   'authorization',
   'idempotency-key',
   'x-npcink-debug-portal-link',
-  'x-npcink-portal-member-ref',
-  'x-npcink-portal-token',
 ]) {
   assert.match(
     portalSharedSource,
@@ -29,6 +28,29 @@ for (const headerName of [
     `portal proxy must preserve ${headerName}`
   );
 }
+
+for (const retiredHeaderName of [
+  'x-npcink-portal-member-ref',
+  'x-npcink-portal-site-admin-ref',
+  'x-npcink-portal-token',
+]) {
+  assert.doesNotMatch(
+    portalSharedSource,
+    new RegExp(`['"]${retiredHeaderName}['"]`),
+    `portal proxy must not forward retired identity header ${retiredHeaderName}`
+  );
+}
+
+assert.match(
+  portalSharedSource,
+  /catch \{[\s\S]*options\.unreachableMessage[\s\S]*\}/m,
+  'portal network failures must return the stable configured fallback message'
+);
+assert.doesNotMatch(
+  portalSharedSource,
+  /error instanceof Error \? error\.message/,
+  'portal proxy must not expose network exception messages'
+);
 
 assert.match(
   portalSharedSource,

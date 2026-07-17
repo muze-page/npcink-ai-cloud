@@ -26,6 +26,171 @@ def _documented_https_host(text: str, key: str) -> str:
     return parsed.netloc if parsed.scheme == "https" else ""
 
 
+def _nginx_location_block(text: str, location: str) -> str:
+    return text.split(f"location {location} {{", 1)[1].split("\n    }", 1)[0]
+
+
+def test_media_upload_proxy_overrides_are_exact_and_bounded() -> None:
+    cloud_root = _cloud_root()
+    dev = (cloud_root / "deploy" / "nginx.dev.conf").read_text()
+    prod = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
+    domain = (cloud_root / "deploy" / "magick-domain-nginx.conf.template").read_text()
+    caddy = (cloud_root / "deploy" / "Caddyfile.prod").read_text()
+    runtime_compose = (cloud_root / "docker-compose.runtime.yml").read_text()
+
+    for text in (dev, prod, domain):
+        assert text.count("location = /v1/runtime/media/uploads {") == 1
+        assert text.count("client_max_body_size 52m;") == 1
+        assert (
+            "limit_req_zone $binary_remote_addr "
+            "zone=media_upload_rate:10m rate=2r/s;"
+        ) in text
+        assert "limit_conn_zone $binary_remote_addr zone=media_upload_conn:10m;" in text
+        assert "limit_conn_zone $server_name zone=media_upload_global_conn:1m;" in text
+        assert "limit_req_status 429;" in text
+        assert "limit_conn_status 429;" in text
+        block = _nginx_location_block(text, "= /v1/runtime/media/uploads")
+        assert "client_max_body_size 52m;" in block
+        assert "client_body_timeout 60s;" in block
+        assert "limit_conn media_upload_conn 2;" in block
+        assert "limit_conn media_upload_global_conn 8;" in block
+        assert "limit_req zone=media_upload_rate burst=4 nodelay;" in block
+
+    assert dev.count("client_max_body_size 2m;") == 1
+    assert prod.count("client_max_body_size 1m;") == 1
+    assert domain.count("client_max_body_size 2m;") == 1
+
+    dev_media = _nginx_location_block(dev, "= /v1/runtime/media/uploads")
+    dev_v1 = _nginx_location_block(dev, "/v1/")
+    assert "proxy_pass http://$npcink_ai_cloud_api;" in dev_media
+    assert "proxy_pass http://$npcink_ai_cloud_api;" in dev_v1
+    assert "client_max_body_size" not in dev_v1
+
+    prod_media = _nginx_location_block(prod, "= /v1/runtime/media/uploads")
+    prod_v1 = _nginx_location_block(prod, "/v1/")
+    for directive in (
+        "limit_req zone=public_runtime burst=40 nodelay;",
+        "proxy_connect_timeout 5s;",
+        "proxy_send_timeout 180s;",
+        "proxy_read_timeout 180s;",
+        "proxy_pass http://npcink_ai_cloud_api;",
+    ):
+        assert directive in prod_media
+        assert directive in prod_v1
+    assert "client_max_body_size" not in prod_v1
+
+    domain_media = _nginx_location_block(domain, "= /v1/runtime/media/uploads")
+    domain_default = _nginx_location_block(domain, "/")
+    assert "proxy_pass __UPSTREAM__;" in domain_media
+    assert "proxy_pass __UPSTREAM__;" in domain_default
+    assert "client_max_body_size" not in domain_default
+
+    assert "reverse_proxy proxy:8080" in caddy
+    assert "header_up X-Real-IP {remote_host}" in caddy
+    assert "      proxy:\n        condition: service_started" in runtime_compose
+
+    prod_real_ip_trust = {
+        line.strip()
+        for line in prod.splitlines()
+        if line.strip().startswith("set_real_ip_from ")
+    }
+    assert prod_real_ip_trust == {
+        "set_real_ip_from 172.28.0.11;",
+    }
+    assert "real_ip_header X-Real-IP;" in prod
+    assert "real_ip_recursive on;" in prod
+    for direct_client_config in (dev, domain):
+        assert "real_ip_header" not in direct_client_config
+        assert "set_real_ip_from" not in direct_client_config
+
+
+def test_media_pull_proxy_is_exact_get_only_streaming_and_independently_bounded() -> None:
+    cloud_root = _cloud_root()
+    configs = {
+        "dev": (cloud_root / "deploy" / "nginx.dev.conf").read_text(),
+        "prod": (cloud_root / "deploy" / "nginx.prod.conf").read_text(),
+        "domain": (
+            cloud_root / "deploy" / "magick-domain-nginx.conf.template"
+        ).read_text(),
+    }
+    location = r'~ "^/v1/runtime/media/artifacts/art_[0-9a-f]{32}/download$"'
+
+    for text in configs.values():
+        assert "log_format npcink_uri_only" in text
+        log_format = text.split("log_format npcink_uri_only", 1)[1].split(";", 1)[0]
+        assert "$uri" in log_format
+        for forbidden_log_value in (
+            "$request ",
+            "$request_uri",
+            "$args",
+            "$query_string",
+            "$http_referer",
+        ):
+            assert forbidden_log_value not in log_format
+        assert text.count(f"location {location} {{") == 1
+        assert (
+            "limit_req_zone $binary_remote_addr "
+            "zone=media_pull_rate:10m rate=5r/s;"
+        ) in text
+        assert "limit_conn_zone $binary_remote_addr zone=media_pull_conn:10m;" in text
+        assert "limit_conn_zone $server_name zone=media_pull_global_conn:1m;" in text
+        block = _nginx_location_block(text, location)
+        assert "limit_except GET {" in block
+        assert "deny all;" in block
+        assert "limit_conn media_pull_conn 4;" in block
+        assert "limit_conn media_pull_global_conn 16;" in block
+        assert "limit_req zone=media_pull_rate burst=10 nodelay;" in block
+        assert "proxy_buffering off;" in block
+        assert "proxy_request_buffering off;" not in block
+
+    sanitized_access_log = "access_log /var/log/nginx/access.log npcink_uri_only;"
+    assert configs["dev"].count(sanitized_access_log) == 1
+    assert configs["prod"].count(sanitized_access_log) == 1
+    assert configs["domain"].count(sanitized_access_log) == 2
+
+    prod_block = _nginx_location_block(configs["prod"], location)
+    assert "limit_req zone=public_runtime burst=40 nodelay;" in prod_block
+    assert "proxy_connect_timeout 5s;" in prod_block
+    assert "proxy_send_timeout 180s;" in prod_block
+    assert "proxy_read_timeout 180s;" in prod_block
+    assert "proxy_pass http://npcink_ai_cloud_api;" in prod_block
+    assert "proxy_pass http://$npcink_ai_cloud_api;" in _nginx_location_block(
+        configs["dev"], location
+    )
+    assert "proxy_pass __UPSTREAM__;" in _nginx_location_block(
+        configs["domain"], location
+    )
+
+
+def test_production_api_trusts_the_same_pinned_network_used_by_compose() -> None:
+    compose = (_cloud_root() / "docker-compose.prod.yml").read_text()
+    runtime_compose = (_cloud_root() / "docker-compose.runtime.yml").read_text()
+
+    shared_subnet = "172.28.0.0/24"
+    trusted_proxy_ip = "172.28.0.10"
+    trusted_edge_proxy_ip = "172.28.0.11"
+    assert f"--forwarded-allow-ips {trusted_proxy_ip}" in compose
+    assert f"ipv4_address: {trusted_proxy_ip}" in compose
+    assert f"- subnet: {shared_subnet}" in compose
+    assert compose.count(shared_subnet) == 1
+    assert compose.count(trusted_proxy_ip) == 2
+    assert "--forwarded-allow-ips *" not in compose
+    assert f"--forwarded-allow-ips {trusted_proxy_ip}" in runtime_compose
+    assert f"ipv4_address: {trusted_proxy_ip}" in runtime_compose
+    assert f"ipv4_address: {trusted_edge_proxy_ip}" in runtime_compose
+    assert f"- subnet: {shared_subnet}" in runtime_compose
+    assert runtime_compose.count(trusted_proxy_ip) == 2
+    assert runtime_compose.count(trusted_edge_proxy_ip) == 1
+    assert runtime_compose.count(shared_subnet) == 1
+    assert "--forwarded-allow-ips *" not in runtime_compose
+    assert "set_real_ip_from 172.28.0.11;" in (
+        _cloud_root() / "deploy" / "nginx.prod.conf"
+    ).read_text()
+    assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in (
+        _cloud_root() / "deploy" / "nginx.prod.conf"
+    ).read_text()
+
+
 def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_env() -> None:
     cloud_root = _cloud_root()
     compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
@@ -690,3 +855,20 @@ def test_lightweight_release_policy_gate_is_documented() -> None:
         "pnpm run check:release-policy",
     ):
         assert marker in agents_text
+
+
+def test_runtime_image_prepares_writable_shared_artifact_volume() -> None:
+    cloud_root = Path(__file__).resolve().parents[2]
+    dockerfile = (cloud_root / "Dockerfile").read_text()
+    assert "mkdir -p /app/.runtime /var/lib/npcink-ai-cloud/artifacts" in dockerfile
+    assert "chown -R app:app /app /home/app /var/lib/npcink-ai-cloud/artifacts" in dockerfile
+    assert dockerfile.index("chown -R app:app") < dockerfile.index("USER app")
+
+    for compose_name in (
+        "docker-compose.dev.yml",
+        "docker-compose.prod.yml",
+        "docker-compose.runtime.yml",
+    ):
+        compose = (cloud_root / compose_name).read_text()
+        assert "NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts" in compose
+        assert "cloud-artifacts-" in compose

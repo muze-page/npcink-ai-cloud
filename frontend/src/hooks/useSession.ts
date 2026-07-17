@@ -30,7 +30,8 @@ type RawSessionSite = {
     created_at?: string;
     provisioned_at?: string;
     plan_name?: string;
-    wordpress_url?: string;
+    site_url?: string;
+    platform_kind?: 'wordpress';
     metadata?: Record<string, unknown>;
   };
 };
@@ -48,6 +49,8 @@ function normalizeSite(raw?: RawSessionSite['site'] | Site | null): Site {
       account_id: '',
       status: 'inactive',
       created_at: '',
+      site_url: '',
+      platform_kind: 'wordpress',
     };
   }
 
@@ -63,7 +66,8 @@ function normalizeSite(raw?: RawSessionSite['site'] | Site | null): Site {
     status: (site.status as Site['status']) || 'inactive',
     created_at: String(site.created_at || site.provisioned_at || ''),
     plan_name: String(site.plan_name || ''),
-    wordpress_url: String(site.wordpress_url || metadata?.wordpress_url || ''),
+    site_url: String(site.site_url || ''),
+    platform_kind: 'wordpress',
     metadata,
   };
 }

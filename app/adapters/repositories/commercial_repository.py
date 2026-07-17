@@ -17,6 +17,7 @@ from app.core.models import (
     IDENTITY_PROVIDER_BINDING_STATUS_REVOKED,
     PAYMENT_ORDER_STATUS_CANCELED,
     PAYMENT_ORDER_STATUS_PENDING,
+    PLATFORM_KIND_WORDPRESS,
     PORTAL_LOGIN_CODE_STATUS_PENDING,
     PORTAL_OAUTH_STATE_STATUS_PENDING,
     PRINCIPAL_STATUS_ACTIVE,
@@ -1066,9 +1067,18 @@ class CommercialRepository:
         account_id: str | None,
         name: str,
         status: str,
+        site_url: str | None = None,
+        platform_kind: str = PLATFORM_KIND_WORDPRESS,
         metadata_json: dict[str, object] | None,
         provisioned_at: datetime | None,
     ) -> Site:
+        normalized_platform_kind = str(platform_kind or "").strip().lower()
+        if normalized_platform_kind != PLATFORM_KIND_WORDPRESS:
+            raise ValueError("unsupported platform_kind")
+        normalized_metadata = dict(metadata_json) if metadata_json is not None else None
+        if normalized_metadata is not None:
+            normalized_metadata.pop("site_url", None)
+            normalized_metadata.pop("url", None)
         site = self.get_site(site_id)
         if site is None:
             site = Site(
@@ -1076,7 +1086,9 @@ class CommercialRepository:
                 account_id=account_id,
                 name=name or site_id,
                 status=status,
-                metadata_json=metadata_json,
+                site_url=str(site_url or "").strip() if site_url is not None else "",
+                platform_kind=normalized_platform_kind,
+                metadata_json=normalized_metadata,
                 provisioned_at=provisioned_at,
             )
             self.session.add(site)
@@ -1084,7 +1096,10 @@ class CommercialRepository:
             site.account_id = account_id
             site.name = name or site.name or site_id
             site.status = status
-            site.metadata_json = metadata_json
+            if site_url is not None:
+                site.site_url = str(site_url or "").strip()
+            site.platform_kind = normalized_platform_kind
+            site.metadata_json = normalized_metadata
             if provisioned_at is not None and site.provisioned_at is None:
                 site.provisioned_at = provisioned_at
         self.session.flush()

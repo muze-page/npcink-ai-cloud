@@ -120,10 +120,47 @@ def _run_provider_health_scan(settings: Settings) -> dict[str, object]:
 
 
 def _run_artifact_cleanup(settings: Settings) -> dict[str, object]:
-    from app.domain.media_derivatives.artifacts import cleanup_expired_artifacts
+    from app.domain.media_artifacts import build_artifact_store
+    from app.domain.media_artifacts.lifecycle import MediaArtifactLifecycleService
 
-    purged = cleanup_expired_artifacts(database_url=settings.database_url)
-    return {"purged_artifacts": purged}
+    result = MediaArtifactLifecycleService(
+        settings.database_url,
+        artifact_store=build_artifact_store(settings),
+    ).cleanup_expired_artifacts()
+    evidence: dict[str, object] = {
+        "claimed": result["claimed"],
+        "purged": result["purged"],
+        "retry_scheduled": result["retry_scheduled"],
+        "stale_claims_reclaimed": result["stale_claims_reclaimed"],
+        "superseded_finalizations": result["superseded_finalizations"],
+    }
+    return evidence
+
+
+def _run_artifact_inventory_reconciliation(settings: Settings) -> dict[str, object]:
+    from app.domain.media_artifacts import build_artifact_store
+    from app.domain.media_artifacts.orphan_reconciliation import (
+        MediaArtifactOrphanReconciliationError,
+        MediaArtifactOrphanReconciliationService,
+    )
+
+    try:
+        result = MediaArtifactOrphanReconciliationService(
+            settings.database_url,
+            artifact_store=build_artifact_store(settings),
+        ).reconcile(
+            safety_window_seconds=settings.artifact_reconciliation_safety_window_seconds,
+            page_size=settings.artifact_reconciliation_page_size,
+            pass_lease_seconds=settings.artifact_reconciliation_lease_seconds,
+            cleanup_enabled=settings.artifact_orphan_cleanup_enabled,
+            cleanup_batch_size=settings.artifact_orphan_cleanup_batch_size,
+            claim_lease_seconds=settings.artifact_orphan_claim_lease_seconds,
+            retry_base_seconds=settings.artifact_orphan_retry_base_seconds,
+            retry_max_seconds=settings.artifact_orphan_retry_max_seconds,
+        )
+    except Exception:
+        raise MediaArtifactOrphanReconciliationError() from None
+    return dict(result.as_dict())
 
 
 def _run_payment_order_expiration(settings: Settings) -> dict[str, object]:
@@ -184,6 +221,12 @@ def cadence_task_specs() -> list[CadenceTaskSpec]:
             event_kind="runtime.artifact_cleanup.cadence",
             interval_seconds=lambda s: s.artifact_cleanup_interval_seconds,
             runner=_run_artifact_cleanup,
+        ),
+        CadenceTaskSpec(
+            task_id="artifact_inventory_reconciliation",
+            event_kind="runtime.artifact_inventory_reconciliation.cadence",
+            interval_seconds=lambda s: s.artifact_reconciliation_interval_seconds,
+            runner=_run_artifact_inventory_reconciliation,
         ),
         CadenceTaskSpec(
             task_id="payment_order_expiration",

@@ -124,7 +124,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
         expires_in_seconds: int,
         project_name: str,
         site_name: str = "",
-        wordpress_url: str = "",
+        site_url: str = "",
         locale: str = "zh-CN",
     ) -> None:
         message = EmailMessage()
@@ -144,7 +144,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
                 expires_in_seconds=expires_in_seconds,
                 project_name=project_name,
                 site_name=site_name,
-                wordpress_url=wordpress_url,
+                site_url=site_url,
                 locale=locale,
             ),
             html_body=self._build_registration_code_html_body(
@@ -153,7 +153,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
                 expires_in_seconds=expires_in_seconds,
                 project_name=project_name,
                 site_name=site_name,
-                wordpress_url=wordpress_url,
+                site_url=site_url,
                 locale=locale,
             ),
         )
@@ -508,13 +508,13 @@ class SmtpPortalEmailSender(PortalEmailSender):
         expires_in_seconds: int,
         project_name: str,
         site_name: str,
-        wordpress_url: str,
+        site_url: str,
         locale: str,
     ) -> str:
         normalized_locale = self._normalize_locale(locale)
         expires_minutes = self._expires_minutes(expires_in_seconds)
         display_name = self._display_project_name(project_name)
-        site_label = site_name or wordpress_url
+        site_label = site_name or site_url
         if normalized_locale == "zh-CN":
             lines = [
                 f"完成 {display_name} 注册",
@@ -583,13 +583,13 @@ class SmtpPortalEmailSender(PortalEmailSender):
         expires_in_seconds: int,
         project_name: str,
         site_name: str,
-        wordpress_url: str,
+        site_url: str,
         locale: str,
     ) -> str:
         normalized_locale = self._normalize_locale(locale)
         expires_minutes = self._expires_minutes(expires_in_seconds)
         display_name = self._display_project_name(project_name)
-        site_label = site_name or wordpress_url
+        site_label = site_name or site_url
         if normalized_locale == "zh-TW":
             details = [("註冊電子郵件", recipient_email), ("有效時間", f"{expires_minutes} 分鐘")]
             if site_label:
@@ -1167,7 +1167,7 @@ def build_portal_email_preview(
                 expires_in_seconds=600,
                 project_name=project_name,
                 site_name="Npcink Demo Site",
-                wordpress_url="https://example.com",
+                site_url="https://example.com",
                 locale=locale,
             ),
             "html": sender._build_registration_code_html_body(
@@ -1176,7 +1176,7 @@ def build_portal_email_preview(
                 expires_in_seconds=600,
                 project_name=project_name,
                 site_name="Npcink Demo Site",
-                wordpress_url="https://example.com",
+                site_url="https://example.com",
                 locale=locale,
             ),
         }

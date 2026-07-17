@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import httpx
 
 from app.adapters.providers.openai import OpenAIProviderAdapter
@@ -17,6 +19,8 @@ class SiliconFlowProviderAdapter(OpenAIProviderAdapter):
         api_key: str,
         timeout_seconds: float = 30.0,
         app_name: str = "npcink-ai-cloud",
+        image_output_hosts: Iterable[str] = (),
+        image_response_format: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         super().__init__(
@@ -30,5 +34,7 @@ class SiliconFlowProviderAdapter(OpenAIProviderAdapter):
             allow_sample_execution=False,
             provider_label=self.display_name,
             model_namespace_prefix=self.provider_id,
+            image_output_hosts=image_output_hosts,
+            image_response_format=image_response_format,
             transport=transport,
         )

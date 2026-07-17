@@ -1,10 +1,12 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
 import { frontendRoot } from './_paths.mjs';
 
 const root = frontendRoot;
 const i18nPath = resolve(root, 'src/lib/i18n.ts');
+const monitoringRedirectPath = resolve(root, 'src/app/portal/monitoring/page.tsx');
+const sitesRedirectPath = resolve(root, 'src/app/portal/sites/page.tsx');
 const source = readFileSync(i18nPath, 'utf8');
 
 function escapeRegExp(value) {
@@ -85,7 +87,6 @@ const translationLockedFiles = [
   resolve(root, 'src/app/portal/page.tsx'),
   resolve(root, 'src/app/portal/login/page.tsx'),
   resolve(root, 'src/app/portal/sites/[siteId]/page.tsx'),
-  resolve(root, 'src/app/portal/monitoring/page.tsx'),
   resolve(root, 'src/app/portal/audit/PortalAuditClient.tsx'),
   resolve(root, 'src/components/portal/PortalNavbar.tsx'),
   resolve(root, 'src/components/portal/PortalPluginMonitoringPanel.tsx'),
@@ -97,6 +98,9 @@ const translationLockedFiles = [
   resolve(root, 'src/app/portal/usage/page.tsx'),
   resolve(root, 'src/app/portal/billing/page.tsx'),
 ];
+
+assert.equal(existsSync(monitoringRedirectPath), false);
+assert.equal(existsSync(sitesRedirectPath), false);
 
 const keys = new Set();
 for (const filePath of translationLockedFiles) {

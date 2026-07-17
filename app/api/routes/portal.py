@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode
 import httpx
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.adapters.notifications.base import PortalEmailDeliveryError
 from app.adapters.notifications.smtp import build_portal_email_sender
@@ -38,6 +38,7 @@ from app.api.routes.service import (
     _get_commercial_service,
     _service_error_response,
 )
+from app.core.models import PLATFORM_KIND_WORDPRESS
 from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.agent_workflow_metadata import (
     MEDIA_DERIVATIVE_WORKFLOW_ID,
@@ -45,18 +46,12 @@ from app.domain.agent_workflow_metadata import (
     get_workflow_metadata,
 )
 from app.domain.commercial.audit_context import ServiceAuditContext
-from app.domain.commercial.customer_api_keys import (
-    build_customer_api_key,
-    serialize_portal_site_key,
-)
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.identity import (
-    USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
     USER_ALLOWED_ACTION_REMOVE_SITES,
     USER_ALLOWED_ACTION_VIEW_AUDIT,
     USER_ALLOWED_ACTION_VIEW_BILLING,
     USER_ALLOWED_ACTION_VIEW_USAGE,
-    USER_SITE_KEY_WRITE_ROLES,
 )
 from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
@@ -73,27 +68,16 @@ COOKIE_PORTAL_QQ_OAUTH_NONCE = "npcink_portal_qq_oauth_nonce"
 COOKIE_PORTAL_QQ_OAUTH_NONCE_PATH = "/"
 
 
-class PortalSiteKeyPayload(BaseModel):
-    label: str = ""
-    scopes: list[str] = Field(default_factory=list)
-    expires_at: datetime | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class PortalSessionSitePayload(BaseModel):
     site_id: str = ""
 
 
-class PortalCreateSitePayload(BaseModel):
-    account_id: str = ""
-    site_name: str = ""
-    wordpress_url: str = ""
-
-
 class PortalAddonConnectionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     account_id: str = ""
     site_name: str = ""
-    wordpress_url: str = ""
+    site_url: str = Field(default="", max_length=2048)
     return_url: str = ""
     state: str = ""
 
@@ -125,8 +109,10 @@ class PortalEmailChangeVerifyPayload(BaseModel):
 
 
 class PortalRegistrationCodeRequestPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     email: str = ""
-    site_url: str = ""
+    site_url: str = Field(default="", max_length=2048)
     site_name: str = ""
     use_case: str = ""
     locale: str = ""
@@ -250,7 +236,6 @@ def _portal_route_envelope(
         data=data,
         revision="m6",
     )
-
 
 def _portal_session_cleared_response() -> JSONResponse:
     response = JSONResponse(
@@ -1419,7 +1404,7 @@ async def request_portal_registration_code(
     try:
         issued = _get_commercial_service(request).issue_portal_registration_code(
             email=email,
-            wordpress_url=site_url,
+            site_url=site_url,
             site_name=payload.site_name,
             use_case=payload.use_case,
             ttl_seconds=ttl_seconds,
@@ -1435,7 +1420,7 @@ async def request_portal_registration_code(
                 expires_in_seconds=ttl_seconds,
                 project_name=services.settings.project_name,
                 site_name=str(issued.get("site_name") or ""),
-                wordpress_url=str(issued.get("wordpress_url") or ""),
+                site_url=str(issued.get("site_url") or ""),
                 locale=locale,
             )
         except PortalEmailDeliveryError as error:
@@ -1455,7 +1440,8 @@ async def request_portal_registration_code(
             "site": {
                 "site_id": str(issued.get("site_id") or ""),
                 "site_name": str(issued.get("site_name") or ""),
-                "wordpress_url": str(issued.get("wordpress_url") or ""),
+                "site_url": str(issued.get("site_url") or ""),
+                "platform_kind": PLATFORM_KIND_WORDPRESS,
             },
         },
     )
@@ -2525,44 +2511,6 @@ async def list_portal_sites(request: Request) -> Any:
     )
 
 
-@router.post("/sites")
-async def create_portal_site(
-    request: Request,
-    payload: PortalCreateSitePayload,
-) -> Any:
-    same_origin = _portal_same_origin_guard(request)
-    if same_origin is not None:
-        return same_origin
-    write_guard = _portal_write_guard(request)
-    if write_guard is not None:
-        return write_guard
-    auth = await resolve_portal_request_context(
-        request,
-        require_idempotency=True,
-        allow_session_cookies=True,
-    )
-    if isinstance(auth, JSONResponse):
-        return auth
-
-    service = _get_commercial_service(request)
-    audit_context = _build_portal_audit_context(request, auth.principal_id)
-    try:
-        result = service.provision_portal_site(
-            account_id=payload.account_id,
-            principal_id=auth.principal_id,
-            wordpress_url=payload.wordpress_url,
-            site_name=payload.site_name,
-            audit_context=audit_context,
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-
-    return _portal_route_envelope(
-        message="portal site created",
-        data=result,
-    )
-
-
 @router.post("/addon-connections")
 async def create_portal_addon_connection(
     request: Request,
@@ -2588,7 +2536,7 @@ async def create_portal_addon_connection(
         result = service.create_wordpress_addon_connection(
             account_id=payload.account_id,
             principal_id=auth.principal_id,
-            wordpress_url=payload.wordpress_url,
+            site_url=payload.site_url,
             site_name=payload.site_name,
             return_url=payload.return_url,
             addon_state=payload.state,
@@ -2619,78 +2567,6 @@ async def exchange_portal_addon_connection(
     return _portal_route_envelope(
         message="wordpress addon connection exchanged",
         data=result,
-    )
-
-
-@router.post("/sites/{site_id}/activate")
-async def activate_portal_site(request: Request, site_id: str) -> Any:
-    same_origin = _portal_same_origin_guard(request)
-    if same_origin is not None:
-        return same_origin
-    write_guard = _portal_write_guard(request)
-    if write_guard is not None:
-        return write_guard
-    auth = await resolve_portal_request_context(
-        request,
-        require_idempotency=True,
-        allow_session_cookies=True,
-    )
-    if isinstance(auth, JSONResponse):
-        return auth
-    access = _authorize_portal_site_access(
-        request,
-        site_id=site_id,
-        principal_id=auth.principal_id,
-        required_action=USER_ALLOWED_ACTION_REMOVE_SITES,
-    )
-    if isinstance(access, JSONResponse):
-        return access
-    try:
-        result = _get_commercial_service(request).activate_portal_site(
-            site_id,
-            audit_context=_build_portal_audit_context(request, auth.principal_id),
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-    return _portal_route_envelope(
-        message="portal site activated",
-        data=result,
-    )
-
-
-@router.post("/sites/{site_id}/deactivate")
-async def deactivate_portal_site(request: Request, site_id: str) -> Any:
-    same_origin = _portal_same_origin_guard(request)
-    if same_origin is not None:
-        return same_origin
-    write_guard = _portal_write_guard(request)
-    if write_guard is not None:
-        return write_guard
-    auth = await resolve_portal_request_context(
-        request,
-        require_idempotency=True,
-        allow_session_cookies=True,
-    )
-    if isinstance(auth, JSONResponse):
-        return auth
-    access = _authorize_portal_site_access(
-        request,
-        site_id=site_id,
-        principal_id=auth.principal_id,
-        required_action=USER_ALLOWED_ACTION_REMOVE_SITES,
-    )
-    if isinstance(access, JSONResponse):
-        return access
-    try:
-        site = _get_commercial_service(request).deactivate_portal_site(
-            site_id,
-            audit_context=_build_portal_audit_context(request, auth.principal_id),
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-    return _portal_route_envelope(
-        message="portal site deactivated",
-        data={"site": site},
     )
 
 
@@ -2765,7 +2641,6 @@ async def get_portal_site_usage_summary(request: Request, site_id: str) -> Any:
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
         required_action=USER_ALLOWED_ACTION_VIEW_USAGE,
     )
     if isinstance(access, JSONResponse):
@@ -3153,7 +3028,6 @@ async def get_portal_site_entitlements(request: Request, site_id: str) -> Any:
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
         required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
@@ -3213,7 +3087,6 @@ async def get_portal_site_credit_ledger(
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
         required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
@@ -3258,7 +3131,6 @@ async def list_portal_site_credit_packs(request: Request, site_id: str) -> Any:
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
         required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
@@ -3298,7 +3170,6 @@ async def list_portal_site_payment_orders(
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
         required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
@@ -3349,7 +3220,6 @@ async def create_portal_site_credit_pack_order(
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
         required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
@@ -3483,7 +3353,6 @@ async def get_portal_site_audit_summary(request: Request, site_id: str) -> Any:
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
         required_action=USER_ALLOWED_ACTION_VIEW_AUDIT,
     )
     if isinstance(access, JSONResponse):
@@ -3532,7 +3401,6 @@ async def list_portal_site_audit_events(
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
         required_action=USER_ALLOWED_ACTION_VIEW_AUDIT,
     )
     if isinstance(access, JSONResponse):
@@ -3632,233 +3500,4 @@ async def get_portal_site_billing_reconciliation(request: Request, site_id: str)
             "role": str(access.get("role") or ""),
             **reconciliation,
         },
-    )
-
-
-@router.get("/sites/{site_id}/api-keys")
-async def list_portal_site_keys(
-    request: Request,
-    site_id: str,
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-) -> Any:
-    auth = await resolve_portal_request_context(
-        request,
-        require_idempotency=False,
-        allow_session_cookies=True,
-    )
-    if isinstance(auth, JSONResponse):
-        return auth
-    access = _authorize_portal_site_access(
-        request,
-        site_id=site_id,
-        principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
-        required_action=USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
-    )
-    if isinstance(access, JSONResponse):
-        return access
-
-    try:
-        result = _get_commercial_service(request).list_site_keys(
-            site_id,
-            limit=limit,
-            offset=offset,
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-
-    items = [
-        serialize_portal_site_key(item)
-        for item in _object_list(result.get("items"))
-        if isinstance(item, dict)
-    ]
-
-    return build_envelope(
-        status="ok",
-        message="portal api keys loaded",
-        data={
-            "site_id": site_id,
-            "items": items,
-            "pagination": result.get("pagination") or {},
-            "sort": result.get("sort") or {},
-        },
-        revision="m6",
-    )
-
-
-@router.post("/sites/{site_id}/api-keys")
-async def issue_portal_site_key(
-    request: Request,
-    site_id: str,
-    payload: PortalSiteKeyPayload,
-) -> Any:
-    same_origin = _portal_same_origin_guard(request)
-    if same_origin is not None:
-        return same_origin
-    write_guard = _portal_write_guard(request)
-    if write_guard is not None:
-        return write_guard
-    auth = await resolve_portal_request_context(
-        request,
-        require_idempotency=True,
-        allow_session_cookies=True,
-    )
-    if isinstance(auth, JSONResponse):
-        return auth
-    access = _authorize_portal_site_access(
-        request,
-        site_id=site_id,
-        principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
-        required_action=USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
-    )
-    if isinstance(access, JSONResponse):
-        return access
-
-    service = _get_commercial_service(request)
-    audit_context = _build_portal_audit_context(request, auth.principal_id)
-
-    try:
-        result = service.issue_site_key(
-            site_id=site_id,
-            key_id=None,
-            secret=None,
-            scopes=payload.scopes,
-            label=payload.label,
-            expires_at=payload.expires_at,
-            metadata_json=payload.metadata,
-            audit_context=audit_context,
-            activate_site_on_issue=True,
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-
-    cloud_api_key = build_customer_api_key(
-        site_id=str(result.get("site_id") or ""),
-        key_id=str(result.get("key_id") or ""),
-        secret=str(result.get("secret") or ""),
-    )
-
-    return build_envelope(
-        status="ok",
-        message="portal api key issued",
-        data=serialize_portal_site_key(result, cloud_api_key=cloud_api_key),
-        revision="m6",
-    )
-
-
-@router.post("/sites/{site_id}/api-keys/{key_id}/rotate")
-async def rotate_portal_site_key(
-    request: Request,
-    site_id: str,
-    key_id: str,
-    payload: PortalSiteKeyPayload,
-) -> Any:
-    same_origin = _portal_same_origin_guard(request)
-    if same_origin is not None:
-        return same_origin
-    write_guard = _portal_write_guard(request)
-    if write_guard is not None:
-        return write_guard
-    auth = await resolve_portal_request_context(
-        request,
-        require_idempotency=True,
-        allow_session_cookies=True,
-    )
-    if isinstance(auth, JSONResponse):
-        return auth
-    access = _authorize_portal_site_access(
-        request,
-        site_id=site_id,
-        principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
-        required_action=USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
-    )
-    if isinstance(access, JSONResponse):
-        return access
-
-    service = _get_commercial_service(request)
-    audit_context = _build_portal_audit_context(request, auth.principal_id)
-
-    try:
-        result = service.rotate_site_key(
-            site_id=site_id,
-            key_id=key_id,
-            next_key_id=None,
-            secret=None,
-            scopes=payload.scopes if payload.scopes else None,
-            label=payload.label,
-            expires_at=payload.expires_at,
-            metadata_json=payload.metadata,
-            audit_context=audit_context,
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-
-    previous = _dict_value(result.get("previous"))
-    current = _dict_value(result.get("current"))
-    cloud_api_key = build_customer_api_key(
-        site_id=str(current.get("site_id") or ""),
-        key_id=str(current.get("key_id") or ""),
-        secret=str(current.get("secret") or ""),
-    )
-
-    return build_envelope(
-        status="ok",
-        message="portal api key rotated",
-        data={
-            "previous": serialize_portal_site_key(previous),
-            "current": serialize_portal_site_key(current, cloud_api_key=cloud_api_key),
-        },
-        revision="m6",
-    )
-
-
-@router.post("/sites/{site_id}/api-keys/{key_id}/revoke")
-async def revoke_portal_site_key(
-    request: Request,
-    site_id: str,
-    key_id: str,
-) -> Any:
-    same_origin = _portal_same_origin_guard(request)
-    if same_origin is not None:
-        return same_origin
-    write_guard = _portal_write_guard(request)
-    if write_guard is not None:
-        return write_guard
-    auth = await resolve_portal_request_context(
-        request,
-        require_idempotency=True,
-        allow_session_cookies=True,
-    )
-    if isinstance(auth, JSONResponse):
-        return auth
-    access = _authorize_portal_site_access(
-        request,
-        site_id=site_id,
-        principal_id=auth.principal_id,
-        required_roles=USER_SITE_KEY_WRITE_ROLES,
-        required_action=USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
-    )
-    if isinstance(access, JSONResponse):
-        return access
-
-    service = _get_commercial_service(request)
-    audit_context = _build_portal_audit_context(request, auth.principal_id)
-
-    try:
-        result = service.revoke_site_key(
-            site_id=site_id,
-            key_id=key_id,
-            audit_context=audit_context,
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-
-    return build_envelope(
-        status="ok",
-        message="portal api key revoked",
-        data=serialize_portal_site_key(result),
-        revision="m6",
     )

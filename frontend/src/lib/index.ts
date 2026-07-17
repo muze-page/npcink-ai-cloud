@@ -36,22 +36,17 @@ export {
 // Environment
 export { getEnv, getApiBaseUrl, getPublicBaseUrl, validateEnv } from './env';
 
-// Envelope
+// API Client and Error Contract
 export {
-  unwrapEnvelope,
-  isErrorEnvelope,
-  CloudApiError,
-  getErrorMessage,
-  type CloudEnvelope,
-} from './envelope';
-
-// Cloud Client
-export {
-  CloudClient,
-  createCloudClient,
-  getDefaultClient,
-  type CloudClientConfig,
-} from './cloud-client';
+  ApiClient,
+  createApiClient,
+  requestApi,
+  type ApiClientConfig,
+  type ApiEnvelope,
+  type ApiEnvelopeMeta,
+  type ApiMethod,
+  type ApiRequestOptions,
+} from './api-client';
 
 // Idempotency
 export {
@@ -62,15 +57,9 @@ export {
 
 // Errors
 export {
-  SessionError,
-  SiteSelectionError,
   ApiError,
-  NetworkError,
-  ValidationError,
-  createErrorFromCode,
-  getErrorMessageFromError,
-  requiresLogin,
-  requiresSiteSelection,
+  resolveUiErrorMessage,
+  type ApiErrorInit,
 } from './errors';
 
 // Utils
@@ -88,12 +77,8 @@ export {
 export {
   portalClient,
   PortalClient,
-  PortalApiError,
   type PortalSession,
   type Site,
-  type ApiKey,
-  type ApiKeyWithSecret,
-  type RotateKeyResponse,
   type PortalLoginCodeRequest,
   type PortalLoginCodeVerifyRequest,
   type PortalRegistrationCodeRequest,
@@ -103,6 +88,4 @@ export {
   type PortalIdentityProviderStatus,
   type PortalIdentityProvidersResponse,
   type PortalQqStartResponse,
-  type CreateKeyRequest,
-  type RotateKeyRequest,
 } from './portal-client';

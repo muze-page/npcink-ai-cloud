@@ -29,10 +29,30 @@ Current repository status is a strong-contraction cleanup baseline:
   have been removed
 - admin surface is bounded to accounts, sites, plans, subscriptions, billing
   inspect, provider ops, runtime diagnostics, audit, and commercial decisions
-- portal surface is bounded to login, session, sites, keys, usage, entitlements,
-  billing, and audit
+- portal surface is bounded to login, session, site connection, usage,
+  entitlements, billing, support, Cloud audit, health, and diagnostics; runtime
+  keys are system-managed through the WordPress addon connection exchange
 - addon projection/repair surfaces are not part of this baseline; they remain
   deferred to a separate proposal with independent review
+
+## Target Refactor Contracts
+
+These documents are the accepted target contracts for the P0-P5 refactor. They
+define the intended destination and acceptance boundaries; they are not evidence
+that implementation is complete. Delivery remains WordPress-first through P5,
+and other CMS adapters are post-P5 validation work.
+
+- [docs/refactor-master-plan-v1.md](docs/refactor-master-plan-v1.md)
+- [docs/decisions/004-wordpress-first-cloud-runtime-refactor.md](docs/decisions/004-wordpress-first-cloud-runtime-refactor.md)
+- [docs/multi-platform-connector-boundary-v1.md](docs/multi-platform-connector-boundary-v1.md)
+- [docs/media-runtime-boundary-v1.md](docs/media-runtime-boundary-v1.md)
+- [docs/refactor-deletion-inventory-v1.md](docs/refactor-deletion-inventory-v1.md)
+- [docs/p4-portal-admin-surface-inventory-2026-07-16.md](docs/p4-portal-admin-surface-inventory-2026-07-16.md)
+- [docs/decisions/016-fail-closed-portal-admin-service-boundaries.md](docs/decisions/016-fail-closed-portal-admin-service-boundaries.md)
+
+Baseline evidence (not target-contract completion proof):
+
+- [docs/refactor-baseline-2026-07-14.md](docs/refactor-baseline-2026-07-14.md)
 
 Operational references:
 
@@ -226,7 +246,9 @@ Current repository status is:
 - bounded portal auth seam is now landed for:
   - invited `user` email verification-code login
   - cookie-backed `/portal/*` member session
-  - account/site-scoped read-only portal workspace for sites, keys, usage, billing, and audit
+  - account/site-scoped portal workspace for site connection, usage, billing,
+    Cloud audit, health, and diagnostics; signing keys are not a customer
+    self-service surface
 
 Still deferred in the current phase:
 

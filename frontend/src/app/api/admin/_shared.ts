@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getApiBaseUrl, getInternalAuthToken } from '@/lib/env';
+import { getApiBaseUrl } from '@/lib/env';
 
 export type AdminSessionPayload = {
   principal_id: string;
-  platform_admin_ref: string;
   identity_type?: string;
   role: string;
   capabilities?: Record<string, boolean>;
@@ -13,6 +12,15 @@ export type AdminSessionPayload = {
   transport?: string;
   revocable?: boolean;
 };
+
+export type AdminCapability =
+  | 'can_manage_accounts'
+  | 'can_manage_catalog'
+  | 'can_manage_billing'
+  | 'can_review_diagnostics';
+
+const PLATFORM_ADMIN_IDENTITY_TYPE = 'platform_admin';
+const PLATFORM_ADMIN_ROLE = 'platform_admin';
 
 export function buildBackendUrl(pathname: string, search = ''): string {
   const baseUrl = getApiBaseUrl().replace(/\/$/, '');
@@ -86,7 +94,11 @@ export function buildErrorResponse(
       status: 'error',
       error_code: errorCode,
       message,
-      revision: 'm6',
+      data: {},
+      meta: {
+        trace_id: '',
+        revision: 'm6',
+      },
     },
     { status }
   );
@@ -194,11 +206,6 @@ export async function forwardBackendJson(response: Response): Promise<NextRespon
   return nextResponse;
 }
 
-export async function requireAdminSession(request: NextRequest): Promise<NextResponse | null> {
-  const sessionResult = await requireAdminSessionData(request);
-  return sessionResult instanceof NextResponse ? sessionResult : null;
-}
-
 function parseAdminSessionPayload(payload: unknown): AdminSessionPayload | null {
   const data =
     payload &&
@@ -209,17 +216,15 @@ function parseAdminSessionPayload(payload: unknown): AdminSessionPayload | null 
       ? (payload.data as Record<string, unknown>)
       : null;
 
-  const principalId = String(data?.principal_id || data?.platform_admin_ref || '').trim();
-  const platformAdminRef = String(data?.platform_admin_ref || principalId).trim();
+  const principalId = String(data?.principal_id || '').trim();
   const role = String(data?.role || '').trim();
   const authMode = String(data?.auth_mode || '').trim();
-  if (!principalId || !platformAdminRef || !role || !authMode) {
+  if (!principalId || !role || !authMode) {
     return null;
   }
 
   return {
     principal_id: principalId,
-    platform_admin_ref: platformAdminRef,
     identity_type: String(data?.identity_type || ''),
     role,
     capabilities:
@@ -227,7 +232,7 @@ function parseAdminSessionPayload(payload: unknown): AdminSessionPayload | null 
         ? Object.fromEntries(
             Object.entries(data.capabilities as Record<string, unknown>).map(([key, value]) => [
               key,
-              Boolean(value),
+              value === true,
             ])
           )
         : {},
@@ -253,8 +258,12 @@ export async function requireAdminSessionData(
       }),
       cache: 'no-store',
     });
-  } catch (error) {
-    return buildErrorResponse(502, 'proxy.admin_session_unreachable', error instanceof Error ? error.message : 'failed to verify admin session');
+  } catch {
+    return buildErrorResponse(
+      502,
+      'proxy.admin_session_unreachable',
+      'failed to verify admin session'
+    );
   }
 
   if (!response.ok) {
@@ -266,105 +275,30 @@ export async function requireAdminSessionData(
   if (!session) {
     return buildErrorResponse(502, 'proxy.admin_session_invalid', 'invalid admin session payload');
   }
+  if (
+    session.identity_type !== PLATFORM_ADMIN_IDENTITY_TYPE ||
+    session.role !== PLATFORM_ADMIN_ROLE
+  ) {
+    return buildErrorResponse(
+      403,
+      'proxy.admin_session_forbidden',
+      'platform administrator session required'
+    );
+  }
 
   return { session, response };
 }
 
-export async function proxyAdminServiceGet(
-  request: NextRequest,
-  servicePath: string
-): Promise<NextResponse> {
-  const sessionResult = await requireAdminSessionData(request);
-  if (sessionResult instanceof NextResponse) {
-    return sessionResult;
+export function requireAdminCapability(
+  session: AdminSessionPayload,
+  capability: AdminCapability
+): NextResponse | null {
+  if (session.capabilities?.[capability] === true) {
+    return null;
   }
-  const { response: sessionResponse } = sessionResult;
-
-  let response: Response;
-
-  try {
-    response = await fetch(buildBackendUrl(servicePath, request.nextUrl.search), {
-      headers: {
-        Accept: 'application/json',
-        'X-Npcink-Internal-Token': getInternalAuthToken(),
-      },
-      cache: 'no-store',
-    });
-  } catch (error) {
-    return buildErrorResponse(502, 'proxy.admin_service_unreachable', error instanceof Error ? error.message : 'failed to reach admin service');
-  }
-
-  const nextResponse = await forwardBackendJson(response);
-  appendForwardHeaders(sessionResponse, nextResponse);
-  return nextResponse;
-}
-
-export async function proxyAdminServiceJsonPost(
-  request: NextRequest,
-  servicePath: string
-): Promise<NextResponse> {
-  const sessionResult = await requireAdminSessionData(request);
-  if (sessionResult instanceof NextResponse) {
-    return sessionResult;
-  }
-  const { response: sessionResponse } = sessionResult;
-
-  let payload: unknown = {};
-  try {
-    payload = await request.json();
-  } catch {
-    payload = {};
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(buildBackendUrl(servicePath), {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-Npcink-Internal-Token': getInternalAuthToken(),
-        'Idempotency-Key': request.headers.get('idempotency-key') || crypto.randomUUID(),
-      },
-      body: JSON.stringify(payload),
-      cache: 'no-store',
-    });
-  } catch (error) {
-    return buildErrorResponse(502, 'proxy.admin_service_write_unreachable', error instanceof Error ? error.message : 'failed to reach admin service');
-  }
-
-  const nextResponse = await forwardBackendJson(response);
-  appendForwardHeaders(sessionResponse, nextResponse);
-  return nextResponse;
-}
-
-export async function proxyAdminJsonPost(
-  request: NextRequest,
-  adminPath: string
-): Promise<NextResponse> {
-  let payload: unknown = {};
-
-  try {
-    payload = await request.json();
-  } catch {
-    payload = {};
-  }
-
-  let response: Response;
-
-  try {
-    response = await fetch(buildBackendUrl(adminPath), {
-      method: 'POST',
-      headers: buildForwardedRequestHeaders(request, {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      }),
-      body: JSON.stringify(payload),
-      cache: 'no-store',
-    });
-  } catch (error) {
-    return buildErrorResponse(502, 'proxy.admin_write_unreachable', error instanceof Error ? error.message : 'failed to reach admin write endpoint');
-  }
-
-  return forwardBackendJson(response);
+  return buildErrorResponse(
+    403,
+    'proxy.admin_capability_required',
+    `admin capability required: ${capability}`
+  );
 }

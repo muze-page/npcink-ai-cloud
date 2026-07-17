@@ -13,14 +13,45 @@ assert.match(
 
 assert.match(
   source,
-  /data\?\.principal_id \|\| data\?\.platform_admin_ref/,
-  'admin session parser must accept principal_id with platform_admin_ref fallback'
+  /String\(data\?\.principal_id \|\| ''\)\.trim\(\)/,
+  'admin session parser must require the canonical principal_id'
+);
+
+assert.doesNotMatch(
+  source,
+  /platform_admin_ref/,
+  'admin session payload must not retain the retired platform_admin_ref alias or fallback'
 );
 
 assert.match(
   source,
-  /data\?\.platform_admin_ref \|\| principalId/,
-  'admin session parser must preserve platform_admin_ref as a compatibility alias'
+  /Object\.entries\(data\.capabilities as Record<string, unknown>\)[\s\S]*?key,\s*value === true/,
+  'admin capability parsing must only accept a literal boolean true'
+);
+
+assert.doesNotMatch(
+  source,
+  /Boolean\(value\)/,
+  'string and numeric capability values must not be coerced to true'
+);
+
+for (const retiredHelper of [
+  'requireAdminSession',
+  'proxyAdminServiceGet',
+  'proxyAdminServiceJsonPost',
+  'proxyAdminJsonPost',
+]) {
+  assert.doesNotMatch(
+    source,
+    new RegExp(`export async function ${retiredHelper}\\b`),
+    `${retiredHelper} must remain deleted after its consumers are removed`
+  );
+}
+
+assert.doesNotMatch(
+  source,
+  /error instanceof Error \? error\.message/,
+  'admin session verification must not expose internal network exception details'
 );
 
 console.log('admin_session_payload_contract: ok');

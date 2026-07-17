@@ -212,6 +212,46 @@ def test_siliconflow_provider_executes_openai_compatible_embeddings() -> None:
     assert result.output["dimensions"] == 3
 
 
+def test_siliconflow_image_generation_uses_images_list_without_forcing_response_format() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/images/generations")
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["model"] == "Tongyi-MAI/Z-Image-Turbo"
+        assert payload["prompt"] == "An editorial landscape"
+        assert "response_format" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "model": "Tongyi-MAI/Z-Image-Turbo",
+                "images": [{"url": "https://images.siliconflow.test/generated.png"}],
+            },
+        )
+
+    adapter = SiliconFlowProviderAdapter(
+        api_key="sf-key",
+        image_output_hosts=["images.siliconflow.test"],
+        transport=httpx.MockTransport(handler),
+    )
+    result = adapter.execute(
+        _build_request(
+            execution_kind="image_generation",
+            endpoint_variant="image_generations",
+            model_id="siliconflow/Tongyi-MAI/Z-Image-Turbo",
+            input_payload={"prompt": "An editorial landscape"},
+        )
+    )
+
+    assert result.output == {
+        "model_id": "Tongyi-MAI/Z-Image-Turbo",
+        "candidate_count": 1,
+        "usage": {},
+    }
+    assert len(result.media_candidates) == 1
+    candidate = result.media_candidates[0]
+    assert candidate.source_url == "https://images.siliconflow.test/generated.png"
+    assert candidate.image_output_hosts == ("images.siliconflow.test",)
+
+
 def test_openrouter_provider_sets_router_headers_and_namespaces_model_ids() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer or-key"

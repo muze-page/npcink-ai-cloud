@@ -5,7 +5,7 @@ import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
 import type { PortalSiteSummaryRecord, Site } from '@/lib/portal-client';
 import {
   getPortalSiteDisplayName,
-  getPortalSiteWordPressUrl,
+  getPortalSiteUrl,
 } from '@/lib/portal-site-display';
 import { translateStatusLabel } from '@/lib/status-display';
 import { cn, formatDate } from '@/lib/utils';
@@ -74,7 +74,7 @@ export function PortalSiteInspectorDrawer({
     {
       label: t('common.status'),
       value: translateStatusLabel(detailSite.status, t),
-      detail: getPortalSiteWordPressUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
+      detail: getPortalSiteUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
     },
     {
       label: t('common.connected'),
@@ -110,7 +110,7 @@ export function PortalSiteInspectorDrawer({
               />
             </div>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              {getPortalSiteWordPressUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured')}
+              {getPortalSiteUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured')}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
@@ -177,7 +177,7 @@ export function PortalSiteInspectorDrawer({
                   <Metric
                     label={t('common.site')}
                     value={getPortalSiteDisplayName(detailSite)}
-                    detail={getPortalSiteWordPressUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured')}
+                    detail={getPortalSiteUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured')}
                   />
                   {postureMetrics.map((item) => (
                     <Metric key={`${item.label}-${item.value}`} label={item.label} value={item.value} detail={item.detail} />

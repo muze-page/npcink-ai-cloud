@@ -11,9 +11,11 @@ from app.domain.commercial.identity import (
     IDENTITY_TYPE_PLATFORM_ADMIN,
     IDENTITY_TYPE_USER,
     PLATFORM_ADMIN_ALLOWED_ROLES,
+    USER_ALLOWED_ACTION_PROVISION_SITES,
     USER_ALLOWED_ROLES,
     _new_principal_id,
     normalize_user_role,
+    resolve_principal_allowed_actions,
 )
 
 
@@ -22,6 +24,20 @@ def test_launch_identity_model_has_only_platform_admin_and_user() -> None:
     assert IDENTITY_TYPE_USER == "user"
     assert PLATFORM_ADMIN_ALLOWED_ROLES == {"platform_admin"}
     assert USER_ALLOWED_ROLES == {"user"}
+
+
+def test_portal_user_actions_keep_addon_provision_without_key_management() -> None:
+    actions = set(resolve_principal_allowed_actions())
+
+    assert USER_ALLOWED_ACTION_PROVISION_SITES in actions
+    assert actions == {
+        "view_sites",
+        "view_usage",
+        "view_billing",
+        "view_audit",
+        "provision_sites",
+        "remove_sites",
+    }
 
 
 def test_operator_role_is_not_accepted_before_the_role_is_launched() -> None:

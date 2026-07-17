@@ -1,6 +1,6 @@
 import type { Site } from '@/lib/portal-client';
 
-type SiteLike = Pick<Site, 'site_id' | 'site_name' | 'wordpress_url' | 'metadata'> & {
+type SiteLike = Pick<Site, 'site_id' | 'site_name' | 'site_url'> & {
   status?: string;
 };
 
@@ -8,17 +8,12 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-export function getPortalSiteWordPressUrl(site: SiteLike | null | undefined): string {
+export function getPortalSiteUrl(site: SiteLike | null | undefined): string {
   if (!site) {
     return '';
   }
 
-  const directUrl = normalizeString(site.wordpress_url);
-  if (directUrl) {
-    return directUrl;
-  }
-
-  return normalizeString(site.metadata?.wordpress_url);
+  return normalizeString(site.site_url);
 }
 
 export function getPortalSiteDisplayName(site: SiteLike | null | undefined): string {
@@ -31,9 +26,9 @@ export function getPortalSiteDisplayName(site: SiteLike | null | undefined): str
     return siteName;
   }
 
-  const wordpressUrl = getPortalSiteWordPressUrl(site);
-  if (wordpressUrl) {
-    return wordpressUrl;
+  const siteUrl = getPortalSiteUrl(site);
+  if (siteUrl) {
+    return siteUrl;
   }
 
   return normalizeString(site.site_id);
@@ -44,9 +39,9 @@ export function getPortalSiteSecondaryLabel(site: SiteLike | null | undefined): 
     return '';
   }
 
-  const wordpressUrl = getPortalSiteWordPressUrl(site);
-  if (wordpressUrl) {
-    return wordpressUrl;
+  const siteUrl = getPortalSiteUrl(site);
+  if (siteUrl) {
+    return siteUrl;
   }
 
   return normalizeString(site.site_id);
@@ -61,5 +56,5 @@ export function portalSiteNeedsAttention(site: SiteLike | null | undefined): boo
     return true;
   }
 
-  return normalizeString(site.status).toLowerCase() !== 'active' || !getPortalSiteWordPressUrl(site);
+  return normalizeString(site.status).toLowerCase() !== 'active' || !getPortalSiteUrl(site);
 }

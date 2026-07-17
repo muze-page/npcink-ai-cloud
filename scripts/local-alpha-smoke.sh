@@ -15,7 +15,7 @@ npcink_ai_cloud_require_cmd openssl
 npcink_ai_cloud_require_cmd python3
 
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
-WORDPRESS_URL="${NPCINK_CLOUD_WORDPRESS_URL:-https://magick-ai.local/}"
+SITE_URL="${NPCINK_CLOUD_SITE_URL:-https://magick-ai.local/}"
 WORDPRESS_ADMIN_USER="${NPCINK_CLOUD_WORDPRESS_ADMIN_USER:-1}"
 WORDPRESS_ADMIN_PASSWORD="${NPCINK_CLOUD_WORDPRESS_ADMIN_PASSWORD:-1}"
 SITE_ID="${NPCINK_CLOUD_SITE_ID:-${NPCINK_CLOUD_DEV_PORTAL_SITE_ID:-${NPCINK_CLOUD_ALPHA_SITE_ID:-site_npcink_local}}}"
@@ -289,8 +289,8 @@ if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	fail "Cloud API did not become ready"
 fi
 
-ok "Checking local WordPress: ${WORDPRESS_URL}"
-curl -k -fsS --connect-timeout 5 --max-time 20 "${WORDPRESS_URL}" >/dev/null
+ok "Checking local WordPress: ${SITE_URL}"
+curl -k -fsS --connect-timeout 5 --max-time 20 "${SITE_URL}" >/dev/null
 
 ok "Checking WordPress Cloud addon admin page"
 curl -k -sS -L \
@@ -299,9 +299,9 @@ curl -k -sS -L \
 	--data-urlencode "log=${WORDPRESS_ADMIN_USER}" \
 	--data-urlencode "pwd=${WORDPRESS_ADMIN_PASSWORD}" \
 	--data-urlencode "wp-submit=Log In" \
-	--data-urlencode "redirect_to=${WORDPRESS_URL%/}/wp-admin/" \
+	--data-urlencode "redirect_to=${SITE_URL%/}/wp-admin/" \
 	--data-urlencode "testcookie=1" \
-	"${WORDPRESS_URL%/}/wp-login.php" >/dev/null
+	"${SITE_URL%/}/wp-login.php" >/dev/null
 WORDPRESS_ADDON_PATH=""
 WORDPRESS_ADDON_BODY=""
 for candidate_path in \
@@ -311,7 +311,7 @@ do
 	candidate_body="$(
 		curl -k -sS -L \
 			-b "${WORDPRESS_COOKIE_JAR}" \
-			"${WORDPRESS_URL%/}${candidate_path}"
+			"${SITE_URL%/}${candidate_path}"
 	)"
 	case "${candidate_body}" in
 		*"npcink-cloud-addon"*|*"Npcink Cloud Addon"*)
@@ -509,7 +509,7 @@ USAGE_METER_BODY="${HTTP_BODY}"
 mkdir -p "${EVIDENCE_DIR}"
 EVIDENCE_FILE="${EVIDENCE_DIR}/evidence-${IDEMPOTENCY_SUFFIX}.json"
 BASE_URL_VALUE="${BASE_URL}" \
-WORDPRESS_URL_VALUE="${WORDPRESS_URL}" \
+SITE_URL_VALUE="${SITE_URL}" \
 SITE_ID_VALUE="${SITE_ID}" \
 PORTAL_PRINCIPAL_REF_VALUE="${PORTAL_PRINCIPAL_REF}" \
 OPERATIONAL_READY_VALUE="${OPERATIONAL_READY_BODY}" \
@@ -538,7 +538,7 @@ operational_ready = payload("OPERATIONAL_READY_VALUE")["data"]
 evidence = {
     "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "base_url": os.environ["BASE_URL_VALUE"],
-    "wordpress_url": os.environ["WORDPRESS_URL_VALUE"],
+    "site_url": os.environ["SITE_URL_VALUE"],
     "site_id": os.environ["SITE_ID_VALUE"],
     "portal": {
         "principal_ref": os.environ["PORTAL_PRINCIPAL_REF_VALUE"],

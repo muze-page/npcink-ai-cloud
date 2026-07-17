@@ -144,6 +144,28 @@ Primary knobs:
   degradation alert cadence.
 - `NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS`: provider health scan
   cadence.
+- `NPCINK_CLOUD_ARTIFACT_RECONCILIATION_INTERVAL_SECONDS`: read-only artifact
+  inventory reconciliation cadence.
+- `NPCINK_CLOUD_ARTIFACT_RECONCILIATION_SAFETY_WINDOW_SECONDS`: minimum object
+  age before an unreferenced object is reported as eligible; C2a never deletes it.
+- `NPCINK_CLOUD_ARTIFACT_RECONCILIATION_PAGE_SIZE`: bounded store and database
+  inventory page size, from 1 through 500.
+- `NPCINK_CLOUD_ARTIFACT_ORPHAN_CLEANUP_ENABLED`: destructive orphan cleanup;
+  it defaults to `false` and must remain false until P3-B4C3 is accepted.
+- `NPCINK_CLOUD_ARTIFACT_ORPHAN_CLEANUP_BATCH_SIZE`: per-cadence candidate cap,
+  from 1 through 100; each candidate receives its own non-blocking EX fence.
+
+The artifact volume root must remain stable and writable only by the service
+owner or trusted operators. Do not replace its mount, shard directories, or
+private publication-fence file while API/runtime/ops workers are running.
+C2a `orphan_eligible` remains age evidence and never authorizes manual
+deletion. Keep C2b automatic cleanup off until PostgreSQL 16 multi-connection
+and real named-volume proof is complete. Before any later enablement, verify
+service-account ownership and safe modes for root/shards/files, private `0600`
+single-link generation marker and lock files, stable mount/root identity, and
+that every namespace writer obeys the advisory fence. See
+[`docs/media-derivative-operations-runbook-v1.md`](../docs/media-derivative-operations-runbook-v1.md#orphan-cleanup-enablement-gate)
+for the full enablement and rollback checklist.
 
 After any resource or cadence change:
 

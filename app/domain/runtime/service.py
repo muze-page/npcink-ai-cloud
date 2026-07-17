@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any, cast
@@ -11,29 +9,23 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.adapters.callbacks.base import (
-    RuntimeCallbackDispatcher,
-    RuntimeCallbackDispatchError,
-    RuntimeCallbackDispatchRequest,
-)
+from app.adapters.callbacks.base import RuntimeCallbackDispatcher
 from app.adapters.providers.base import (
     ProviderAdapter,
     ProviderExecutionError,
     ProviderExecutionRequest,
     ProviderExecutionResult,
+    ProviderMediaCandidate,
 )
 from app.adapters.providers.registry import build_provider_adapters
-from app.adapters.queue.base import RuntimeQueue, RuntimeQueueError
+from app.adapters.queue.base import RuntimeQueue
 from app.adapters.repositories.runtime_repository import RuntimeRepository
 from app.core.config import Settings, get_settings
 from app.core.db import get_session
 from app.core.error_taxonomy import get_error_taxonomy
 from app.core.logging import get_logger
 from app.core.models import (
-    RUN_CALLBACK_STATUS_DELIVERED,
-    RUN_CALLBACK_STATUS_DISPATCHING,
     RUN_CALLBACK_STATUS_FAILED,
-    RUN_CALLBACK_STATUS_NOT_REQUESTED,
     RUN_CALLBACK_STATUS_PENDING,
     SITE_STATUS_ACTIVE,
     ProviderCallRecord,
@@ -43,7 +35,6 @@ from app.core.models import (
 )
 from app.core.secrets import (
     decrypt_runtime_execution_input,
-    decrypt_runtime_terminal_callback_secret,
     encrypt_runtime_execution_input,
 )
 from app.core.security import (
@@ -54,21 +45,17 @@ from app.core.security import (
     REPLAY_SCOPE_PUBLIC_POST_SITE,
 )
 from app.domain.audio_generation.artifacts import (
-    AudioArtifactMaterializationConfig,
     AudioArtifactMaterializationError,
     materialize_audio_generation_candidates,
 )
 from app.domain.audio_generation.contracts import (
     AUDIO_GENERATION_ABILITIES,
-    AudioGenerationContractViolation,
-    validate_audio_generation_runtime_contract,
 )
 from app.domain.cloud_batch_runtime.contracts import (
     CLOUD_BATCH_RUNTIME_ABILITIES,
     CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
     CLOUD_BATCH_RUNTIME_PROFILE_ID,
     CloudBatchRuntimeContractViolation,
-    validate_cloud_batch_runtime_contract,
 )
 from app.domain.cloud_batch_runtime.service import CloudBatchRuntimeService
 from app.domain.commercial.credits import (
@@ -77,53 +64,58 @@ from app.domain.commercial.credits import (
     estimate_runtime_request_ai_credits,
 )
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
+from app.domain.connector_runtime.contracts import (
+    CONNECTOR_RUNTIME_ABILITIES,
+)
 from app.domain.hosted_model_defaults import FREE_GPT55_TEXT_PROFILE_ID
 from app.domain.image_context_evidence.contracts import (
     IMAGE_CONTEXT_EVIDENCE_ABILITIES,
     IMAGE_CONTEXT_EVIDENCE_PROFILE_ID,
     ImageContextEvidenceContractViolation,
-    validate_image_context_evidence_runtime_contract,
 )
 from app.domain.image_context_evidence.service import (
     ImageContextEvidenceProviderError,
     ImageContextEvidenceService,
 )
-from app.domain.image_generation.contracts import (
-    IMAGE_GENERATION_ABILITIES,
-    ImageGenerationContractViolation,
-    validate_image_generation_runtime_contract,
-)
-from app.domain.image_generation.inline_images import (
-    InlineImageMaterializationConfig,
-    InlineImageMaterializationError,
-    materialize_inline_image_candidates_from_urls,
+from app.domain.image_generation.contracts import IMAGE_GENERATION_ABILITIES
+from app.domain.image_generation.materialization import (
+    ImageGenerationArtifactMaterializationError,
 )
 from app.domain.image_sources.contracts import (
     IMAGE_SOURCE_ABILITIES,
     IMAGE_SOURCE_PROFILE_ID,
     ImageSourceContractViolation,
-    validate_image_source_runtime_contract,
 )
 from app.domain.image_sources.service import ImageSourceProviderError, ImageSourceService
+from app.domain.media_artifacts import ArtifactStore, build_artifact_store
+from app.domain.media_artifacts.input_loading import (
+    ArtifactInputError,
+    LoadedArtifactInput,
+    admit_artifact_input,
+    load_artifact_input,
+)
+from app.domain.media_artifacts.projection import project_media_artifact_lifecycle
 from app.domain.media_batch_plans.contracts import (
     MEDIA_BATCH_PLAN_ABILITIES,
     MEDIA_BATCH_PLAN_PROFILE_ID,
     MediaBatchPlanContractViolation,
-    validate_media_batch_plan_runtime_contract,
 )
 from app.domain.media_batch_plans.service import MediaBatchPlanService
 from app.domain.routing.errors import RoutingError
 from app.domain.routing.models import RoutingCandidate, RoutingResolution
 from app.domain.routing.service import RoutingService
 from app.domain.runtime.analysis_result import build_analysis_result_envelope
-from app.domain.runtime.data_guard import find_runtime_data_guard_finding
+from app.domain.runtime.artifact_coordination import (
+    RuntimeArtifactCoordinationConfig,
+    RuntimeArtifactCoordinationDependencies,
+    RuntimeArtifactCoordinationService,
+)
+from app.domain.runtime.callback_delivery import RuntimeCallbackDeliveryService
+from app.domain.runtime.contract_validation import RuntimeContractValidator
 from app.domain.runtime.errors import (
     RuntimeBatchLimitExceededError,
-    RuntimeCallbackConfigurationError,
-    RuntimeCancelNotAllowedError,
     RuntimeErrorBase,
     RuntimeExecutionContractError,
-    RuntimeIdempotencyConflictError,
     RuntimeResultExpiredError,
     RuntimeResultNotReadyError,
     RuntimeRunNotFoundError,
@@ -133,31 +125,40 @@ from app.domain.runtime.errors import (
 from app.domain.runtime.models import (
     ABUSE_GUARD_ATTENTION_RATIO,
     ABUSE_GUARD_CRITICAL_RATIO,
-    FORBIDDEN_HOSTED_RUNTIME_DATA_CLASSIFICATIONS,
     RUNTIME_BACKLOG_QUEUED_AGING_AFTER_SECONDS,
     RUNTIME_BACKLOG_RUNNING_AGING_AFTER_SECONDS,
     RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_AFTER_SECONDS,
     RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_ERROR_CODE,
-    RUNTIME_CALLBACK_EVENT,
     RUNTIME_DIAGNOSTIC_CALLBACK_DISPATCHING_STALE_AFTER_SECONDS,
     RUNTIME_DIAGNOSTIC_CALLBACK_OVERDUE_AFTER_SECONDS,
     RUNTIME_DIAGNOSTIC_CANCEL_STUCK_AFTER_SECONDS,
     RUNTIME_DIAGNOSTIC_QUEUED_STALE_AFTER_SECONDS,
     RUNTIME_DIAGNOSTIC_RUNNING_STALE_AFTER_SECONDS,
-    RUNTIME_MAX_RETENTION_TTL,
-    RUNTIME_MAX_RETRY_MAX,
-    RUNTIME_MAX_TIMEOUT_SECONDS,
     RUNTIME_STORAGE_MODE_FULL_STORE_WITH_TTL,
     RUNTIME_STORAGE_MODE_NO_STORE,
     RUNTIME_STORAGE_MODE_RESULT_ONLY,
-    SENSITIVE_RUNTIME_DATA_CLASSIFICATIONS,
-    RuntimeExecutionContext,
     RuntimeExecutionResponse,
-    RuntimeFailureDetails,
     RuntimeRequest,
     normalize_runtime_request_policy,
     normalize_runtime_task_backend,
 )
+from app.domain.runtime.provider_execution import (
+    ProviderCallEvidenceCommand,
+    ProviderOutputDecision,
+    ProviderOutputFinalizationError,
+    RuntimeProviderExecutionService,
+)
+from app.domain.runtime.result_normalization import (
+    RuntimeResultNormalizationCommand,
+    RuntimeResultNormalizationService,
+    get_transient_runtime_result,
+    set_transient_runtime_result,
+)
+from app.domain.runtime.run_lifecycle import (
+    RuntimeRunCreationCommand,
+    RuntimeRunLifecycleService,
+)
+from app.domain.runtime.run_projection import RuntimeRunProjector
 from app.domain.site_knowledge.backends import SiteKnowledgeBackendError
 from app.domain.site_knowledge.contracts import (
     SITE_KNOWLEDGE_ABILITIES,
@@ -166,13 +167,11 @@ from app.domain.site_knowledge.contracts import (
     SITE_KNOWLEDGE_STATUS_ABILITY,
     SITE_KNOWLEDGE_SYNC_ABILITY,
     SiteKnowledgeContractViolation,
-    validate_site_knowledge_runtime_contract,
 )
 from app.domain.site_knowledge.metrics import (
     record_site_knowledge_failure_metric,
     record_site_knowledge_run_metric,
 )
-from app.domain.site_knowledge.repository import SiteKnowledgeRepository
 from app.domain.site_knowledge.service import SiteKnowledgeService
 from app.domain.site_ops_analysis.contracts import (
     SITE_OPS_ANALYSIS_ABILITIES,
@@ -180,7 +179,6 @@ from app.domain.site_ops_analysis.contracts import (
     SITE_OPS_ANALYSIS_PROFILE_ID,
     SITE_OPS_ANALYSIS_RESULT_CONTRACT,
     SiteOpsAnalysisContractViolation,
-    validate_site_ops_analysis_runtime_contract,
 )
 from app.domain.site_ops_analysis.service import SiteOpsAnalysisService
 from app.domain.web_search.auto_policy import (
@@ -193,43 +191,21 @@ from app.domain.web_search.contracts import (
     WEB_SEARCH_ABILITY,
     WEB_SEARCH_CONTRACT,
     WebSearchContractViolation,
-    validate_web_search_runtime_contract,
 )
 from app.domain.web_search.service import WebSearchProviderError, WebSearchService
-from app.domain.wordpress_ai_connector.contracts import (
-    WP_AI_CONNECTOR_ABILITIES,
-    WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS,
-    WordPressAIConnectorContractViolation,
-    resolve_site_knowledge_reference_mode,
-    validate_wordpress_ai_connector_runtime_contract,
-)
-from app.domain.wordpress_ai_connector.generation_context import (
-    GENERATION_CONTEXT_CONTRACT,
-    build_generation_context_pack,
-    generation_context_policy,
-    render_generation_context,
-    select_generation_context_post_ids,
-)
-from app.domain.wordpress_ai_connector.routing_profiles import (
-    resolve_wordpress_ai_connector_profile_spec,
-)
+from app.domain.wordpress_ai_connector.runtime import WordPressOperationRuntime
+
+__all__ = [
+    "RuntimeResultExpiredError",
+    "RuntimeResultNotReadyError",
+    "RuntimeService",
+]
 
 logger = get_logger(__name__)
 
 OPERATOR_REPAIR_REASON_MIN_LENGTH = 12
 OPERATOR_REPAIR_EVIDENCE_MIN_LENGTH = 24
-_TRANSIENT_RESULT_JSON_ATTR = "_transient_result_json"
-
-
-def _set_transient_result_json(run: RunRecord, result_json: dict[str, Any]) -> None:
-    setattr(run, _TRANSIENT_RESULT_JSON_ATTR, result_json)
-
-
-def _get_transient_result_json(run: RunRecord) -> dict[str, Any] | None:
-    result_json = getattr(run, _TRANSIENT_RESULT_JSON_ATTR, None)
-    if isinstance(result_json, dict):
-        return result_json
-    return None
+NON_AI_ZERO_CREDIT_EXECUTION_KINDS = frozenset({"media_upload"})
 
 
 class RuntimeService:
@@ -242,12 +218,32 @@ class RuntimeService:
         callback_dispatcher: RuntimeCallbackDispatcher | None = None,
         callback_max_attempts: int = 3,
         callback_retry_backoff_seconds: int = 30,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self.database_url = database_url
         self.settings = settings or get_settings()
+        self.artifact_store = artifact_store or build_artifact_store(self.settings)
         self.commercial_service = CommercialService(database_url, settings=self.settings)
+        self.result_normalization_service = RuntimeResultNormalizationService()
         self.providers = (
             providers if providers is not None else build_provider_adapters(self.settings)
+        )
+        self.wordpress_operation_runtime = WordPressOperationRuntime(
+            settings=self.settings,
+            providers=self.providers,
+        )
+        self.run_projector = RuntimeRunProjector()
+        self.callback_delivery_service = RuntimeCallbackDeliveryService(
+            database_url=self.database_url,
+            settings=self.settings,
+            dispatcher=callback_dispatcher,
+            max_attempts=callback_max_attempts,
+            retry_backoff_seconds=callback_retry_backoff_seconds,
+            run_projector=self.run_projector,
+            recovery_audit_callback=self._record_callback_dispatch_recovery,
+        )
+        self.contract_validator = RuntimeContractValidator(
+            callback_target_resolver=self.callback_delivery_service,
         )
         self.routing_service = RoutingService(
             database_url,
@@ -255,18 +251,71 @@ class RuntimeService:
             execution_provider_ids=set(self.providers),
         )
         self.runtime_queue = runtime_queue
-        self.callback_dispatcher = callback_dispatcher
-        self.callback_max_attempts = max(1, callback_max_attempts)
-        self.callback_retry_backoff_seconds = max(0, callback_retry_backoff_seconds)
+        self.run_lifecycle_service = RuntimeRunLifecycleService(
+            database_url=self.database_url,
+            runtime_queue=self.runtime_queue,
+            run_projector=self.run_projector,
+            claimed_run_executor=self._execute_existing_run,
+            media_derivative_site_running_limit=(self.settings.media_derivative_site_running_limit),
+        )
+        self.artifact_coordination_service = RuntimeArtifactCoordinationService(
+            config=RuntimeArtifactCoordinationConfig(
+                audio_artifact_ttl_minutes=(self.settings.audio_generation_artifact_ttl_minutes),
+                audio_artifact_max_bytes=self.settings.audio_generation_artifact_max_bytes,
+                audio_artifact_download_timeout_seconds=(
+                    self.settings.audio_generation_artifact_download_timeout_seconds
+                ),
+                media_derivative_batch_default_chunk_size=(
+                    self.settings.media_derivative_batch_default_chunk_size
+                ),
+                media_derivative_batch_max_chunk_size=(
+                    self.settings.media_derivative_batch_max_chunk_size
+                ),
+                media_derivative_site_queued_limit=(
+                    self.settings.media_derivative_site_queued_limit
+                ),
+                media_derivative_site_running_limit=(
+                    self.settings.media_derivative_site_running_limit
+                ),
+            ),
+            dependencies=RuntimeArtifactCoordinationDependencies(
+                database_url=self.database_url,
+                active_site_guard=self._require_active_site,
+                commercial_authorizer=self.commercial_service.authorize_runtime_request,
+                commercial_acceptance_recorder=(self.commercial_service.record_run_acceptance),
+                credit_estimator=estimate_runtime_request_ai_credits,
+                execution_input_encryptor=lambda input_payload: encrypt_runtime_execution_input(
+                    input_payload, settings=self.settings
+                ),
+                execution_response_builder=self._build_execution_response,
+                artifact_store=self.artifact_store,
+            ),
+            run_controller=self.run_lifecycle_service,
+            execution_input_loader=self._get_execution_input_payload,
+            audio_candidate_materializer=materialize_audio_generation_candidates,
+        )
+        self.provider_execution_service = RuntimeProviderExecutionService(
+            usage_recorder=self.commercial_service,
+            providers=self.providers,
+            run_controller=self.run_lifecycle_service,
+            input_preprocessor=self._preprocess_provider_input,
+            output_preparer=self._prepare_provider_output,
+            output_finalizer=self._finalize_provider_output,
+        )
 
     def resolve(self, request: RuntimeRequest) -> dict[str, object]:
-        self._validate_runtime_data_handling_contract(request)
+        self.contract_validator.validate_runtime_data_handling_contract(request)
+        self._validate_image_generation_artifact_storage(request)
+        connector_envelope: dict[str, Any] | None = None
         if self._is_audio_generation_request(request):
-            self._validate_audio_generation_contract(request)
+            self.contract_validator.validate_audio_generation_contract(request)
         if self._is_image_generation_request(request):
-            self._validate_image_generation_contract(request)
+            self.contract_validator.validate_image_generation_contract(request)
         if self._is_wordpress_ai_connector_request(request):
-            self._validate_wordpress_ai_connector_contract(request)
+            connector_envelope = self.contract_validator.validate_connector_runtime_contract(
+                request
+            )
+            request.input_payload = connector_envelope
 
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
@@ -276,6 +325,16 @@ class RuntimeService:
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             site = self._require_active_site(repository, request.site_id)
+            if connector_envelope is not None:
+                self.contract_validator.validate_connector_runtime_site_binding(
+                    connector_envelope,
+                    site=site,
+                )
+                self._admit_wordpress_operation_artifact_input(
+                    repository,
+                    site_id=request.site_id,
+                    connector_envelope=connector_envelope,
+                )
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
                 site_id=request.site_id,
@@ -292,7 +351,7 @@ class RuntimeService:
                 request=request,
                 commercial_decision=commercial_decision,
             )
-            execution_contract = self._build_execution_contract(
+            execution_contract = self.contract_validator.build_execution_contract(
                 request=request,
                 resolution=resolution,
                 site=site,
@@ -300,12 +359,12 @@ class RuntimeService:
             session.commit()
 
         merged_policy = self._merge_policy(resolution.default_policy, request.policy)
-        merged_policy = self._apply_execution_contract(
+        merged_policy = self.contract_validator.apply_execution_contract(
             merged_policy,
             execution_contract=execution_contract,
         )
         if self._is_wordpress_ai_connector_managed_request(request):
-            merged_policy = self._apply_wordpress_ai_connector_managed_policy(
+            merged_policy = self.wordpress_operation_runtime.apply_managed_policy(
                 merged_policy,
                 default_policy=resolution.default_policy,
                 profile_id=resolution.profile_id,
@@ -329,19 +388,21 @@ class RuntimeService:
             "policy": merged_policy,
             "selected_candidate": candidates[0],
             "candidates": candidates,
-            "run_lifecycle": self._build_planned_run_lifecycle(
-                request=request,
+            "run_lifecycle": self.run_projector.build_planned_run_lifecycle(
+                execution_pattern=request.execution_pattern,
                 policy=merged_policy,
                 initial_phase="queued" if task_backend_status == "queued" else "processing",
             ),
-            "task_backend": self._build_task_backend_payload_from_policy(
+            "task_backend": self.run_projector.build_task_backend_payload_from_policy(
                 merged_policy,
                 run_status=task_backend_status,
             ),
         }
 
     def execute(self, request: RuntimeRequest) -> RuntimeExecutionResponse:
-        self._validate_runtime_data_handling_contract(request)
+        self.contract_validator.validate_runtime_data_handling_contract(request)
+        self._validate_image_generation_artifact_storage(request)
+        connector_envelope: dict[str, Any] | None = None
         if self._is_cloud_batch_runtime_request(request):
             return self._execute_cloud_batch_runtime_request(request)
         if self._is_site_ops_analysis_request(request):
@@ -357,11 +418,14 @@ class RuntimeService:
         if self._is_web_search_request(request):
             return self._execute_web_search_request(request)
         if self._is_audio_generation_request(request):
-            self._validate_audio_generation_contract(request)
+            self.contract_validator.validate_audio_generation_contract(request)
         if self._is_image_generation_request(request):
-            self._validate_image_generation_contract(request)
+            self.contract_validator.validate_image_generation_contract(request)
         if self._is_wordpress_ai_connector_request(request):
-            self._validate_wordpress_ai_connector_contract(request)
+            connector_envelope = self.contract_validator.validate_connector_runtime_contract(
+                request
+            )
+            request.input_payload = connector_envelope
 
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
@@ -372,46 +436,57 @@ class RuntimeService:
         merged_policy = self._apply_routing_snapshot(merged_policy, resolution)
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
-        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+        request_fingerprint = self.run_lifecycle_service.build_request_fingerprint(
+            request,
+            merged_policy,
+        )
         should_enqueue = self._should_enqueue(request, merged_policy)
         selected_candidate = resolution.selected_candidate
 
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             site = self._require_active_site(repository, request.site_id)
-            execution_contract = self._build_execution_contract(
+            if connector_envelope is not None:
+                self.contract_validator.validate_connector_runtime_site_binding(
+                    connector_envelope,
+                    site=site,
+                )
+            execution_contract = self.contract_validator.build_execution_contract(
                 request=request,
                 resolution=resolution,
                 site=site,
             )
-            merged_policy = self._apply_execution_contract(
+            merged_policy = self.contract_validator.apply_execution_contract(
                 merged_policy,
                 execution_contract=execution_contract,
             )
             if self._is_wordpress_ai_connector_managed_request(request):
-                merged_policy = self._apply_wordpress_ai_connector_managed_policy(
+                merged_policy = self.wordpress_operation_runtime.apply_managed_policy(
                     merged_policy,
                     default_policy=resolution.default_policy,
                     profile_id=resolution.profile_id,
                 )
 
-            if request.idempotency_key:
-                existing = repository.get_run_by_idempotency(
-                    request.site_id,
-                    request.idempotency_key,
+            existing = self.run_lifecycle_service.get_idempotent_replay(
+                repository=repository,
+                site_id=request.site_id,
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is not None:
+                session.commit()
+                return self._build_execution_response(
+                    existing,
+                    repository=repository,
+                    idempotent_replay=True,
                 )
-                if existing is not None:
-                    if existing.request_fingerprint != request_fingerprint:
-                        raise RuntimeIdempotencyConflictError(
-                            request.site_id,
-                            request.idempotency_key,
-                        )
-                    session.commit()
-                    return self._build_execution_response(
-                        existing,
-                        repository=repository,
-                        idempotent_replay=True,
-                    )
+
+            if connector_envelope is not None:
+                self._admit_wordpress_operation_artifact_input(
+                    repository,
+                    site_id=request.site_id,
+                    connector_envelope=connector_envelope,
+                )
 
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
@@ -448,39 +523,42 @@ class RuntimeService:
                     settings=self.settings,
                 )
 
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id,
-                canonical_run_id=request.canonical_run_id or None,
-                status="queued" if should_enqueue else "running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=prepared_input,
-                execution_input_ciphertext=execution_input_ciphertext,
-                policy_json=merged_policy,
-                selected_provider_id=selected_candidate.provider_id,
-                selected_model_id=selected_candidate.model_id,
-                selected_instance_id=selected_candidate.instance_id,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="queued" if should_enqueue else "running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=prepared_input,
+                    execution_input_ciphertext=execution_input_ciphertext,
+                    policy_json=merged_policy,
+                    selected_provider_id=selected_candidate.provider_id,
+                    selected_model_id=selected_candidate.model_id,
+                    selected_instance_id=selected_candidate.instance_id,
+                ),
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
 
             if should_enqueue:
-                self._publish_queue_signal(run.run_id)
+                self.run_lifecycle_service.publish_queue_signal(run.run_id)
                 session.commit()
                 return self._build_execution_response(
                     run,
@@ -490,14 +568,10 @@ class RuntimeService:
 
             provider_input_payload = request.input_payload
             if self._is_wordpress_ai_connector_request(request):
-                provider_input_payload = self._build_wordpress_ai_connector_provider_input(
-                    request.input_payload
-                )
-                provider_input_payload = self._apply_wordpress_ai_site_knowledge_reference(
+                provider_input_payload = self._prepare_wordpress_operation_execution_input(
                     run,
                     repository=repository,
-                    input_payload=request.input_payload,
-                    provider_input=provider_input_payload,
+                    connector_envelope=connector_envelope or {},
                 )
 
             self._execute_candidate_chain(
@@ -505,6 +579,7 @@ class RuntimeService:
                 repository=repository,
                 candidates=resolution.candidates,
                 input_payload=provider_input_payload,
+                connector_envelope=connector_envelope,
             )
             session.commit()
             return self._build_execution_response(
@@ -517,34 +592,33 @@ class RuntimeService:
         self,
         request: RuntimeRequest,
     ) -> RuntimeExecutionResponse:
-        self._validate_site_knowledge_contract(request)
+        self.contract_validator.validate_site_knowledge_contract(request)
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
         merged_policy = self._build_site_knowledge_policy(request)
-        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+        request_fingerprint = self.run_lifecycle_service.build_request_fingerprint(
+            request,
+            merged_policy,
+        )
         should_enqueue = self._should_enqueue(request, merged_policy)
 
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             self._require_active_site(repository, request.site_id)
 
-            if request.idempotency_key:
-                existing = repository.get_run_by_idempotency(
-                    request.site_id,
-                    request.idempotency_key,
+            existing = self.run_lifecycle_service.get_idempotent_replay(
+                repository=repository,
+                site_id=request.site_id,
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is not None:
+                session.commit()
+                return self._build_execution_response(
+                    existing,
+                    repository=repository,
+                    idempotent_replay=True,
                 )
-                if existing is not None:
-                    if existing.request_fingerprint != request_fingerprint:
-                        raise RuntimeIdempotencyConflictError(
-                            request.site_id,
-                            request.idempotency_key,
-                        )
-                    session.commit()
-                    return self._build_execution_response(
-                        existing,
-                        repository=repository,
-                        idempotent_replay=True,
-                    )
 
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
@@ -579,42 +653,45 @@ class RuntimeService:
                     settings=self.settings,
                 )
 
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id,
-                canonical_run_id=request.canonical_run_id or None,
-                status="queued" if should_enqueue else "running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="queued" if should_enqueue else "running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=execution_input_ciphertext,
+                    policy_json=merged_policy,
+                    selected_provider_id="site_knowledge",
+                    selected_model_id="site-knowledge-managed",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=execution_input_ciphertext,
-                policy_json=merged_policy,
-                selected_provider_id="site_knowledge",
-                selected_model_id="site-knowledge-managed",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
 
             if should_enqueue:
-                self._publish_queue_signal(run.run_id)
+                self.run_lifecycle_service.publish_queue_signal(run.run_id)
                 session.commit()
                 return self._build_execution_response(
                     run,
@@ -638,34 +715,33 @@ class RuntimeService:
         self,
         request: RuntimeRequest,
     ) -> RuntimeExecutionResponse:
-        self._validate_cloud_batch_runtime_contract(request)
+        self.contract_validator.validate_cloud_batch_runtime_contract(request)
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
         merged_policy = self._build_cloud_batch_runtime_policy(request)
-        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+        request_fingerprint = self.run_lifecycle_service.build_request_fingerprint(
+            request,
+            merged_policy,
+        )
         should_enqueue = self._should_enqueue(request, merged_policy)
 
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             self._require_active_site(repository, request.site_id)
 
-            if request.idempotency_key:
-                existing = repository.get_run_by_idempotency(
-                    request.site_id,
-                    request.idempotency_key,
+            existing = self.run_lifecycle_service.get_idempotent_replay(
+                repository=repository,
+                site_id=request.site_id,
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is not None:
+                session.commit()
+                return self._build_execution_response(
+                    existing,
+                    repository=repository,
+                    idempotent_replay=True,
                 )
-                if existing is not None:
-                    if existing.request_fingerprint != request_fingerprint:
-                        raise RuntimeIdempotencyConflictError(
-                            request.site_id,
-                            request.idempotency_key,
-                        )
-                    session.commit()
-                    return self._build_execution_response(
-                        existing,
-                        repository=repository,
-                        idempotent_replay=True,
-                    )
 
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
@@ -698,42 +774,45 @@ class RuntimeService:
                     settings=self.settings,
                 )
 
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or CLOUD_BATCH_RUNTIME_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="queued" if should_enqueue else "running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or CLOUD_BATCH_RUNTIME_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="queued" if should_enqueue else "running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=execution_input_ciphertext,
+                    policy_json=merged_policy,
+                    selected_provider_id="cloud_batch_runtime",
+                    selected_model_id="deterministic-content-quality-v1",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=execution_input_ciphertext,
-                policy_json=merged_policy,
-                selected_provider_id="cloud_batch_runtime",
-                selected_model_id="deterministic-content-quality-v1",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
 
             if should_enqueue:
-                self._publish_queue_signal(run.run_id)
+                self.run_lifecycle_service.publish_queue_signal(run.run_id)
                 session.commit()
                 return self._build_execution_response(
                     run,
@@ -753,135 +832,41 @@ class RuntimeService:
                 idempotent_replay=False,
             )
 
-    def enqueue_media_derivative_run(
+    def create_media_upload(
+        self,
+        *,
+        site_id: str,
+        request_payload: dict[str, Any],
+        stream: Any,
+        upload: Any,
+        ttl_minutes: int,
+        idempotency_key: str | None = None,
+        trace_id: str | None = None,
+    ) -> RuntimeExecutionResponse:
+        return self.artifact_coordination_service.create_media_upload(
+            site_id=site_id,
+            request_payload=request_payload,
+            stream=stream,
+            upload=upload,
+            ttl_minutes=ttl_minutes,
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
+        )
+
+    def enqueue_media_job_run(
         self,
         *,
         site_id: str,
         input_payload: dict[str, Any],
-        source_bytes: bytes,
-        watermark_bytes: bytes | None = None,
-        ttl_minutes: int = 30,
         idempotency_key: str | None = None,
         trace_id: str | None = None,
     ) -> RuntimeExecutionResponse:
-        import base64
-
-        resolved_trace_id = trace_id or uuid4().hex
-        run_id = f"run_{uuid4().hex}"
-        resolved_idempotency_key = idempotency_key or f"auto_{uuid4().hex}"
-        source_checksum = hashlib.sha256(source_bytes).hexdigest()
-        watermark_checksum = hashlib.sha256(watermark_bytes).hexdigest() if watermark_bytes else ""
-        media_derivative_policy = self._build_media_derivative_policy(input_payload)
-        request_fingerprint = self._build_request_fingerprint_for_media_derivative(
-            site_id,
-            input_payload,
-            source_checksum=source_checksum,
-            watermark_checksum=watermark_checksum,
+        return self.artifact_coordination_service.enqueue_media_job_run(
+            site_id=site_id,
+            input_payload=input_payload,
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
         )
-
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            self._require_active_site(repository, site_id)
-
-            existing = repository.get_run_by_idempotency(site_id, resolved_idempotency_key)
-            if existing is not None:
-                if existing.request_fingerprint != request_fingerprint:
-                    raise RuntimeIdempotencyConflictError(
-                        site_id,
-                        resolved_idempotency_key,
-                    )
-                session.commit()
-                return self._build_execution_response(
-                    existing,
-                    repository=repository,
-                    idempotent_replay=True,
-                )
-
-            commercial_decision = self.commercial_service.authorize_runtime_request(
-                session=session,
-                site_id=site_id,
-                ability_family="vision",
-                channel="openapi",
-                execution_kind="media_derivative",
-                execution_tier="cloud",
-                data_classification="internal",
-                trace_id=resolved_trace_id,
-                idempotency_key=resolved_idempotency_key,
-                request_kind="execute",
-                run_id=run_id,
-                estimated_ai_credits=estimate_runtime_request_ai_credits(
-                    ability_family="vision",
-                    execution_kind="media_derivative",
-                    payload_json=input_payload,
-                ),
-            )
-
-            media_input = {
-                **input_payload,
-                "_source_bytes_b64": base64.b64encode(source_bytes).decode("ascii"),
-            }
-            if watermark_bytes:
-                media_input["_watermark_bytes_b64"] = base64.b64encode(watermark_bytes).decode(
-                    "ascii"
-                )
-
-            policy = {
-                "storage_mode": "result_only",
-                "media_derivative": media_derivative_policy,
-                "execution_contract": {
-                    "ability_name": "generate_optimized_media_derivative",
-                    "contract_version": "media_derivative_cloud_request.v1",
-                    "profile_id": "media_derivative.worker",
-                    "execution_pattern": "whole_run_offload",
-                    "data_classification": "internal",
-                    "storage_mode": "result_only",
-                    "timeout_seconds": 300,
-                    "retry_max": 0,
-                    "retention_ttl": 3600,
-                    "task_backend": {"enabled": True},
-                },
-            }
-
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name="generate_optimized_media_derivative",
-                ability_family="vision",
-                skill_id="",
-                workflow_id="",
-                contract_version="media_derivative_cloud_request.v1",
-                channel="openapi",
-                execution_kind="media_derivative",
-                execution_tier="cloud",
-                execution_pattern="whole_run_offload",
-                data_classification="internal",
-                profile_id="media_derivative.worker",
-                canonical_run_id=None,
-                status="queued",
-                idempotency_key=resolved_idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=resolved_trace_id,
-                input_json={},
-                execution_input_ciphertext=encrypt_runtime_execution_input(
-                    media_input,
-                    settings=self.settings,
-                ),
-                policy_json=policy,
-                selected_provider_id="media_derivative",
-                selected_model_id="pillow",
-                selected_instance_id="cloud-worker",
-            )
-            self.commercial_service.record_run_acceptance(session=session, run=run)
-            self._publish_queue_signal(run.run_id)
-            session.commit()
-            return self._build_execution_response(
-                run,
-                repository=repository,
-                idempotent_replay=False,
-            )
 
     def get_media_derivative_queue_pressure(self, *, site_id: str) -> dict[str, object]:
         queued_limit = max(1, int(self.settings.media_derivative_site_queued_limit))
@@ -932,195 +917,21 @@ class RuntimeService:
             "recommended_chunk_size": max(1, min(default_chunk_size, queue_remaining or 1)),
         }
 
-    def _build_request_fingerprint_for_media_derivative(
-        self,
-        site_id: str,
-        input_payload: dict[str, Any],
-        *,
-        source_checksum: str,
-        watermark_checksum: str = "",
-    ) -> str:
-        canonical_payload = json.dumps(
-            {
-                "site_id": site_id,
-                "execution_kind": "media_derivative",
-                "input": input_payload,
-                "source_checksum": source_checksum,
-                "watermark_checksum": watermark_checksum,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        return hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
-
-    def _build_media_derivative_policy(self, input_payload: dict[str, Any]) -> dict[str, object]:
-        cloud_job_payload = self._dict_or_empty(input_payload.get("cloud_job_payload"))
-        batch_context = self._dict_or_empty(input_payload.get("batch_context"))
-        return {
-            "target_format": str(cloud_job_payload.get("target_format") or "webp"),
-            "source_media_type": str(cloud_job_payload.get("source_media_type") or "image"),
-            "batch_context": {
-                "batch_id": str(batch_context.get("batch_id") or ""),
-                "item_index": self._coerce_int(batch_context.get("item_index"), default=1),
-                "item_count": self._coerce_int(batch_context.get("item_count"), default=1),
-                "chunk_size": self._coerce_int(
-                    batch_context.get("chunk_size"),
-                    default=int(self.settings.media_derivative_batch_default_chunk_size),
-                ),
-                "explicit_avif": bool(batch_context.get("explicit_avif")),
-            }
-            if batch_context
-            else {},
-            "limits": {
-                "site_queued": int(self.settings.media_derivative_site_queued_limit),
-                "site_running": int(self.settings.media_derivative_site_running_limit),
-                "batch_max_chunk_size": int(self.settings.media_derivative_batch_max_chunk_size),
-            },
-            "write_posture": "artifact_only",
-            "direct_wordpress_write": False,
-        }
-
     def _execute_media_derivative_run(
         self,
         run: RunRecord,
         *,
         repository: RuntimeRepository,
     ) -> None:
-        import base64
-
-        from app.domain.media_derivatives.artifacts import (
-            build_artifact_result_json,
-            create_artifact,
-        )
-        from app.domain.media_derivatives.contracts import ARTIFACT_DEFAULT_TTL_MINUTES
-        from app.domain.media_derivatives.errors import (
-            MediaDerivativeAnimatedSourceUnavailableError,
-            MediaDerivativeFormatUnavailableError,
-            MediaDerivativeProcessingFailedError,
-            MediaDerivativeSourceDecodeFailedError,
-            MediaDerivativeSourceTooLargeError,
-        )
-        from app.domain.media_derivatives.metrics import record_media_derivative_job_metric
-        from app.domain.media_derivatives.processor import process_media_derivative
-
-        media_input = self._get_execution_input_payload(run)
-        cloud_job_payload = media_input.get("cloud_job_payload", {})
-        source_media_type = cloud_job_payload.get("source_media_type", "image")
-        target_format = cloud_job_payload.get("target_format", "webp")
-        max_width = int(cloud_job_payload.get("max_width", 1200))
-        quality = int(cloud_job_payload.get("quality", 82))
-        crop_options = cloud_job_payload.get("crop")
-        crop_options = crop_options if isinstance(crop_options, dict) else None
-        watermark_options = cloud_job_payload.get("watermark")
-        watermark_options = watermark_options if isinstance(watermark_options, dict) else None
-        ttl_minutes = int(media_input.get("ttl_minutes", ARTIFACT_DEFAULT_TTL_MINUTES))
-
-        source_b64 = media_input.get("_source_bytes_b64", "")
-        source_bytes = base64.b64decode(source_b64) if source_b64 else b""
-        watermark_b64 = media_input.get("_watermark_bytes_b64", "")
-        watermark_bytes = base64.b64decode(watermark_b64) if watermark_b64 else None
-        processing_started_at = datetime.now(UTC)
-        watermark_applied = bool(watermark_bytes) or bool(
-            watermark_options and watermark_options.get("type") == "text"
-        )
-
-        if not source_bytes:
-            repository.mark_run_failed(
-                run,
-                error_code="media_derivative.source_decode_failed",
-                error_message="no source bytes found in media derivative run",
-            )
-            run.result_json = {
-                "status": "failed",
-                "error_code": "media_derivative.source_decode_failed",
-                "error_message": "no source bytes found in media derivative run",
-            }
-            record_media_derivative_job_metric(
-                session=repository.session,
-                run=run,
-                target_format=target_format,
-                source_media_type=source_media_type,
-                source_bytes=0,
-                processing_started_at=processing_started_at,
-                error_code="media_derivative.source_decode_failed",
-                watermark_applied=watermark_applied,
-            )
-            return
-
-        try:
-            result = process_media_derivative(
-                source_bytes=source_bytes,
-                source_media_type=source_media_type,
-                target_format=target_format,
-                max_width=max_width,
-                quality=quality,
-                crop_options=crop_options,
-                watermark_bytes=watermark_bytes,
-                watermark_options=watermark_options,
-            )
-        except (
-            MediaDerivativeSourceDecodeFailedError,
-            MediaDerivativeSourceTooLargeError,
-            MediaDerivativeAnimatedSourceUnavailableError,
-            MediaDerivativeFormatUnavailableError,
-            MediaDerivativeProcessingFailedError,
-        ) as error:
-            repository.mark_run_failed(
-                run,
-                error_code=error.error_code,
-                error_message=error.message,
-            )
-            run.result_json = {
-                "status": "failed",
-                "error_code": error.error_code,
-                "error_message": error.message,
-            }
-            record_media_derivative_job_metric(
-                session=repository.session,
-                run=run,
-                target_format=target_format,
-                source_media_type=source_media_type,
-                source_bytes=len(source_bytes),
-                processing_started_at=processing_started_at,
-                error_code=error.error_code,
-                watermark_applied=watermark_applied,
-            )
-            return
-
-        artifact = create_artifact(
-            session=repository.session,
-            run_id=run.run_id,
-            site_id=run.site_id,
-            result=result,
-            source_media_type=source_media_type,
-            ttl_minutes=ttl_minutes,
-        )
-        result_json = build_artifact_result_json(artifact)
-        repository.mark_run_succeeded(
+        self.artifact_coordination_service.execute_media_derivative_run(
             run,
-            result_json=result_json,
-            provider_id="media_derivative",
-            model_id="pillow",
-            instance_id="cloud-worker",
-            fallback_used=False,
-        )
-        record_media_derivative_job_metric(
-            session=repository.session,
-            run=run,
-            target_format=target_format,
-            source_media_type=source_media_type,
-            source_bytes=len(source_bytes),
-            processing_started_at=processing_started_at,
-            result=result,
-            artifact=artifact,
-            watermark_applied=watermark_applied,
+            repository=repository,
         )
 
     def process_next_queued_run(self, *, timeout_seconds: int = 1) -> dict[str, object] | None:
-        processed = self.process_queued_runs(max_runs=1, timeout_seconds=timeout_seconds)
-        if not processed:
-            return None
-        return processed[0]
+        return self.run_lifecycle_service.process_next_queued_run(
+            timeout_seconds=timeout_seconds,
+        )
 
     def process_queued_runs(
         self,
@@ -1128,152 +939,16 @@ class RuntimeService:
         max_runs: int = 1,
         timeout_seconds: int = 1,
     ) -> list[dict[str, object]]:
-        processed: list[dict[str, object]] = []
-        remaining_timeout = max(0, timeout_seconds)
-
-        for _ in range(max(1, max_runs)):
-            result = self._process_single_queued_run(timeout_seconds=remaining_timeout)
-            if result is None:
-                break
-            processed.append(result)
-            # Only the first dequeue should block; after that, drain any additional
-            # queued work immediately before returning control to the worker loop.
-            remaining_timeout = 0
-
-        return processed
-
-    def _process_single_queued_run(
-        self,
-        *,
-        timeout_seconds: int = 1,
-    ) -> dict[str, object] | None:
-        signaled_run_id = self._consume_queue_signal(timeout_seconds)
-
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            run: RunRecord | None = None
-            media_derivative_site_running_limit = max(
-                1,
-                int(self.settings.media_derivative_site_running_limit),
-            )
-            if signaled_run_id:
-                candidate = repository.get_run(signaled_run_id)
-                if (
-                    candidate is not None
-                    and candidate.execution_kind == "media_derivative"
-                    and repository.count_running_media_derivative_runs(candidate.site_id)
-                    >= media_derivative_site_running_limit
-                ):
-                    run = None
-                else:
-                    run = repository.claim_run_if_queued(signaled_run_id)
-
-            if run is None:
-                run = repository.claim_next_queued_run(
-                    media_derivative_site_running_limit=media_derivative_site_running_limit,
-                )
-
-            if run is None:
-                session.commit()
-                return None
-
-            self._execute_existing_run(run, repository=repository)
-            session.commit()
-            return {
-                "run_id": run.run_id,
-                "status": run.status,
-                "trace_id": run.trace_id,
-            }
+        return self.run_lifecycle_service.process_queued_runs(
+            max_runs=max_runs,
+            timeout_seconds=timeout_seconds,
+        )
 
     def get_run(self, run_id: str, *, site_id: str | None = None) -> dict[str, object]:
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            run = repository.get_run(run_id)
-            if run is None or (site_id and run.site_id != site_id):
-                raise RuntimeRunNotFoundError(run_id)
-
-            provider_calls = repository.list_provider_calls(run_id)
-            failure_details = self._build_failure_details(run, provider_calls)
-
-        return {
-            "run_id": run.run_id,
-            "canonical_run_id": run.canonical_run_id or "",
-            "site_id": run.site_id,
-            "ability_name": run.ability_name,
-            "skill_id": run.skill_id or "",
-            "workflow_id": run.workflow_id or "",
-            "contract_version": run.contract_version or "",
-            "channel": run.channel,
-            "execution_kind": run.execution_kind,
-            "execution_tier": run.execution_tier,
-            "execution_pattern": self._public_execution_pattern(run.execution_pattern),
-            "data_classification": run.data_classification,
-            "profile_id": run.profile_id,
-            "status": run.status,
-            "idempotency_key": run.idempotency_key,
-            "trace_id": run.trace_id,
-            "provider_id": run.selected_provider_id,
-            "model_id": run.selected_model_id,
-            "instance_id": run.selected_instance_id,
-            "fallback_used": run.fallback_used,
-            "error_code": run.error_code,
-            "error_message": run.error_message,
-            "error_stage": failure_details.error_stage,
-            "retryable": failure_details.retryable,
-            "retry_exhausted": failure_details.retry_exhausted,
-            "started_at": self._serialize_timestamp(run.started_at),
-            "finished_at": self._serialize_timestamp(run.finished_at),
-            "provider_call_count": len(provider_calls),
-            "task_backend": self._build_task_backend_payload(run),
-            "run_lifecycle": self._build_run_lifecycle(run),
-        }
+        return self.run_lifecycle_service.get_run(run_id, site_id=site_id)
 
     def get_run_result(self, run_id: str, *, site_id: str | None = None) -> dict[str, object]:
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            run = repository.get_run(run_id)
-            if run is None or (site_id and run.site_id != site_id):
-                raise RuntimeRunNotFoundError(run_id)
-            if self._is_run_result_expired(run):
-                raise RuntimeResultExpiredError(run_id)
-            if run.result_json is None:
-                raise RuntimeResultNotReadyError(run_id, run.status)
-
-            provider_calls = repository.list_provider_calls(run_id)
-
-        result = build_analysis_result_envelope(
-            run.result_json if isinstance(run.result_json, dict) else {},
-            ability_family=run.ability_family or "text",
-            ability_name=run.ability_name or "",
-            input_payload=run.input_json if isinstance(run.input_json, dict) else {},
-        )
-        return {
-            "run_id": run.run_id,
-            "canonical_run_id": run.canonical_run_id or "",
-            "status": run.status,
-            "execution_context": self._build_execution_context_payload(run),
-            "task_backend": self._build_task_backend_payload(run),
-            "run_lifecycle": self._build_run_lifecycle(run),
-            "result": result,
-            "provider_calls": [
-                {
-                    "provider_id": call.provider_id,
-                    "model_id": call.model_id,
-                    "instance_id": call.instance_id,
-                    "region": call.region,
-                    "latency_ms": call.latency_ms,
-                    "tokens_in": call.tokens_in,
-                    "tokens_out": call.tokens_out,
-                    "cost": call.cost,
-                    "retry_count": call.retry_count,
-                    "fallback_used": call.fallback_used,
-                    "error_code": call.error_code,
-                    "error_stage": get_error_taxonomy(call.error_code).error_stage,
-                    "retryable": get_error_taxonomy(call.error_code).retryable,
-                }
-                for call in provider_calls
-            ],
-        }
+        return self.run_lifecycle_service.get_run_result(run_id, site_id=site_id)
 
     def list_recent_nightly_inspection_runs(
         self,
@@ -1383,7 +1058,9 @@ class RuntimeService:
                 "channel": run.channel,
                 "execution_kind": run.execution_kind,
                 "execution_tier": run.execution_tier,
-                "execution_pattern": self._public_execution_pattern(run.execution_pattern),
+                "execution_pattern": self.run_projector.public_execution_pattern(
+                    run.execution_pattern
+                ),
                 "data_classification": run.data_classification,
                 "profile_id": run.profile_id,
             }
@@ -1521,10 +1198,10 @@ class RuntimeService:
                 "recent_minutes": recent_minutes,
                 "limit": max_items,
             },
-            "generated_at": self._serialize_timestamp(current_time),
+            "generated_at": self.run_projector.serialize_timestamp(current_time),
             "window": {
-                "since": self._serialize_timestamp(recent_since),
-                "until": self._serialize_timestamp(current_time),
+                "since": self.run_projector.serialize_timestamp(recent_since),
+                "until": self.run_projector.serialize_timestamp(current_time),
             },
             "totals": {
                 "runs": len(runs),
@@ -1629,7 +1306,7 @@ class RuntimeService:
                 "site_id": site_id or "",
                 "recent_minutes": recent_minutes,
             },
-            "generated_at": self._serialize_timestamp(current_time),
+            "generated_at": self.run_projector.serialize_timestamp(current_time),
             "guard": guard_summary,
             **summary,
         }
@@ -1688,6 +1365,11 @@ class RuntimeService:
             )
 
         run_ids = {run.run_id for run in runs}
+        ai_evidence_required_run_ids = {
+            run.run_id
+            for run in runs
+            if str(run.execution_kind or "").strip() not in NON_AI_ZERO_CREDIT_EXECUTION_KINDS
+        }
         provider_call_run_ids = {
             call.run_id for call, _run in provider_call_rows if call.run_id in run_ids
         }
@@ -1797,28 +1479,32 @@ class RuntimeService:
             limit=max_items,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
         )
         profile_items = self._finalize_hosted_governance_groups(
             profile_groups.values(),
             limit=max_items,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
         )
         execution_kind_items = self._finalize_hosted_governance_groups(
             execution_kind_groups.values(),
             limit=max_items,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
         )
         provider_model_items = self._finalize_hosted_governance_groups(
             provider_model_groups.values(),
             limit=max_items,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
         )
         governance_gaps = self._build_hosted_governance_gap_summary(
             capability_items=capability_items,
-            runs_total=len(runs),
+            ai_evidence_required_run_ids=ai_evidence_required_run_ids,
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
         )
@@ -1828,20 +1514,25 @@ class RuntimeService:
                 "recent_minutes": recent_minutes,
                 "limit": max_items,
             },
-            "generated_at": self._serialize_timestamp(current_time),
+            "generated_at": self.run_projector.serialize_timestamp(current_time),
             "window": {
-                "since": self._serialize_timestamp(recent_since),
-                "until": self._serialize_timestamp(current_time),
+                "since": self.run_projector.serialize_timestamp(recent_since),
+                "until": self.run_projector.serialize_timestamp(current_time),
             },
             "totals": {
                 "runs": len(runs),
+                "ai_evidence_required_runs": len(ai_evidence_required_run_ids),
+                "non_ai_zero_credit_runs": len(runs) - len(ai_evidence_required_run_ids),
                 "provider_calls": len(provider_call_rows),
                 "usage_meter_events": len(meter_events),
-                "provider_call_run_coverage_rate": self._safe_ratio(
-                    len(provider_call_run_ids),
-                    len(runs),
+                "provider_call_run_coverage_rate": self._safe_coverage_ratio(
+                    len(provider_call_run_ids & ai_evidence_required_run_ids),
+                    len(ai_evidence_required_run_ids),
                 ),
-                "metered_run_coverage_rate": self._safe_ratio(len(meter_run_ids), len(runs)),
+                "metered_run_coverage_rate": self._safe_coverage_ratio(
+                    len(meter_run_ids & ai_evidence_required_run_ids),
+                    len(ai_evidence_required_run_ids),
+                ),
             },
             "capability_groups": capability_items,
             "profile_groups": profile_items,
@@ -1996,7 +1687,7 @@ class RuntimeService:
                 "scope_kind": scope_kind,
                 "limit": limit,
             },
-            "generated_at": self._serialize_timestamp(current_time),
+            "generated_at": self.run_projector.serialize_timestamp(current_time),
             "thresholds": {
                 "queued_aging_after_seconds": RUNTIME_BACKLOG_QUEUED_AGING_AFTER_SECONDS,
                 "queued_stale_after_seconds": RUNTIME_DIAGNOSTIC_QUEUED_STALE_AFTER_SECONDS,
@@ -2146,16 +1837,14 @@ class RuntimeService:
         limit: int,
         provider_call_run_ids: set[str],
         meter_run_ids: set[str],
+        ai_evidence_required_run_ids: set[str],
     ) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         for raw_group in groups:
             group = dict(raw_group)
             run_ids = cast(set[str], group.pop("run_ids", set()))
-            group_provider_call_run_ids = cast(
-                set[str],
-                group.pop("provider_call_run_ids", set()),
-            )
-            group_meter_run_ids = cast(set[str], group.pop("meter_run_ids", set()))
+            group.pop("provider_call_run_ids", set())
+            group.pop("meter_run_ids", set())
             runs_total = max(
                 self._coerce_int(group.get("runs_total"), default=0),
                 len(run_ids),
@@ -2166,18 +1855,20 @@ class RuntimeService:
             tokens_in = self._coerce_int(group.get("tokens_in"), default=0)
             tokens_out = self._coerce_int(group.get("tokens_out"), default=0)
             group["runs_total"] = runs_total
+            group_ai_evidence_required_run_ids = run_ids & ai_evidence_required_run_ids
+            group["ai_evidence_required_runs"] = len(group_ai_evidence_required_run_ids)
             group["tokens_total"] = tokens_in + tokens_out
             group["avg_latency_ms"] = (
                 round(latency_total / provider_calls, 2) if provider_calls else 0.0
             )
             group["provider_error_rate"] = self._safe_ratio(provider_errors, provider_calls)
-            group["provider_call_run_coverage_rate"] = self._safe_ratio(
-                len(run_ids & provider_call_run_ids) or len(group_provider_call_run_ids),
-                runs_total,
+            group["provider_call_run_coverage_rate"] = self._safe_coverage_ratio(
+                len(group_ai_evidence_required_run_ids & provider_call_run_ids),
+                len(group_ai_evidence_required_run_ids),
             )
-            group["metered_run_coverage_rate"] = self._safe_ratio(
-                len(run_ids & meter_run_ids) or len(group_meter_run_ids),
-                runs_total,
+            group["metered_run_coverage_rate"] = self._safe_coverage_ratio(
+                len(group_ai_evidence_required_run_ids & meter_run_ids),
+                len(group_ai_evidence_required_run_ids),
             )
             group["profile_ids"] = sorted(cast(set[str], group["profile_ids"]))[:10]
             group["execution_kinds"] = sorted(cast(set[str], group["execution_kinds"]))[:10]
@@ -2203,28 +1894,35 @@ class RuntimeService:
         self,
         *,
         capability_items: list[dict[str, object]],
-        runs_total: int,
+        ai_evidence_required_run_ids: set[str],
         provider_call_run_ids: set[str],
         meter_run_ids: set[str],
     ) -> dict[str, object]:
         unmetered_capabilities = [
             str(item.get("group_id") or "")
             for item in capability_items
-            if self._coerce_int(item.get("runs_total"), default=0) > 0
+            if self._coerce_int(item.get("ai_evidence_required_runs"), default=0) > 0
             and (self._coerce_float(item.get("metered_run_coverage_rate")) or 0.0) < 1.0
         ]
         missing_provider_call_capabilities = [
             str(item.get("group_id") or "")
             for item in capability_items
-            if self._coerce_int(item.get("runs_total"), default=0) > 0
+            if self._coerce_int(item.get("ai_evidence_required_runs"), default=0) > 0
             and self._coerce_int(item.get("provider_calls"), default=0) <= 0
             and str(item.get("group_id") or "") not in {"vision"}
         ]
+        ai_runs_total = len(ai_evidence_required_run_ids)
         return {
             "unmetered_capabilities": unmetered_capabilities,
             "missing_provider_call_capabilities": missing_provider_call_capabilities,
-            "unmetered_run_count": max(0, runs_total - len(meter_run_ids)),
-            "runs_without_provider_call_count": max(0, runs_total - len(provider_call_run_ids)),
+            "unmetered_run_count": max(
+                0,
+                ai_runs_total - len(meter_run_ids & ai_evidence_required_run_ids),
+            ),
+            "runs_without_provider_call_count": max(
+                0,
+                ai_runs_total - len(provider_call_run_ids & ai_evidence_required_run_ids),
+            ),
             "review_guidance": (
                 "Inspect capabilities below full metering coverage before enabling "
                 "new runtime providers at higher traffic."
@@ -2247,6 +1945,14 @@ class RuntimeService:
             self._dict_or_empty(item) for item in raw_capability_items if isinstance(item, dict)
         ]
         runs_total = self._coerce_int(totals.get("runs"), default=0)
+        ai_evidence_required_runs = self._coerce_int(
+            totals.get("ai_evidence_required_runs"),
+            default=runs_total,
+        )
+        non_ai_zero_credit_runs = self._coerce_int(
+            totals.get("non_ai_zero_credit_runs"),
+            default=0,
+        )
         provider_calls = self._coerce_int(totals.get("provider_calls"), default=0)
         meter_events = self._coerce_int(totals.get("usage_meter_events"), default=0)
         metered_rate = self._coerce_float(totals.get("metered_run_coverage_rate")) or 0.0
@@ -2302,7 +2008,7 @@ class RuntimeService:
             str(item.get("group_id") or "")
             for item in capability_items
             if isinstance(item, dict)
-            and self._coerce_int(item.get("runs_total"), default=0) > 0
+            and self._coerce_int(item.get("ai_evidence_required_runs"), default=0) > 0
             and (self._coerce_float(item.get("provider_call_run_coverage_rate")) or 0.0) < 1.0
         ]
         if runs_without_provider_call_count > 0 or provider_gap_capabilities:
@@ -2397,6 +2103,8 @@ class RuntimeService:
             "alert_count": len(alerts),
             "daily_digest": {
                 "runs": runs_total,
+                "ai_evidence_required_runs": ai_evidence_required_runs,
+                "non_ai_zero_credit_runs": non_ai_zero_credit_runs,
                 "provider_calls": provider_calls,
                 "meter_events": meter_events,
                 "metered_run_coverage_rate": metered_rate,
@@ -2422,6 +2130,11 @@ class RuntimeService:
         if denominator <= 0:
             return 0.0
         return round(max(0, numerator) / denominator, 4)
+
+    def _safe_coverage_ratio(self, numerator: int, denominator: int) -> float:
+        if denominator <= 0:
+            return 1.0
+        return self._safe_ratio(numerator, denominator)
 
     def list_runtime_diagnostic_runs(
         self,
@@ -2475,7 +2188,7 @@ class RuntimeService:
                         "runtime.repair_not_allowed",
                         "requeue_stale_queued requires a stale queued run",
                     )
-                self._publish_queue_signal(run.run_id)
+                self.run_lifecycle_service.publish_queue_signal(run.run_id)
                 outcome = {
                     "repair_action": normalized_action,
                     "state_transition": "queued->queued",
@@ -2494,7 +2207,7 @@ class RuntimeService:
                 if reason:
                     run.callback_last_error_message = reason
                 session.flush()
-                self._publish_queue_signal(run.run_id)
+                self.run_lifecycle_service.publish_queue_signal(run.run_id)
                 outcome = {
                     "repair_action": normalized_action,
                     "state_transition": f"{before.get('callback_status') or ''}->pending",
@@ -2512,7 +2225,8 @@ class RuntimeService:
                     operator_reason=reason,
                     operator_evidence=evidence,
                 )
-                repository.mark_run_failed(
+                self.run_lifecycle_service.fail_run(
+                    repository,
                     run,
                     error_code="runtime.operator_stale_running_failed",
                     error_message=f"operator marked stale running failed: {reason}",
@@ -2589,35 +2303,6 @@ class RuntimeService:
                 "runtime.repair_evidence_too_short",
                 "mark_stale_running_failed requires evidence that records the observed "
                 "stale-running signals",
-            )
-
-    def _validate_runtime_data_handling_contract(self, request: RuntimeRequest) -> None:
-        data_classification = str(request.data_classification or "").strip().lower()
-        storage_mode = str(request.storage_mode or RUNTIME_STORAGE_MODE_RESULT_ONLY).strip()
-        finding = find_runtime_data_guard_finding(request.input_payload)
-        if finding is not None and finding.kind == "secret":
-            raise RuntimeExecutionContractError(
-                "runtime.secret_input_detected",
-                f"runtime input contains secret-like data at '{finding.path}'",
-            )
-        if finding is not None and finding.kind == "pii" and data_classification != "pii":
-            raise RuntimeExecutionContractError(
-                "runtime.pii_classification_required",
-                "runtime input appears to contain personal data and must use "
-                "data_classification=pii",
-            )
-        if (
-            data_classification in SENSITIVE_RUNTIME_DATA_CLASSIFICATIONS
-            and storage_mode != RUNTIME_STORAGE_MODE_NO_STORE
-        ):
-            raise RuntimeExecutionContractError(
-                "runtime.sensitive_data_requires_no_store",
-                "pii and secret runtime requests must use storage_mode=no_store",
-            )
-        if data_classification in FORBIDDEN_HOSTED_RUNTIME_DATA_CLASSIFICATIONS:
-            raise RuntimeExecutionContractError(
-                "runtime.secret_data_forbidden",
-                "secret-classified data is excluded from hosted runtime execution",
             )
 
     def run_bounded_auto_repairs(
@@ -2896,7 +2581,7 @@ class RuntimeService:
             ),
         )
         return {
-            "generated_at": self._serialize_timestamp(current_time),
+            "generated_at": self.run_projector.serialize_timestamp(current_time),
             "window_seconds": window_seconds,
             "cooldown_window_seconds": cooldown_window_seconds,
             "limit_per_scope": limit_per_scope,
@@ -3246,45 +2931,16 @@ class RuntimeService:
         }
 
     def cancel_run(self, run_id: str, *, site_id: str | None = None) -> dict[str, object]:
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            run = repository.get_run(run_id)
-            if run is None or (site_id and run.site_id != site_id):
-                raise RuntimeRunNotFoundError(run_id)
-
-            policy = run.policy_json if isinstance(run.policy_json, dict) else {}
-            if not self._supports_public_cancel(run.execution_pattern, policy):
-                raise RuntimeCancelNotAllowedError(run_id, run.status)
-
-            if run.status == "queued":
-                repository.mark_run_canceled(run, message="run canceled before worker claim")
-            elif run.status == "running":
-                repository.request_run_cancel(run)
-            elif run.status == "canceled":
-                pass
-            else:
-                raise RuntimeCancelNotAllowedError(run_id, run.status)
-
-            session.commit()
-
-        return self.get_run(run_id, site_id=site_id)
+        return self.run_lifecycle_service.cancel_run(run_id, site_id=site_id)
 
     def dispatch_pending_callbacks(
         self,
         *,
         max_callbacks: int = 1,
     ) -> list[dict[str, object]]:
-        if self.callback_dispatcher is None:
-            return []
-
-        self._recover_stale_callback_dispatches(limit=max(1, max_callbacks))
-        dispatched: list[dict[str, object]] = []
-        for _ in range(max(1, max_callbacks)):
-            result = self._dispatch_single_pending_callback()
-            if result is None:
-                break
-            dispatched.append(result)
-        return dispatched
+        return self.callback_delivery_service.dispatch_pending_callbacks(
+            max_callbacks=max_callbacks
+        )
 
     def _execute_existing_run(
         self,
@@ -3325,22 +2981,52 @@ class RuntimeService:
             run.policy_json = policy
             candidates = resolution.candidates
 
-        input_payload = self._get_execution_input_payload(run)
-        if self._is_wordpress_ai_connector_run(run):
-            raw_input_payload = input_payload
-            input_payload = self._build_wordpress_ai_connector_provider_input(raw_input_payload)
-            input_payload = self._apply_wordpress_ai_site_knowledge_reference(
+        try:
+            input_payload = self._get_execution_input_payload(run)
+        except RuntimeError:
+            if not self._is_wordpress_ai_connector_run(run):
+                raise
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
-                repository=repository,
-                input_payload=raw_input_payload,
-                provider_input=input_payload,
+                error_code="connector_runtime.execution_input_invalid",
+                error_message="connector runtime execution input could not be decoded",
             )
+            return
+        connector_envelope: dict[str, Any] | None = None
+        if self._is_wordpress_ai_connector_run(run):
+            try:
+                connector_envelope = self.contract_validator.normalize_connector_runtime_envelope(
+                    ability_name=str(run.ability_name or ""),
+                    contract_version=str(run.contract_version or ""),
+                    channel=str(run.channel or ""),
+                    input_payload=input_payload,
+                )
+                site = self._require_active_site(repository, run.site_id)
+                self.contract_validator.validate_connector_runtime_site_binding(
+                    connector_envelope,
+                    site=site,
+                )
+                input_payload = self._prepare_wordpress_operation_execution_input(
+                    run,
+                    repository=repository,
+                    connector_envelope=connector_envelope,
+                )
+            except RuntimeErrorBase as error:
+                self.run_lifecycle_service.fail_run(
+                    repository,
+                    run,
+                    error_code=error.error_code,
+                    error_message=error.message,
+                )
+                return
 
         self._execute_candidate_chain(
             run,
             repository=repository,
             candidates=candidates,
             input_payload=input_payload,
+            connector_envelope=connector_envelope,
         )
 
     def _execute_candidate_chain(
@@ -3350,270 +3036,114 @@ class RuntimeService:
         repository: RuntimeRepository,
         candidates: list[RoutingCandidate],
         input_payload: dict[str, Any],
+        connector_envelope: dict[str, Any] | None = None,
     ) -> None:
-        policy = run.policy_json if isinstance(run.policy_json, dict) else {}
-        input_payload = self._apply_automatic_web_search(
+        self.provider_execution_service.execute_candidate_chain(
+            repository=repository,
+            run=run,
+            candidates=candidates,
+            input_payload=input_payload,
+            finalization_context=connector_envelope,
+        )
+
+    def _preprocess_provider_input(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        input_payload: dict[str, Any],
+        policy: dict[str, object],
+    ) -> dict[str, Any]:
+        return self._apply_automatic_web_search(
             run,
             repository=repository,
             input_payload=input_payload,
             policy=policy,
         )
-        if run.status == "failed":
-            return
-        allow_fallback = bool(policy.get("allow_fallback", True))
-        max_retries = max(0, self._coerce_int(policy.get("max_retries"), default=0))
-        timeout_ms = max(1, self._coerce_int(policy.get("timeout_ms"), default=30_000))
 
-        last_error_code = "runtime.execute_failed"
-        last_error_message = "runtime execution failed"
-        last_fallback_used = False
-        last_provider_id = ""
-        last_model_id = ""
-        last_instance_id = ""
-
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
-            return
-
-        for candidate_index, candidate in enumerate(candidates):
-            fallback_used = candidate_index > 0
-
-            for retry_count in range(max_retries + 1):
-                if self._cancel_requested_before_attempt(run, repository=repository):
-                    repository.mark_run_canceled(run)
-                    return
-                last_fallback_used = fallback_used
-                last_provider_id = candidate.provider_id
-                last_model_id = candidate.model_id
-                last_instance_id = candidate.instance_id
-                provider = self.providers.get(candidate.provider_id)
-                if provider is None:
-                    last_error_code = "runtime.provider_not_configured"
-                    last_error_message = (
-                        f"provider adapter is not configured for {candidate.provider_id}"
-                    )
-                    if allow_fallback and get_error_taxonomy(last_error_code).fallback_eligible:
-                        break
-
-                    repository.mark_run_failed(
-                        run,
-                        error_code=last_error_code,
-                        error_message=last_error_message,
-                        provider_id=candidate.provider_id,
-                        model_id=candidate.model_id,
-                        instance_id=candidate.instance_id,
-                        fallback_used=fallback_used,
-                    )
-                    return
-
-                try:
-                    provider_result = provider.execute(
-                        ProviderExecutionRequest(
-                            run_id=run.run_id,
-                            site_id=run.site_id,
-                            ability_name=run.ability_name,
-                            profile_id=run.profile_id,
-                            execution_kind=run.execution_kind,
-                            model_id=candidate.model_id,
-                            instance_id=candidate.instance_id,
-                            endpoint_variant=candidate.endpoint_variant,
-                            trace_id=run.trace_id,
-                            input_payload=input_payload,
-                            policy=policy,
-                            timeout_ms=timeout_ms,
-                            price_input=candidate.price_input,
-                            price_output=candidate.price_output,
-                            retry_count=retry_count,
-                        )
-                    )
-                except ProviderExecutionError as error:
-                    provider_call = repository.record_provider_call(
-                        run_id=run.run_id,
-                        provider_id=candidate.provider_id,
-                        model_id=candidate.model_id,
-                        instance_id=candidate.instance_id,
-                        region=candidate.region,
-                        latency_ms=timeout_ms if error.error_code == "provider.timeout" else 0,
-                        tokens_in=max(0, int(getattr(error, "tokens_in", 0) or 0)),
-                        tokens_out=max(0, int(getattr(error, "tokens_out", 0) or 0)),
-                        cost=max(0.0, float(getattr(error, "cost", 0.0) or 0.0)),
-                        retry_count=retry_count,
-                        fallback_used=fallback_used,
-                        error_code=error.error_code,
-                    )
-                    self.commercial_service.record_provider_call_usage(
-                        session=repository.session,
-                        run=run,
-                        provider_call=provider_call,
-                    )
-                    last_error_code = error.error_code
-                    last_error_message = error.message
-
-                    error_taxonomy = get_error_taxonomy(error.error_code)
-                    should_retry = (
-                        retry_count < max_retries and error.retryable and error_taxonomy.retryable
-                    )
-                    if should_retry:
-                        continue
-
-                    should_fallback = allow_fallback and error_taxonomy.fallback_eligible
-                    if should_fallback:
-                        break
-
-                    repository.mark_run_failed(
-                        run,
-                        error_code=last_error_code,
-                        error_message=last_error_message,
-                        provider_id=candidate.provider_id,
-                        model_id=candidate.model_id,
-                        instance_id=candidate.instance_id,
-                        fallback_used=fallback_used,
-                    )
-                    return
-
-                provider_output = provider_result.output
-                if self._is_wordpress_ai_connector_run(run):
-                    provider_output = self._normalize_wordpress_ai_connector_provider_output(
-                        provider_output,
-                        input_payload=input_payload,
-                    )
-                    if self._is_empty_wordpress_ai_connector_text_output(
-                        input_payload=input_payload,
-                        provider_output=provider_output,
-                    ):
-                        last_error_code = "provider.output_quality_rejected"
-                        last_error_message = (
-                            "provider returned no usable WordPress AI connector text"
-                        )
-                        provider_call = repository.record_provider_call(
-                            run_id=run.run_id,
-                            provider_id=candidate.provider_id,
-                            model_id=candidate.model_id,
-                            instance_id=candidate.instance_id,
-                            region=candidate.region,
-                            latency_ms=provider_result.latency_ms,
-                            tokens_in=provider_result.tokens_in,
-                            tokens_out=provider_result.tokens_out,
-                            cost=provider_result.cost,
-                            retry_count=retry_count,
-                            fallback_used=fallback_used,
-                            error_code=last_error_code,
-                        )
-                        self.commercial_service.record_provider_call_usage(
-                            session=repository.session,
-                            run=run,
-                            provider_call=provider_call,
-                        )
-                        if allow_fallback:
-                            break
-                        repository.mark_run_failed(
-                            run,
-                            error_code=last_error_code,
-                            error_message=last_error_message,
-                            provider_id=candidate.provider_id,
-                            model_id=candidate.model_id,
-                            instance_id=candidate.instance_id,
-                            fallback_used=fallback_used,
-                        )
-                        return
-
-                provider_call = repository.record_provider_call(
-                    run_id=run.run_id,
-                    provider_id=candidate.provider_id,
-                    model_id=candidate.model_id,
-                    instance_id=candidate.instance_id,
-                    region=candidate.region,
-                    latency_ms=provider_result.latency_ms,
-                    tokens_in=provider_result.tokens_in,
-                    tokens_out=provider_result.tokens_out,
-                    cost=provider_result.cost,
-                    retry_count=retry_count,
-                    fallback_used=fallback_used,
-                )
-                self.commercial_service.record_provider_call_usage(
-                    session=repository.session,
-                    run=run,
-                    provider_call=provider_call,
-                )
-                if self._is_wordpress_ai_connector_image_generation_run(
-                    run,
-                    input_payload=input_payload,
-                ):
-                    try:
-                        provider_output = self._materialize_wordpress_ai_inline_image_output(
-                            provider_output,
-                        )
-                    except InlineImageMaterializationError as error:
-                        repository.mark_run_failed(
-                            run,
-                            error_code=error.error_code,
-                            error_message=error.message,
-                            provider_id=candidate.provider_id,
-                            model_id=candidate.model_id,
-                            instance_id=candidate.instance_id,
-                            fallback_used=fallback_used,
-                        )
-                        return
-                if self._is_audio_generation_run(run):
-                    try:
-                        provider_output = self._materialize_audio_generation_output(
-                            run,
-                            repository=repository,
-                            provider_output=provider_output,
-                        )
-                    except AudioArtifactMaterializationError as error:
-                        repository.mark_run_failed(
-                            run,
-                            error_code=error.error_code,
-                            error_message=error.message,
-                            provider_id=candidate.provider_id,
-                            model_id=candidate.model_id,
-                            instance_id=candidate.instance_id,
-                            fallback_used=fallback_used,
-                        )
-                        return
-
-                storage_mode = self._get_storage_mode(
-                    run.policy_json if isinstance(run.policy_json, dict) else {}
-                )
-                prepared_result = self._prepare_result_for_storage(
-                    provider_output,
-                    storage_mode=storage_mode,
-                )
-                if storage_mode == RUNTIME_STORAGE_MODE_NO_STORE:
-                    _set_transient_result_json(run, provider_output)
-                automatic_web_search = policy.get("automatic_web_search")
-                if isinstance(automatic_web_search, dict):
-                    prepared_result = dict(prepared_result)
-                    prepared_result["automatic_web_search"] = automatic_web_search
-                wrapped_result = build_analysis_result_envelope(
-                    prepared_result,
-                    ability_family=run.ability_family or "text",
-                    ability_name=run.ability_name or "",
-                    input_payload=input_payload,
-                )
-                repository.mark_run_succeeded(
-                    run,
-                    result_json=wrapped_result,
-                    provider_id=candidate.provider_id,
-                    model_id=candidate.model_id,
-                    instance_id=candidate.instance_id,
-                    fallback_used=fallback_used,
-                )
-                return
-
-            if not allow_fallback:
-                break
-
-        repository.mark_run_failed(
-            run,
-            error_code=last_error_code,
-            error_message=last_error_message,
-            provider_id=last_provider_id or None,
-            model_id=last_model_id or None,
-            instance_id=last_instance_id or None,
-            fallback_used=last_fallback_used,
+    def _prepare_provider_output(
+        self,
+        run: RunRecord,
+        *,
+        input_payload: dict[str, Any],
+        provider_output: dict[str, Any],
+    ) -> ProviderOutputDecision:
+        if not self._is_wordpress_ai_connector_run(run):
+            return ProviderOutputDecision(accepted=True, output=provider_output)
+        normalized_output = self.wordpress_operation_runtime.normalize_provider_output(
+            provider_output,
+            input_payload=input_payload,
         )
+        if self.wordpress_operation_runtime.is_empty_text_output(
+            input_payload=input_payload,
+            provider_output=normalized_output,
+        ):
+            return ProviderOutputDecision(
+                accepted=False,
+                output=normalized_output,
+                error_code="provider.output_quality_rejected",
+                error_message="provider returned no usable WordPress AI connector text",
+            )
+        return ProviderOutputDecision(accepted=True, output=normalized_output)
+
+    def _finalize_provider_output(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        input_payload: dict[str, Any],
+        provider_output: dict[str, Any],
+        media_candidates: tuple[ProviderMediaCandidate, ...],
+        policy: dict[str, object],
+        finalization_context: object | None,
+    ) -> dict[str, Any]:
+        if self._is_image_generation_run(run):
+            try:
+                provider_output = self._materialize_image_generation_output(
+                    run,
+                    repository=repository,
+                    provider_output=provider_output,
+                    media_candidates=media_candidates,
+                )
+            except ImageGenerationArtifactMaterializationError as error:
+                raise ProviderOutputFinalizationError(
+                    error.error_code,
+                    error.message,
+                ) from error
+        if self._is_audio_generation_run(run):
+            try:
+                provider_output = self._materialize_audio_generation_output(
+                    run,
+                    repository=repository,
+                    provider_output=provider_output,
+                )
+            except AudioArtifactMaterializationError as error:
+                raise ProviderOutputFinalizationError(
+                    error.error_code,
+                    error.message,
+                ) from error
+
+        automatic_web_search = policy.get("automatic_web_search")
+        connector_envelope = (
+            finalization_context if isinstance(finalization_context, dict) else None
+        )
+        normalized_result = self.result_normalization_service.normalize(
+            RuntimeResultNormalizationCommand(
+                site_id=run.site_id,
+                provider_output=provider_output,
+                storage_mode=self._get_storage_mode(policy),
+                ability_family=run.ability_family or "text",
+                ability_name=run.ability_name or "",
+                input_payload=input_payload,
+                connector_envelope=connector_envelope,
+                automatic_web_search=(
+                    automatic_web_search if isinstance(automatic_web_search, dict) else None
+                ),
+            )
+        )
+        if normalized_result.transient_result is not None:
+            set_transient_runtime_result(run, normalized_result.transient_result)
+        return normalized_result.durable_result
 
     def _apply_automatic_web_search(
         self,
@@ -3672,7 +3202,8 @@ class RuntimeService:
                 }
             self._record_automatic_web_search_report(run, policy=policy, report=report)
             if plan.is_required:
-                repository.mark_run_failed(
+                self.run_lifecycle_service.fail_run(
+                    repository,
                     run,
                     error_code=error.error_code,
                     error_message=error.message,
@@ -3690,7 +3221,8 @@ class RuntimeService:
             )
             self._record_automatic_web_search_report(run, policy=policy, report=report)
             if plan.is_required:
-                repository.mark_run_failed(
+                self.run_lifecycle_service.fail_run(
+                    repository,
                     run,
                     error_code=error.error_code,
                     error_message=error.message,
@@ -3725,24 +3257,22 @@ class RuntimeService:
         repository: RuntimeRepository,
         usage: Any,
     ) -> None:
-        provider_call = repository.record_provider_call(
-            run_id=run.run_id,
-            provider_id=usage.provider_id,
-            model_id=usage.model_id,
-            instance_id=usage.instance_id,
-            region=usage.region,
-            latency_ms=usage.latency_ms,
-            tokens_in=0,
-            tokens_out=0,
-            cost=usage.cost,
-            retry_count=0,
-            fallback_used=False,
-            error_code=usage.error_code,
-        )
-        self.commercial_service.record_provider_call_usage(
-            session=repository.session,
+        self.provider_execution_service.record_provider_call(
+            repository=repository,
             run=run,
-            provider_call=provider_call,
+            command=ProviderCallEvidenceCommand(
+                provider_id=usage.provider_id,
+                model_id=usage.model_id,
+                instance_id=usage.instance_id,
+                region=usage.region,
+                latency_ms=usage.latency_ms,
+                tokens_in=0,
+                tokens_out=0,
+                cost=usage.cost,
+                retry_count=0,
+                fallback_used=False,
+                error_code=usage.error_code,
+            ),
         )
 
     def _record_automatic_web_search_report(
@@ -3766,8 +3296,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -3823,7 +3355,8 @@ class RuntimeService:
                 run_id=run.run_id,
             )
         except (SiteKnowledgeContractViolation, SiteKnowledgeBackendError) as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -3842,7 +3375,8 @@ class RuntimeService:
             )
             return
 
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=result_json,
             provider_id="site_knowledge",
@@ -3869,69 +3403,66 @@ class RuntimeService:
         provider_result: ProviderExecutionResult | None = None,
         provider_error: ProviderExecutionError | None = None,
     ) -> None:
-        provider_call = repository.record_provider_call(
-            run_id=run.run_id,
-            provider_id=provider_id,
-            model_id=provider_request.model_id,
-            instance_id=provider_request.instance_id,
-            region="unspecified",
-            latency_ms=provider_result.latency_ms if provider_result is not None else 0,
-            tokens_in=(
-                provider_result.tokens_in
-                if provider_result is not None
-                else max(0, int(getattr(provider_error, "tokens_in", 0) or 0))
-            ),
-            tokens_out=(
-                provider_result.tokens_out
-                if provider_result is not None
-                else max(0, int(getattr(provider_error, "tokens_out", 0) or 0))
-            ),
-            cost=(
-                provider_result.cost
-                if provider_result is not None
-                else max(0.0, float(getattr(provider_error, "cost", 0.0) or 0.0))
-            ),
-            retry_count=provider_request.retry_count,
-            fallback_used=False,
-            error_code=provider_error.error_code if provider_error is not None else None,
-        )
-        self.commercial_service.record_provider_call_usage(
-            session=repository.session,
+        self.provider_execution_service.record_provider_call(
+            repository=repository,
             run=run,
-            provider_call=provider_call,
+            command=ProviderCallEvidenceCommand(
+                provider_id=provider_id,
+                model_id=provider_request.model_id,
+                instance_id=provider_request.instance_id,
+                region="unspecified",
+                latency_ms=(provider_result.latency_ms if provider_result is not None else 0),
+                tokens_in=(
+                    provider_result.tokens_in
+                    if provider_result is not None
+                    else max(0, int(getattr(provider_error, "tokens_in", 0) or 0))
+                ),
+                tokens_out=(
+                    provider_result.tokens_out
+                    if provider_result is not None
+                    else max(0, int(getattr(provider_error, "tokens_out", 0) or 0))
+                ),
+                cost=(
+                    provider_result.cost
+                    if provider_result is not None
+                    else max(0.0, float(getattr(provider_error, "cost", 0.0) or 0.0))
+                ),
+                retry_count=provider_request.retry_count,
+                fallback_used=False,
+                error_code=provider_error.error_code if provider_error is not None else None,
+            ),
         )
 
     def _execute_web_search_request(
         self,
         request: RuntimeRequest,
     ) -> RuntimeExecutionResponse:
-        self._validate_web_search_contract(request)
+        self.contract_validator.validate_web_search_contract(request)
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
         merged_policy = self._build_web_search_policy(request)
-        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+        request_fingerprint = self.run_lifecycle_service.build_request_fingerprint(
+            request,
+            merged_policy,
+        )
 
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             self._require_active_site(repository, request.site_id)
 
-            if request.idempotency_key:
-                existing = repository.get_run_by_idempotency(
-                    request.site_id,
-                    request.idempotency_key,
+            existing = self.run_lifecycle_service.get_idempotent_replay(
+                repository=repository,
+                site_id=request.site_id,
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is not None:
+                session.commit()
+                return self._build_execution_response(
+                    existing,
+                    repository=repository,
+                    idempotent_replay=True,
                 )
-                if existing is not None:
-                    if existing.request_fingerprint != request_fingerprint:
-                        raise RuntimeIdempotencyConflictError(
-                            request.site_id,
-                            request.idempotency_key,
-                        )
-                    session.commit()
-                    return self._build_execution_response(
-                        existing,
-                        repository=repository,
-                        idempotent_replay=True,
-                    )
 
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
@@ -3956,37 +3487,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id="web_search",
+                    selected_model_id="web-search-managed",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id="web_search",
-                selected_model_id="web-search-managed",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_web_search_run(
@@ -4008,8 +3542,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -4026,7 +3562,8 @@ class RuntimeService:
                 run_id=run.run_id,
             )
         except WebSearchContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4038,26 +3575,25 @@ class RuntimeService:
             return
         except WebSearchProviderError as error:
             if error.usage is not None:
-                provider_call = repository.record_provider_call(
-                    run_id=run.run_id,
-                    provider_id=error.usage.provider_id,
-                    model_id=error.usage.model_id,
-                    instance_id=error.usage.instance_id,
-                    region=error.usage.region,
-                    latency_ms=error.usage.latency_ms,
-                    tokens_in=0,
-                    tokens_out=0,
-                    cost=error.usage.cost,
-                    retry_count=0,
-                    fallback_used=False,
-                    error_code=error.usage.error_code or error.error_code,
-                )
-                self.commercial_service.record_provider_call_usage(
-                    session=repository.session,
+                self.provider_execution_service.record_provider_call(
+                    repository=repository,
                     run=run,
-                    provider_call=provider_call,
+                    command=ProviderCallEvidenceCommand(
+                        provider_id=error.usage.provider_id,
+                        model_id=error.usage.model_id,
+                        instance_id=error.usage.instance_id,
+                        region=error.usage.region,
+                        latency_ms=error.usage.latency_ms,
+                        tokens_in=0,
+                        tokens_out=0,
+                        cost=error.usage.cost,
+                        retry_count=0,
+                        fallback_used=False,
+                        error_code=error.usage.error_code or error.error_code,
+                    ),
                 )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4074,27 +3610,26 @@ class RuntimeService:
             run,
             usage_context=usage_context,
         )
-        provider_call = repository.record_provider_call(
-            run_id=run.run_id,
-            provider_id=execution.usage.provider_id,
-            model_id=execution.usage.model_id,
-            instance_id=execution.usage.instance_id,
-            region=execution.usage.region,
-            latency_ms=execution.usage.latency_ms,
-            tokens_in=0,
-            tokens_out=0,
-            cost=execution.usage.cost,
-            retry_count=0,
-            fallback_used=False,
-            error_code=execution.usage.error_code,
-        )
-        self.commercial_service.record_provider_call_usage(
-            session=repository.session,
+        self.provider_execution_service.record_provider_call(
+            repository=repository,
             run=run,
-            provider_call=provider_call,
+            command=ProviderCallEvidenceCommand(
+                provider_id=execution.usage.provider_id,
+                model_id=execution.usage.model_id,
+                instance_id=execution.usage.instance_id,
+                region=execution.usage.region,
+                latency_ms=execution.usage.latency_ms,
+                tokens_in=0,
+                tokens_out=0,
+                cost=execution.usage.cost,
+                retry_count=0,
+                fallback_used=False,
+                error_code=execution.usage.error_code,
+            ),
             usage_context=usage_context,
         )
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=result_json,
             provider_id="web_search",
@@ -4192,33 +3727,32 @@ class RuntimeService:
         self,
         request: RuntimeRequest,
     ) -> RuntimeExecutionResponse:
-        self._validate_image_source_contract(request)
+        self.contract_validator.validate_image_source_contract(request)
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
         merged_policy = self._build_image_source_policy(request)
-        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+        request_fingerprint = self.run_lifecycle_service.build_request_fingerprint(
+            request,
+            merged_policy,
+        )
 
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             self._require_active_site(repository, request.site_id)
 
-            if request.idempotency_key:
-                existing = repository.get_run_by_idempotency(
-                    request.site_id,
-                    request.idempotency_key,
+            existing = self.run_lifecycle_service.get_idempotent_replay(
+                repository=repository,
+                site_id=request.site_id,
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is not None:
+                session.commit()
+                return self._build_execution_response(
+                    existing,
+                    repository=repository,
+                    idempotent_replay=True,
                 )
-                if existing is not None:
-                    if existing.request_fingerprint != request_fingerprint:
-                        raise RuntimeIdempotencyConflictError(
-                            request.site_id,
-                            request.idempotency_key,
-                        )
-                    session.commit()
-                    return self._build_execution_response(
-                        existing,
-                        repository=repository,
-                        idempotent_replay=True,
-                    )
 
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
@@ -4243,37 +3777,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or IMAGE_SOURCE_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or IMAGE_SOURCE_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id="image_source",
+                    selected_model_id="image-source-managed",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id="image_source",
-                selected_model_id="image-source-managed",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_image_source_run(
@@ -4292,33 +3829,32 @@ class RuntimeService:
         self,
         request: RuntimeRequest,
     ) -> RuntimeExecutionResponse:
-        self._validate_media_batch_plan_contract(request)
+        self.contract_validator.validate_media_batch_plan_contract(request)
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
         merged_policy = self._build_media_batch_plan_policy(request)
-        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+        request_fingerprint = self.run_lifecycle_service.build_request_fingerprint(
+            request,
+            merged_policy,
+        )
 
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             self._require_active_site(repository, request.site_id)
 
-            if request.idempotency_key:
-                existing = repository.get_run_by_idempotency(
-                    request.site_id,
-                    request.idempotency_key,
+            existing = self.run_lifecycle_service.get_idempotent_replay(
+                repository=repository,
+                site_id=request.site_id,
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is not None:
+                session.commit()
+                return self._build_execution_response(
+                    existing,
+                    repository=repository,
+                    idempotent_replay=True,
                 )
-                if existing is not None:
-                    if existing.request_fingerprint != request_fingerprint:
-                        raise RuntimeIdempotencyConflictError(
-                            request.site_id,
-                            request.idempotency_key,
-                        )
-                    session.commit()
-                    return self._build_execution_response(
-                        existing,
-                        repository=repository,
-                        idempotent_replay=True,
-                    )
 
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
@@ -4343,37 +3879,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or MEDIA_BATCH_PLAN_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or MEDIA_BATCH_PLAN_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id="media_batch_plan",
+                    selected_model_id="deterministic-intent-parser",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id="media_batch_plan",
-                selected_model_id="deterministic-intent-parser",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_media_batch_plan_run(
@@ -4392,33 +3931,32 @@ class RuntimeService:
         self,
         request: RuntimeRequest,
     ) -> RuntimeExecutionResponse:
-        self._validate_site_ops_analysis_contract(request)
+        self.contract_validator.validate_site_ops_analysis_contract(request)
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
         merged_policy = self._build_site_ops_analysis_policy(request)
-        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+        request_fingerprint = self.run_lifecycle_service.build_request_fingerprint(
+            request,
+            merged_policy,
+        )
 
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             self._require_active_site(repository, request.site_id)
 
-            if request.idempotency_key:
-                existing = repository.get_run_by_idempotency(
-                    request.site_id,
-                    request.idempotency_key,
+            existing = self.run_lifecycle_service.get_idempotent_replay(
+                repository=repository,
+                site_id=request.site_id,
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is not None:
+                session.commit()
+                return self._build_execution_response(
+                    existing,
+                    repository=repository,
+                    idempotent_replay=True,
                 )
-                if existing is not None:
-                    if existing.request_fingerprint != request_fingerprint:
-                        raise RuntimeIdempotencyConflictError(
-                            request.site_id,
-                            request.idempotency_key,
-                        )
-                    session.commit()
-                    return self._build_execution_response(
-                        existing,
-                        repository=repository,
-                        idempotent_replay=True,
-                    )
 
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
@@ -4443,37 +3981,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or SITE_OPS_ANALYSIS_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or SITE_OPS_ANALYSIS_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id="site_ops_analysis",
+                    selected_model_id="deterministic-ops-analyzer-v1",
+                    selected_instance_id="cloud-runtime",
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id="site_ops_analysis",
-                selected_model_id="deterministic-ops-analyzer-v1",
-                selected_instance_id="cloud-runtime",
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_site_ops_analysis_run(
@@ -4492,7 +4033,7 @@ class RuntimeService:
         self,
         request: RuntimeRequest,
     ) -> RuntimeExecutionResponse:
-        self._validate_image_context_evidence_contract(request)
+        self.contract_validator.validate_image_context_evidence_contract(request)
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
             execution_kind="vision",
@@ -4500,30 +4041,29 @@ class RuntimeService:
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
         merged_policy = self._build_image_context_evidence_policy(request, resolution)
-        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+        request_fingerprint = self.run_lifecycle_service.build_request_fingerprint(
+            request,
+            merged_policy,
+        )
         selected_candidate = resolution.selected_candidate
 
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             self._require_active_site(repository, request.site_id)
 
-            if request.idempotency_key:
-                existing = repository.get_run_by_idempotency(
-                    request.site_id,
-                    request.idempotency_key,
+            existing = self.run_lifecycle_service.get_idempotent_replay(
+                repository=repository,
+                site_id=request.site_id,
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            if existing is not None:
+                session.commit()
+                return self._build_execution_response(
+                    existing,
+                    repository=repository,
+                    idempotent_replay=True,
                 )
-                if existing is not None:
-                    if existing.request_fingerprint != request_fingerprint:
-                        raise RuntimeIdempotencyConflictError(
-                            request.site_id,
-                            request.idempotency_key,
-                        )
-                    session.commit()
-                    return self._build_execution_response(
-                        existing,
-                        repository=repository,
-                        idempotent_replay=True,
-                    )
 
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
@@ -4548,37 +4088,40 @@ class RuntimeService:
                 commercial_decision=commercial_decision,
             )
             storage_mode = self._get_storage_mode(merged_policy)
-            run = repository.create_run(
-                run_id=run_id,
-                site_id=request.site_id,
-                account_id=str(commercial_decision.get("account_id") or "") or None,
-                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                ability_name=request.ability_name,
-                ability_family=request.ability_family,
-                skill_id=request.skill_id,
-                workflow_id=request.workflow_id,
-                contract_version=request.contract_version,
-                channel=request.channel,
-                execution_kind=request.execution_kind,
-                execution_tier=request.execution_tier,
-                execution_pattern=request.execution_pattern,
-                data_classification=request.data_classification,
-                profile_id=request.profile_id or IMAGE_CONTEXT_EVIDENCE_PROFILE_ID,
-                canonical_run_id=request.canonical_run_id or None,
-                status="running",
-                idempotency_key=request.idempotency_key,
-                request_fingerprint=request_fingerprint,
-                trace_id=trace_id,
-                input_json=self._prepare_input_for_storage(
-                    request.input_payload,
-                    storage_mode=storage_mode,
+            run = self.run_lifecycle_service.create_durable_run(
+                repository=repository,
+                command=RuntimeRunCreationCommand(
+                    run_id=run_id,
+                    site_id=request.site_id,
+                    account_id=str(commercial_decision.get("account_id") or "") or None,
+                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                    ability_name=request.ability_name,
+                    ability_family=request.ability_family,
+                    skill_id=request.skill_id,
+                    workflow_id=request.workflow_id,
+                    contract_version=request.contract_version,
+                    channel=request.channel,
+                    execution_kind=request.execution_kind,
+                    execution_tier=request.execution_tier,
+                    execution_pattern=request.execution_pattern,
+                    data_classification=request.data_classification,
+                    profile_id=request.profile_id or IMAGE_CONTEXT_EVIDENCE_PROFILE_ID,
+                    canonical_run_id=request.canonical_run_id or None,
+                    status="running",
+                    idempotency_key=request.idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    trace_id=trace_id,
+                    input_json=self._prepare_input_for_storage(
+                        request.input_payload,
+                        storage_mode=storage_mode,
+                    ),
+                    execution_input_ciphertext=None,
+                    policy_json=merged_policy,
+                    selected_provider_id=selected_candidate.provider_id,
+                    selected_model_id=selected_candidate.model_id,
+                    selected_instance_id=selected_candidate.instance_id,
                 ),
-                execution_input_ciphertext=None,
-                policy_json=merged_policy,
-                selected_provider_id=selected_candidate.provider_id,
-                selected_model_id=selected_candidate.model_id,
-                selected_instance_id=selected_candidate.instance_id,
             )
             self.commercial_service.record_run_acceptance(session=session, run=run)
             self._execute_image_context_evidence_run(
@@ -4601,8 +4144,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -4619,7 +4164,8 @@ class RuntimeService:
                 run_id=run.run_id,
             )
         except MediaBatchPlanContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4630,7 +4176,8 @@ class RuntimeService:
             )
             return
 
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id="media_batch_plan",
@@ -4646,8 +4193,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -4664,7 +4213,8 @@ class RuntimeService:
                 run_id=run.run_id,
             )
         except SiteOpsAnalysisContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4681,7 +4231,8 @@ class RuntimeService:
                 run.site_id,
                 run.trace_id,
             )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code="site_ops_analysis.execution_failed",
                 error_message="site ops analysis runtime failed",
@@ -4692,7 +4243,8 @@ class RuntimeService:
             )
             return
 
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id="site_ops_analysis",
@@ -4709,8 +4261,10 @@ class RuntimeService:
         input_payload: dict[str, Any] | None = None,
         candidate: RoutingCandidate | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -4721,7 +4275,8 @@ class RuntimeService:
         selected_candidate = candidate or self._resolve_run_routing_candidate(run)
         provider = self.providers.get(selected_candidate.provider_id)
         if provider is None:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code="runtime.provider_not_configured",
                 error_message=(
@@ -4757,7 +4312,8 @@ class RuntimeService:
                 price_output=selected_candidate.price_output,
             )
         except ImageContextEvidenceContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4769,26 +4325,25 @@ class RuntimeService:
             return
         except ImageContextEvidenceProviderError as error:
             if error.usage is not None:
-                provider_call = repository.record_provider_call(
-                    run_id=run.run_id,
-                    provider_id=error.usage.provider_id,
-                    model_id=error.usage.model_id,
-                    instance_id=error.usage.instance_id,
-                    region=error.usage.region,
-                    latency_ms=error.usage.latency_ms,
-                    tokens_in=error.usage.tokens_in,
-                    tokens_out=error.usage.tokens_out,
-                    cost=error.usage.cost,
-                    retry_count=0,
-                    fallback_used=False,
-                    error_code=error.usage.error_code or error.error_code,
-                )
-                self.commercial_service.record_provider_call_usage(
-                    session=repository.session,
+                self.provider_execution_service.record_provider_call(
+                    repository=repository,
                     run=run,
-                    provider_call=provider_call,
+                    command=ProviderCallEvidenceCommand(
+                        provider_id=error.usage.provider_id,
+                        model_id=error.usage.model_id,
+                        instance_id=error.usage.instance_id,
+                        region=error.usage.region,
+                        latency_ms=error.usage.latency_ms,
+                        tokens_in=error.usage.tokens_in,
+                        tokens_out=error.usage.tokens_out,
+                        cost=error.usage.cost,
+                        retry_count=0,
+                        fallback_used=False,
+                        error_code=error.usage.error_code or error.error_code,
+                    ),
                 )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4799,26 +4354,25 @@ class RuntimeService:
             )
             return
 
-        provider_call = repository.record_provider_call(
-            run_id=run.run_id,
-            provider_id=execution.usage.provider_id,
-            model_id=execution.usage.model_id,
-            instance_id=execution.usage.instance_id,
-            region=execution.usage.region,
-            latency_ms=execution.usage.latency_ms,
-            tokens_in=execution.usage.tokens_in,
-            tokens_out=execution.usage.tokens_out,
-            cost=execution.usage.cost,
-            retry_count=0,
-            fallback_used=False,
-            error_code=execution.usage.error_code,
-        )
-        self.commercial_service.record_provider_call_usage(
-            session=repository.session,
+        self.provider_execution_service.record_provider_call(
+            repository=repository,
             run=run,
-            provider_call=provider_call,
+            command=ProviderCallEvidenceCommand(
+                provider_id=execution.usage.provider_id,
+                model_id=execution.usage.model_id,
+                instance_id=execution.usage.instance_id,
+                region=execution.usage.region,
+                latency_ms=execution.usage.latency_ms,
+                tokens_in=execution.usage.tokens_in,
+                tokens_out=execution.usage.tokens_out,
+                cost=execution.usage.cost,
+                retry_count=0,
+                fallback_used=False,
+                error_code=execution.usage.error_code,
+            ),
         )
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id=execution.usage.provider_id,
@@ -4834,8 +4388,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         started = perf_counter()
@@ -4863,26 +4419,25 @@ class RuntimeService:
             )
         except CloudBatchRuntimeContractViolation as error:
             latency_ms = max(0, int((perf_counter() - started) * 1000))
-            provider_call = repository.record_provider_call(
-                run_id=run.run_id,
-                provider_id="cloud_batch_runtime",
-                model_id="deterministic-content-quality-v1",
-                instance_id="cloud-runtime",
-                region=self.settings.deployment_region,
-                latency_ms=latency_ms,
-                tokens_in=0,
-                tokens_out=0,
-                cost=0.0,
-                retry_count=0,
-                fallback_used=False,
-                error_code=error.error_code,
-            )
-            self.commercial_service.record_provider_call_usage(
-                session=repository.session,
+            self.provider_execution_service.record_provider_call(
+                repository=repository,
                 run=run,
-                provider_call=provider_call,
+                command=ProviderCallEvidenceCommand(
+                    provider_id="cloud_batch_runtime",
+                    model_id="deterministic-content-quality-v1",
+                    instance_id="cloud-runtime",
+                    region=self.settings.deployment_region,
+                    latency_ms=latency_ms,
+                    tokens_in=0,
+                    tokens_out=0,
+                    cost=0.0,
+                    retry_count=0,
+                    fallback_used=False,
+                    error_code=error.error_code,
+                ),
             )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4903,25 +4458,24 @@ class RuntimeService:
             return
         latency_ms = max(0, int((perf_counter() - started) * 1000))
 
-        provider_call = repository.record_provider_call(
-            run_id=run.run_id,
-            provider_id="cloud_batch_runtime",
-            model_id="deterministic-content-quality-v1",
-            instance_id="cloud-runtime",
-            region=self.settings.deployment_region,
-            latency_ms=latency_ms,
-            tokens_in=0,
-            tokens_out=0,
-            cost=0.0,
-            retry_count=0,
-            fallback_used=False,
-        )
-        self.commercial_service.record_provider_call_usage(
-            session=repository.session,
+        self.provider_execution_service.record_provider_call(
+            repository=repository,
             run=run,
-            provider_call=provider_call,
+            command=ProviderCallEvidenceCommand(
+                provider_id="cloud_batch_runtime",
+                model_id="deterministic-content-quality-v1",
+                instance_id="cloud-runtime",
+                region=self.settings.deployment_region,
+                latency_ms=latency_ms,
+                tokens_in=0,
+                tokens_out=0,
+                cost=0.0,
+                retry_count=0,
+                fallback_used=False,
+            ),
         )
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id="cloud_batch_runtime",
@@ -4947,8 +4501,10 @@ class RuntimeService:
         repository: RuntimeRepository,
         input_payload: dict[str, Any] | None = None,
     ) -> None:
-        if self._cancel_requested_before_attempt(run, repository=repository):
-            repository.mark_run_canceled(run)
+        if self.run_lifecycle_service.cancel_if_requested(
+            repository=repository,
+            run=run,
+        ):
             return
 
         payload = (
@@ -4986,7 +4542,8 @@ class RuntimeService:
                 llm_prompt_plan=llm_prompt_plan,
             )
         except ImageSourceContractViolation as error:
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -4998,26 +4555,25 @@ class RuntimeService:
             return
         except ImageSourceProviderError as error:
             if error.usage is not None:
-                provider_call = repository.record_provider_call(
-                    run_id=run.run_id,
-                    provider_id=error.usage.provider_id,
-                    model_id=error.usage.model_id,
-                    instance_id=error.usage.instance_id,
-                    region=error.usage.region,
-                    latency_ms=error.usage.latency_ms,
-                    tokens_in=0,
-                    tokens_out=0,
-                    cost=error.usage.cost,
-                    retry_count=0,
-                    fallback_used=False,
-                    error_code=error.usage.error_code or error.error_code,
-                )
-                self.commercial_service.record_provider_call_usage(
-                    session=repository.session,
+                self.provider_execution_service.record_provider_call(
+                    repository=repository,
                     run=run,
-                    provider_call=provider_call,
+                    command=ProviderCallEvidenceCommand(
+                        provider_id=error.usage.provider_id,
+                        model_id=error.usage.model_id,
+                        instance_id=error.usage.instance_id,
+                        region=error.usage.region,
+                        latency_ms=error.usage.latency_ms,
+                        tokens_in=0,
+                        tokens_out=0,
+                        cost=error.usage.cost,
+                        retry_count=0,
+                        fallback_used=False,
+                        error_code=error.usage.error_code or error.error_code,
+                    ),
                 )
-            repository.mark_run_failed(
+            self.run_lifecycle_service.fail_run(
+                repository,
                 run,
                 error_code=error.error_code,
                 error_message=error.message,
@@ -5028,26 +4584,25 @@ class RuntimeService:
             )
             return
 
-        provider_call = repository.record_provider_call(
-            run_id=run.run_id,
-            provider_id=execution.usage.provider_id,
-            model_id=execution.usage.model_id,
-            instance_id=execution.usage.instance_id,
-            region=execution.usage.region,
-            latency_ms=execution.usage.latency_ms,
-            tokens_in=0,
-            tokens_out=0,
-            cost=execution.usage.cost,
-            retry_count=0,
-            fallback_used=False,
-            error_code=execution.usage.error_code,
-        )
-        self.commercial_service.record_provider_call_usage(
-            session=repository.session,
+        self.provider_execution_service.record_provider_call(
+            repository=repository,
             run=run,
-            provider_call=provider_call,
+            command=ProviderCallEvidenceCommand(
+                provider_id=execution.usage.provider_id,
+                model_id=execution.usage.model_id,
+                instance_id=execution.usage.instance_id,
+                region=execution.usage.region,
+                latency_ms=execution.usage.latency_ms,
+                tokens_in=0,
+                tokens_out=0,
+                cost=execution.usage.cost,
+                retry_count=0,
+                fallback_used=False,
+                error_code=execution.usage.error_code,
+            ),
         )
-        repository.mark_run_succeeded(
+        self.run_lifecycle_service.succeed_run(
+            repository,
             run,
             result_json=execution.result_json,
             provider_id="image_source",
@@ -5258,26 +4813,27 @@ class RuntimeService:
             price_output=candidate.price_output,
         )
         try:
-            provider_result = provider.execute(request)
-        except ProviderExecutionError as error:
-            provider_call = repository.record_provider_call(
-                run_id=run.run_id,
-                provider_id=candidate.provider_id,
-                model_id=candidate.model_id,
-                instance_id=candidate.instance_id,
-                region=candidate.region,
-                latency_ms=timeout_ms if error.error_code == "provider.timeout" else 0,
-                tokens_in=max(0, int(getattr(error, "tokens_in", 0) or 0)),
-                tokens_out=max(0, int(getattr(error, "tokens_out", 0) or 0)),
-                cost=max(0.0, float(getattr(error, "cost", 0.0) or 0.0)),
-                retry_count=0,
-                fallback_used=False,
-                error_code=error.error_code,
+            provider_result = self.provider_execution_service.execute_provider(
+                provider,
+                request,
             )
-            self.commercial_service.record_provider_call_usage(
-                session=repository.session,
+        except ProviderExecutionError as error:
+            self.provider_execution_service.record_provider_call(
+                repository=repository,
                 run=run,
-                provider_call=provider_call,
+                command=ProviderCallEvidenceCommand(
+                    provider_id=candidate.provider_id,
+                    model_id=candidate.model_id,
+                    instance_id=candidate.instance_id,
+                    region=candidate.region,
+                    latency_ms=(timeout_ms if error.error_code == "provider.timeout" else 0),
+                    tokens_in=max(0, int(getattr(error, "tokens_in", 0) or 0)),
+                    tokens_out=max(0, int(getattr(error, "tokens_out", 0) or 0)),
+                    cost=max(0.0, float(getattr(error, "cost", 0.0) or 0.0)),
+                    retry_count=0,
+                    fallback_used=False,
+                    error_code=error.error_code,
+                ),
             )
             return {
                 "status": "failed",
@@ -5289,24 +4845,22 @@ class RuntimeService:
                 "prompt_candidates": [],
             }
 
-        provider_call = repository.record_provider_call(
-            run_id=run.run_id,
-            provider_id=candidate.provider_id,
-            model_id=candidate.model_id,
-            instance_id=candidate.instance_id,
-            region=candidate.region,
-            latency_ms=provider_result.latency_ms,
-            tokens_in=provider_result.tokens_in,
-            tokens_out=provider_result.tokens_out,
-            cost=provider_result.cost,
-            retry_count=0,
-            fallback_used=False,
-            error_code=None,
-        )
-        self.commercial_service.record_provider_call_usage(
-            session=repository.session,
+        self.provider_execution_service.record_provider_call(
+            repository=repository,
             run=run,
-            provider_call=provider_call,
+            command=ProviderCallEvidenceCommand(
+                provider_id=candidate.provider_id,
+                model_id=candidate.model_id,
+                instance_id=candidate.instance_id,
+                region=candidate.region,
+                latency_ms=provider_result.latency_ms,
+                tokens_in=provider_result.tokens_in,
+                tokens_out=provider_result.tokens_out,
+                cost=provider_result.cost,
+                retry_count=0,
+                fallback_used=False,
+                error_code=None,
+            ),
         )
         prompt_candidates = self._parse_image_prompt_planner_output(
             provider_result.output.get("output_text"),
@@ -5484,6 +5038,17 @@ class RuntimeService:
     def _is_image_generation_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in IMAGE_GENERATION_ABILITIES
 
+    def _validate_image_generation_artifact_storage(self, request: RuntimeRequest) -> None:
+        if (
+            self._is_image_generation_request(request)
+            and str(request.storage_mode or RUNTIME_STORAGE_MODE_RESULT_ONLY).strip()
+            == RUNTIME_STORAGE_MODE_NO_STORE
+        ):
+            raise RuntimeExecutionContractError(
+                "image_generation.artifact_storage_required",
+                "image generation requires result_only or full_store_with_ttl storage",
+            )
+
     def _is_audio_generation_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in AUDIO_GENERATION_ABILITIES
 
@@ -5506,7 +5071,7 @@ class RuntimeService:
         return request.ability_name in WEB_SEARCH_ABILITIES
 
     def _is_wordpress_ai_connector_request(self, request: RuntimeRequest) -> bool:
-        return request.ability_name in WP_AI_CONNECTOR_ABILITIES
+        return request.ability_name in CONNECTOR_RUNTIME_ABILITIES
 
     def _is_wordpress_ai_connector_managed_request(self, request: RuntimeRequest) -> bool:
         if self._is_wordpress_ai_connector_request(request):
@@ -5536,27 +5101,25 @@ class RuntimeService:
         repository: RuntimeRepository,
         provider_output: dict[str, Any],
     ) -> dict[str, Any]:
-        return materialize_audio_generation_candidates(
-            session=repository.session,
+        return self.artifact_coordination_service.materialize_audio_generation_output(
             run=run,
-            result_json=provider_output,
-            config=AudioArtifactMaterializationConfig(
-                ttl_minutes=max(1, int(self.settings.audio_generation_artifact_ttl_minutes)),
-                max_bytes=max(1, int(self.settings.audio_generation_artifact_max_bytes)),
-                timeout_seconds=max(
-                    0.001,
-                    float(self.settings.audio_generation_artifact_download_timeout_seconds),
-                ),
-            ),
+            repository=repository,
+            provider_output=provider_output,
         )
 
-    def _materialize_wordpress_ai_inline_image_output(
+    def _materialize_image_generation_output(
         self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
         provider_output: dict[str, Any],
+        media_candidates: tuple[ProviderMediaCandidate, ...],
     ) -> dict[str, Any]:
-        return materialize_inline_image_candidates_from_urls(
-            provider_output,
-            config=InlineImageMaterializationConfig(),
+        return self.artifact_coordination_service.materialize_image_generation_output(
+            run=run,
+            repository=repository,
+            provider_output=provider_output,
+            media_candidates=media_candidates,
         )
 
     def _is_media_batch_plan_run(self, run: RunRecord) -> bool:
@@ -5575,214 +5138,15 @@ class RuntimeService:
         return str(run.ability_name or "") in WEB_SEARCH_ABILITIES
 
     def _is_wordpress_ai_connector_run(self, run: RunRecord) -> bool:
-        return str(run.ability_name or "") in WP_AI_CONNECTOR_ABILITIES
+        return str(run.ability_name or "") in CONNECTOR_RUNTIME_ABILITIES
 
-    def _is_wordpress_ai_connector_image_generation_run(
-        self,
-        run: RunRecord,
-        *,
-        input_payload: dict[str, Any],
-    ) -> bool:
-        return (
-            self._is_image_generation_run(run)
-            and str(run.channel or "") == "wordpress_ai_connector"
-            and str(input_payload.get("source_surface") or "") == "wordpress_ai_connector"
-            and str(input_payload.get("connector_id") or "") == "npcink-cloud"
-            and str(input_payload.get("task") or "") == "image_generation"
-            and str(input_payload.get("response_format") or "") == "b64_json"
-        )
-
-    def _build_wordpress_ai_connector_provider_input(
-        self,
-        input_payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        scene_request = input_payload.get("request")
-        scene_request = scene_request if isinstance(scene_request, dict) else {}
-        task = str(input_payload.get("task") or "").strip()
-        if task == "alt_text_suggest":
-            return self._build_wordpress_ai_connector_alt_text_provider_input(
-                input_payload,
-                scene_request=scene_request,
-            )
-
-        prompt = str(scene_request.get("prompt") or input_payload.get("prompt") or "").strip()
-        system_instruction = str(scene_request.get("system_instruction") or "").strip()
-        task_contract = self._dict_or_empty(scene_request.get("task_contract"))
-        task_family = str(task_contract.get("task_family") or "").strip()
-        raw_constraints = task_contract.get("constraints")
-        constraint_items = raw_constraints if isinstance(raw_constraints, list) else []
-        constraints = {
-            str(item).strip()
-            for item in constraint_items
-            if isinstance(item, str) and str(item).strip()
-        }
-
-        task_instruction = {
-            "alt_text_suggest": "Generate concise image alt text. Return only the alt text.",
-            "comment_moderation": (
-                "Classify the comment moderation outcome. Return strict JSON only. No markdown."
-            ),
-            "comment_reply_suggest": "Draft a concise comment reply. Return only the reply text.",
-            "content_classification": (
-                'Classify the content. Return strict JSON only: {"suggestions":'
-                '[{"term":"...","confidence":0.8,"is_new":false}]}. No markdown.'
-            ),
-            "content_rewrite": (
-                "Rewrite the content as requested. Return exactly one rewritten version."
-            ),
-            "content_summary": "Summarize the content. Return only the summary.",
-            "excerpt_generation": "Generate a concise excerpt. Return only the excerpt.",
-            "meta_description": (
-                "Generate one SEO meta description, 120 to 155 characters. Return "
-                "only the description."
-            ),
-            "title_generation": (
-                "Generate exactly one concise title faithful to the main topic. For Chinese, "
-                "normally use no more than 36 characters; for other languages, normally use "
-                "no more than 12 words. Return only the title text."
-            ),
-        }.get(task)
-        if task_instruction is None:
-            task_instruction = {
-                "generation": "Generate the requested value from the scene input.",
-                "classification": (
-                    "Classify the scene input according to the requested output schema."
-                ),
-                "transformation": "Transform the scene input as requested.",
-                "analysis": "Analyze the scene input and return the requested result.",
-            }.get(task_family, "Return only the requested suggestion. Do not explain.")
-
-        fragments = [task_instruction]
-        fragments.append(
-            "Use the same language as the scene input unless a WordPress ability "
-            "instruction explicitly asks for another language."
-        )
-        fragments.append(
-            "Output contract: return only the final value for this one task. Do not "
-            "include introductions, headings, Markdown, bullet lists, numbered lists, "
-            "multiple options, labels, explanations, or offers to continue. Never add a "
-            "name, number, claim, or event that is absent from the scene input."
-        )
-        if "json_object" in constraints:
-            fragments.append(
-                "Return one strict JSON object matching the Ability output schema. No markdown."
-            )
-            output_schema = self._dict_or_empty(task_contract.get("output_schema"))
-            if output_schema:
-                fragments.append(
-                    "Ability output schema: "
-                    + json.dumps(output_schema, ensure_ascii=False, separators=(",", ":"))
-                )
-        if "single_value" in constraints:
-            fragments.append("Return exactly one value, not a list of alternatives.")
-        if "source_grounded" in constraints:
-            fragments.append("Keep every factual claim grounded in the current scene input.")
-        if "no_new_numbers" in constraints:
-            fragments.append(
-                "Do not introduce a number that is absent from the current scene input."
-            )
-        if "existing_terms_only" in constraints:
-            fragments.append("Choose only from the supplied existing taxonomy candidates.")
-        if task == "content_classification" and self._has_wordpress_ai_available_terms(prompt):
-            fragments.append(
-                "The scene input includes <available-terms>. Choose only exact term names "
-                "from that list and set is_new=false for every suggestion."
-            )
-        if system_instruction:
-            fragments.append(system_instruction)
-        if prompt:
-            fragments.append(f"Scene input:\n{prompt}")
-        fragments.append("Do not mention this instruction. Do not explain your answer.")
-
-        provider_input: dict[str, Any] = {
-            "input": "\n\n".join(fragments),
-            "text": prompt,
-            "metadata": {
-                "source_surface": "wordpress_ai_connector",
-                "task": task,
-                "ability_name": str(task_contract.get("ability_name") or ""),
-                "task_family": task_family,
-                "task_constraints": sorted(constraints),
-                "suggestion_only": True,
-            },
-        }
-
-        default_max_tokens = {
-            "alt_text_suggest": 48,
-            "comment_moderation": 120,
-            "comment_reply_suggest": 180,
-            "content_classification": 220,
-            "content_rewrite": 512,
-            "content_summary": 160,
-            "excerpt_generation": 140,
-            "meta_description": 80,
-            "title_generation": 48,
-        }.get(
-            task,
-            {
-                "generation": 160,
-                "classification": 220,
-                "transformation": 512,
-                "analysis": 220,
-            }.get(task_family, 160),
-        )
-
-        max_tokens = self._coerce_int(scene_request.get("max_tokens"), default=0)
-        if max_tokens <= 0:
-            max_tokens = default_max_tokens
-        if max_tokens > 0:
-            provider_input["max_tokens"] = max_tokens
-            provider_input["max_output_tokens"] = max_tokens
-
-        temperature = scene_request.get("temperature")
-        if isinstance(temperature, (int, float)):
-            provider_input["temperature"] = float(temperature)
-
-        return provider_input
-
-    def _apply_wordpress_ai_site_knowledge_reference(
+    def _prepare_wordpress_operation_execution_input(
         self,
         run: RunRecord,
         *,
         repository: RuntimeRepository,
-        input_payload: dict[str, Any],
-        provider_input: dict[str, Any],
+        connector_envelope: dict[str, Any],
     ) -> dict[str, Any]:
-        scene_request = self._dict_or_empty(input_payload.get("request"))
-        reference = self._dict_or_empty(scene_request.get("site_knowledge_reference"))
-        task = str(input_payload.get("task") or "").strip()
-        task_contract = self._dict_or_empty(scene_request.get("task_contract"))
-        expected_mode = resolve_site_knowledge_reference_mode(
-            task=task,
-            task_contract=task_contract,
-        )
-        mode = str(reference.get("mode") or "")
-        if not expected_mode or mode != expected_mode or reference.get("enabled") is not True:
-            return provider_input
-
-        policy = generation_context_policy(
-            task=task,
-            mode=mode,
-            task_family=str(task_contract.get("task_family") or ""),
-            context_requirements=task_contract.get("context_requirements"),
-        )
-        if policy is None:
-            return self._wordpress_ai_generation_context_status(
-                provider_input,
-                mode=mode,
-                status="unavailable",
-                reason="task_policy_unavailable",
-            )
-
-        prompt = str(scene_request.get("prompt") or input_payload.get("prompt") or "").strip()
-        if not prompt:
-            return self._wordpress_ai_generation_context_status(
-                provider_input,
-                mode=mode,
-                status="unavailable",
-                reason="scene_input_empty",
-            )
-
         def record_embedding_usage(
             provider_id: str,
             provider_request: ProviderExecutionRequest,
@@ -5798,722 +5162,72 @@ class RuntimeService:
                 provider_error=provider_error,
             )
 
+        source_artifact = self._load_wordpress_operation_artifact_input(
+            repository,
+            site_id=run.site_id,
+            connector_envelope=connector_envelope,
+        )
+        provider_input = self.wordpress_operation_runtime.build_provider_input(
+            connector_envelope,
+            source_artifact=source_artifact,
+        )
+        return self.wordpress_operation_runtime.apply_site_knowledge_reference(
+            site_id=run.site_id,
+            run_id=run.run_id,
+            session=repository.session,
+            input_payload=connector_envelope,
+            provider_input=provider_input,
+            embedding_usage_callback=record_embedding_usage,
+        )
+
+    def _admit_wordpress_operation_artifact_input(
+        self,
+        repository: RuntimeRepository,
+        *,
+        site_id: str,
+        connector_envelope: dict[str, Any],
+    ) -> None:
+        artifact_id = self.wordpress_operation_runtime.source_artifact_id(
+            connector_envelope
+        )
+        if not artifact_id:
+            return
         try:
-            result = SiteKnowledgeService(
+            admit_artifact_input(
                 repository.session,
-                settings=self.settings,
-                providers=self.providers,
-                embedding_usage_callback=record_embedding_usage,
-            ).execute(
-                site_id=run.site_id,
-                ability_name=SITE_KNOWLEDGE_SEARCH_ABILITY,
-                contract_version=SITE_KNOWLEDGE_CONTRACTS[SITE_KNOWLEDGE_SEARCH_ABILITY],
-                input_payload={
-                    "contract_version": SITE_KNOWLEDGE_CONTRACTS[SITE_KNOWLEDGE_SEARCH_ABILITY],
-                    "query": prompt,
-                    "intent": "writing_context",
-                    "max_results": min(20, policy.max_source_posts * 2),
-                    "filters": {
-                        "post_types": ["post", "page"],
-                        "status": ["publish"],
-                        "source_types": ["post", "page"],
-                    },
-                    "evidence_policy": {
-                        "min_score": policy.min_score,
-                        "required_sources": 1,
-                        "no_hit_policy": "fallback_to_general",
-                    },
-                    "write_posture": "suggestion_only",
-                },
-                run_id=run.run_id,
+                site_id=site_id,
+                artifact_id=artifact_id,
             )
-        except Exception:
-            # Site references are optional and must never break the primary editor task.
-            return self._wordpress_ai_generation_context_status(
-                provider_input,
-                mode=mode,
-                status="unavailable",
-                reason="retrieval_failed",
-            )
+        except ArtifactInputError as error:
+            raise RuntimeExecutionContractError(
+                error.error_code,
+                error.message,
+            ) from error
 
-        evidence_gate = self._dict_or_empty(result.get("evidence_gate"))
-        if str(evidence_gate.get("status") or "") != "passed":
-            return self._wordpress_ai_generation_context_status(
-                provider_input,
-                mode=mode,
-                status="unavailable",
-                reason="insufficient_evidence",
-            )
-        raw_results = result.get("results")
-        results: list[object] = []
-        if isinstance(raw_results, list):
-            results = cast(list[object], raw_results)
+    def _load_wordpress_operation_artifact_input(
+        self,
+        repository: RuntimeRepository,
+        *,
+        site_id: str,
+        connector_envelope: dict[str, Any],
+    ) -> LoadedArtifactInput | None:
+        artifact_id = self.wordpress_operation_runtime.source_artifact_id(
+            connector_envelope
+        )
+        if not artifact_id:
+            return None
         try:
-            post_ids = select_generation_context_post_ids(
-                policy=policy,
-                prompt=prompt,
-                results=results,
+            return load_artifact_input(
+                repository.session,
+                self.artifact_store,
+                site_id=site_id,
+                artifact_id=artifact_id,
             )
-            reference_metadata = SiteKnowledgeRepository(
-                repository.session
-            ).reference_metadata_for_post_ids(site_id=run.site_id, post_ids=post_ids)
-            pack = build_generation_context_pack(
-                policy=policy,
-                post_ids=post_ids,
-                results=results,
-                reference_metadata=reference_metadata,
-            )
-            reference_block = render_generation_context(pack) if pack is not None else ""
-        except Exception:
-            return self._wordpress_ai_generation_context_status(
-                provider_input,
-                mode=mode,
-                status="unavailable",
-                reason="context_assembly_failed",
-            )
-        if pack is None or not reference_block:
-            return self._wordpress_ai_generation_context_status(
-                provider_input,
-                mode=mode,
-                status="unavailable",
-                reason="no_usable_references",
-            )
-        next_input = dict(provider_input)
-        base_input = str(provider_input.get("input") or "")
-        scene_marker = "\n\nScene input:\n"
-        if scene_marker in base_input:
-            next_input["input"] = base_input.replace(
-                scene_marker,
-                f"\n\n{reference_block}{scene_marker}",
-                1,
-            )
-        else:
-            next_input["input"] = f"{reference_block}\n\n{base_input}"
-        next_input = self._wordpress_ai_generation_context_status(
-            next_input,
-            mode=mode,
-            status="applied",
-            reason="references_applied",
-            reference_count=int(pack["reference_count"]),
-            context_chars=int(pack["context_chars"]),
-        )
-        metadata = dict(self._dict_or_empty(next_input.get("metadata")))
-        metadata["site_knowledge_reference"] = "applied"
-        metadata["site_knowledge_reference_mode"] = mode
-        metadata["site_knowledge_reference_count"] = int(pack["reference_count"])
-        next_input["metadata"] = metadata
-        return next_input
-
-    def _wordpress_ai_generation_context_status(
-        self,
-        provider_input: dict[str, Any],
-        *,
-        mode: str,
-        status: str,
-        reason: str,
-        reference_count: int = 0,
-        context_chars: int = 0,
-    ) -> dict[str, Any]:
-        next_input = dict(provider_input)
-        metadata = dict(self._dict_or_empty(provider_input.get("metadata")))
-        metadata.update(
-            {
-                "generation_context_contract": GENERATION_CONTEXT_CONTRACT,
-                "generation_context_status": status,
-                "generation_context_mode": mode,
-                "generation_context_reason": reason,
-                "generation_context_reference_count": max(0, reference_count),
-                "generation_context_chars": max(0, context_chars),
-            }
-        )
-        next_input["metadata"] = metadata
-        return next_input
-
-    def _build_wordpress_ai_connector_alt_text_provider_input(
-        self,
-        input_payload: dict[str, Any],
-        *,
-        scene_request: dict[str, Any],
-    ) -> dict[str, Any]:
-        prompt = str(scene_request.get("prompt") or input_payload.get("prompt") or "").strip()
-        image_url = str(scene_request.get("image_url") or "").strip()
-        thumbnail_url = str(scene_request.get("thumbnail_url") or "").strip()
-        selected_image_url = image_url or thumbnail_url
-        context = {
-            "task": "alt_text_suggest",
-            "locale": str(scene_request.get("locale") or "").strip()[:32],
-            "title": str(scene_request.get("title") or "").strip()[:160],
-            "filename": str(scene_request.get("filename") or "").strip()[:160],
-            "mime_type": str(scene_request.get("mime_type") or "").strip()[:80],
-            "existing_alt": str(scene_request.get("existing_alt") or "").strip()[:240],
-            "existing_caption": str(scene_request.get("existing_caption") or "").strip()[:240],
-            "prompt": prompt[:500],
-            "write_posture": "suggestion_only",
-        }
-        instruction = (
-            "Generate concise, accessible WordPress image alt text. "
-            "Use the image as the source of truth and use the supplied media context "
-            "only to disambiguate. Return only the alt text. Do not mention this "
-            "instruction. Do not claim that WordPress metadata was updated."
-        )
-        context_text = json.dumps(
-            {key: value for key, value in context.items() if value},
-            ensure_ascii=False,
-        )
-        responses_content = [
-            {"type": "input_text", "text": instruction},
-            {"type": "input_text", "text": context_text},
-            {"type": "input_image", "image_url": selected_image_url},
-        ]
-        chat_content = [
-            {"type": "text", "text": instruction},
-            {"type": "text", "text": context_text},
-            {"type": "image_url", "image_url": {"url": selected_image_url}},
-        ]
-
-        max_tokens = self._coerce_int(scene_request.get("max_tokens"), default=48)
-        if max_tokens <= 0:
-            max_tokens = 48
-        max_tokens = min(max_tokens, 96)
-        provider_input: dict[str, Any] = {
-            "input": [{"role": "user", "content": responses_content}],
-            "messages": [{"role": "user", "content": chat_content}],
-            "text": prompt,
-            "max_tokens": max_tokens,
-            "max_output_tokens": max_tokens,
-            "temperature": 0.0,
-            "metadata": {
-                "source_surface": "wordpress_ai_connector",
-                "task": "alt_text_suggest",
-                "suggestion_only": True,
-            },
-        }
-        return provider_input
-
-    def _normalize_wordpress_ai_connector_provider_output(
-        self,
-        output: dict[str, Any],
-        *,
-        input_payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        metadata = input_payload.get("metadata")
-        metadata = metadata if isinstance(metadata, dict) else {}
-        task = str(metadata.get("task") or "").strip()
-        constraints = {
-            str(item).strip()
-            for item in metadata.get("task_constraints", [])
-            if isinstance(item, str) and str(item).strip()
-        }
-        output_text = self._extract_provider_output_text(output)
-        if not output_text:
-            return output
-
-        normalized_text = ""
-        strips_reasoning_noise = task in {
-            "title_generation",
-            "excerpt_generation",
-            "meta_description",
-            "content_summary",
-        } and self._has_wordpress_ai_reasoning_noise(output_text)
-        if task == "meta_description":
-            normalized_text = self._normalize_wordpress_ai_meta_description(
-                output_text,
-                source_text=str(input_payload.get("text") or ""),
-            )
-        elif task == "content_classification":
-            normalized_text = self._normalize_wordpress_ai_classification_output(
-                output_text,
-                source_text=str(input_payload.get("text") or ""),
-            )
-        elif task in (
-            "title_generation",
-            "excerpt_generation",
-            "content_summary",
-            "content_rewrite",
-        ):
-            normalized_text = self._normalize_wordpress_ai_plain_text_output(
-                output_text,
-                limit={
-                    "content_rewrite": 320,
-                    "title_generation": 80,
-                    "excerpt_generation": 180,
-                    "content_summary": 220,
-                }[task],
-                strip_explanation=task in {"title_generation", "content_rewrite"},
-                source_text=str(input_payload.get("text") or ""),
-                task=task,
-            )
-        elif "single_value" in constraints:
-            normalized_text = self._normalize_wordpress_ai_plain_text_output(
-                output_text,
-                limit=320,
-                strip_explanation=True,
-                source_text=str(input_payload.get("text") or ""),
-                task=task,
-            )
-
-        if not normalized_text and not strips_reasoning_noise:
-            return output
-
-        normalized = dict(output)
-        normalized["output_text"] = normalized_text
-        normalized["messages"] = [{"role": "assistant", "content": normalized_text}]
-        return normalized
-
-    def _is_empty_wordpress_ai_connector_text_output(
-        self,
-        *,
-        input_payload: dict[str, Any],
-        provider_output: dict[str, Any],
-    ) -> bool:
-        metadata = input_payload.get("metadata")
-        metadata = metadata if isinstance(metadata, dict) else {}
-        task = str(metadata.get("task") or "").strip()
-        constraints = {
-            str(item).strip()
-            for item in metadata.get("task_constraints", [])
-            if isinstance(item, str) and str(item).strip()
-        }
-        if task not in {
-            "alt_text_suggest",
-            "comment_reply_suggest",
-            "content_rewrite",
-            "content_summary",
-            "excerpt_generation",
-            "meta_description",
-            "title_generation",
-        } and "single_value" not in constraints:
-            return False
-        output_text = self._extract_provider_output_text(provider_output)
-        if output_text == "":
-            return True
-        if task != "title_generation":
-            return False
-        if self._has_unbalanced_wordpress_ai_title_quote(output_text):
-            return True
-        usage = provider_output.get("usage")
-        usage = usage if isinstance(usage, dict) else {}
-        completion_details = usage.get("completion_tokens_details")
-        completion_details = completion_details if isinstance(completion_details, dict) else {}
-        reasoning_tokens = self._coerce_int(
-            completion_details.get("reasoning_tokens"),
-            default=0,
-        )
-        visible_word_count = len(re.findall(r"\S+", output_text))
-        return reasoning_tokens > 0 and visible_word_count <= 3
-
-    def _has_unbalanced_wordpress_ai_title_quote(self, output_text: str) -> bool:
-        text = output_text.strip()
-        if not text:
-            return False
-        quote_pairs = {
-            '"': '"',
-            "'": "'",
-            "“": "”",
-            "‘": "’",
-            "「": "」",
-            "『": "』",
-            "《": "》",
-        }
-        closing = quote_pairs.get(text[0])
-        return bool(closing and not text.endswith(closing))
-
-    def _extract_provider_output_text(self, output: dict[str, Any]) -> str:
-        for key in ("output_text", "text", "content"):
-            value = output.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-        choices = output.get("choices")
-        if isinstance(choices, list) and choices:
-            choice = choices[0]
-            if isinstance(choice, dict):
-                text = choice.get("text")
-                if isinstance(text, str) and text.strip():
-                    return text.strip()
-                message = choice.get("message")
-                if isinstance(message, dict):
-                    content = message.get("content")
-                    if isinstance(content, str) and content.strip():
-                        return content.strip()
-
-        return ""
-
-    def _normalize_wordpress_ai_meta_description(
-        self,
-        output_text: str,
-        *,
-        source_text: str = "",
-    ) -> str:
-        text = self._strip_wordpress_ai_markdown(
-            self._strip_wordpress_ai_reasoning_noise(output_text)
-        )
-        text = re.split(r"\s+#{1,6}\s+", text, maxsplit=1)[0].strip()
-        if ":" in text[:64] and len(text.split(":", 1)[1].strip()) >= 40:
-            text = text.split(":", 1)[1].strip()
-        if self._is_latin_heavy(text) or self._is_wordpress_ai_boilerplate_output(text):
-            cjk_fallback = self._extract_wordpress_ai_cjk_text(source_text, limit=155)
-            if cjk_fallback:
-                return cjk_fallback
-        if len(text) < 40:
-            cjk_fallback = self._extract_wordpress_ai_cjk_text(source_text, limit=155)
-            if cjk_fallback:
-                return cjk_fallback
-        return self._truncate_wordpress_ai_text(text, limit=155)
-
-    def _normalize_wordpress_ai_plain_text_output(
-        self,
-        output_text: str,
-        *,
-        limit: int,
-        strip_explanation: bool = False,
-        source_text: str = "",
-        task: str = "",
-    ) -> str:
-        raw_text = self._strip_wordpress_ai_reasoning_noise(output_text)
-        text = self._extract_wordpress_ai_task_candidate(
-            raw_text,
-            task=task,
-            limit=limit,
-        )
-        if not text:
-            text = self._strip_wordpress_ai_markdown(raw_text)
-        if strip_explanation:
-            text = re.split(
-                r"\s+(?:说明|解释|理由|Explanation|Reasoning)\s*[:：]|"
-                r"\s+(?:This title|This headline|The title)\b",
-                text,
-                maxsplit=1,
-            )[0].strip()
-        if task in {"excerpt_generation", "content_summary"} and (
-            self._is_wordpress_ai_boilerplate_output(text)
-            or self._looks_like_wordpress_ai_title_bundle(raw_text)
-        ):
-            cjk_fallback = self._extract_wordpress_ai_cjk_text(source_text, limit=limit)
-            if cjk_fallback:
-                return cjk_fallback
-        return self._trim_incomplete_wordpress_ai_tail(
-            self._truncate_wordpress_ai_text(text, limit=limit)
-        )
-
-    def _normalize_wordpress_ai_classification_output(
-        self,
-        output_text: str,
-        *,
-        source_text: str = "",
-    ) -> str:
-        parsed = self._parse_wordpress_ai_classification_json(output_text)
-        if parsed is None:
-            parsed = {
-                "suggestions": [
-                    {
-                        "term": term,
-                        "confidence": 0.6,
-                        "is_new": True,
-                    }
-                    for term in self._extract_wordpress_ai_classification_terms(
-                        output_text,
-                        source_text=source_text,
-                    )
-                ]
-            }
-        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
-
-    def _has_wordpress_ai_available_terms(self, source_text: str) -> bool:
-        match = re.search(
-            r"<available-terms>\s*(.*?)\s*</available-terms>",
-            source_text,
-            flags=re.I | re.S,
-        )
-        if match is None:
-            return False
-        return any(item.strip() for item in re.split(r"[,，]", match.group(1)))
-
-    def _parse_wordpress_ai_classification_json(
-        self,
-        output_text: str,
-    ) -> dict[str, Any] | None:
-        candidates = [output_text.strip()]
-        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", output_text, flags=re.S)
-        if fenced:
-            candidates.insert(0, fenced.group(1).strip())
-
-        for candidate in candidates:
-            try:
-                parsed = json.loads(candidate)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict) and isinstance(parsed.get("suggestions"), list):
-                return {
-                    "suggestions": self._sanitize_wordpress_ai_classification_suggestions(
-                        parsed.get("suggestions")
-                    )
-                }
-
-        return None
-
-    def _sanitize_wordpress_ai_classification_suggestions(
-        self,
-        suggestions: Any,
-    ) -> list[dict[str, Any]]:
-        sanitized: list[dict[str, Any]] = []
-        if not isinstance(suggestions, list):
-            return sanitized
-        for suggestion in suggestions:
-            if not isinstance(suggestion, dict):
-                continue
-            term = str(suggestion.get("term") or "").strip()
-            if not term:
-                continue
-            confidence = suggestion.get("confidence")
-            confidence = float(confidence) if isinstance(confidence, (int, float)) else 0.6
-            confidence = max(0.0, min(1.0, confidence))
-            sanitized.append(
-                {
-                    "term": self._truncate_wordpress_ai_text(term, limit=48),
-                    "confidence": confidence,
-                    "is_new": bool(suggestion.get("is_new", True)),
-                }
-            )
-            if len(sanitized) >= 5:
-                break
-        return sanitized
-
-    def _extract_wordpress_ai_classification_terms(
-        self,
-        output_text: str,
-        *,
-        source_text: str = "",
-    ) -> list[str]:
-        terms: list[str] = []
-        for text in (source_text, output_text):
-            for match in re.finditer(
-                r"\b(?:Npcink|WordPress|Cloud|Addon|API|AI|SEO)"
-                r"(?:\s+(?:Npcink|WordPress|Cloud|Addon|API|AI|SEO)){0,3}\b",
-                text,
-            ):
-                term = self._truncate_wordpress_ai_text(match.group(0), limit=48)
-                if 2 <= len(term) <= 48 and term not in terms:
-                    terms.append(term)
-                if len(terms) >= 3:
-                    return terms
-
-        for phrase in (
-            "云端运行时",
-            "内容分类",
-            "建议式输出",
-            "通用聊天入口",
-            "标题生成",
-            "SEO 描述",
-        ):
-            if phrase in source_text and phrase not in terms:
-                terms.append(phrase)
-            if len(terms) >= 3:
-                return terms
-
-        text = output_text.strip()
-        text = re.sub(r"^```(?:json|text|markdown)?\s*", "", text, flags=re.I)
-        text = re.sub(r"\s*```$", "", text)
-        text = re.sub(r"[*_`]+", "", text)
-        parts = re.split(r"[\n,，;；、|]+", text)
-        for part in parts:
-            term = re.sub(r"^\s*[-*\d.)、]+", "", part).strip()
-            term = re.sub(r"^(term|tag|category|标签|分类)\s*[:：]\s*", "", term, flags=re.I)
-            term = self._truncate_wordpress_ai_text(term, limit=48)
-            if 2 <= len(term) <= 48 and term not in terms:
-                terms.append(term)
-            if len(terms) >= 3:
-                break
-        return terms
-
-    def _strip_wordpress_ai_markdown(self, output_text: str) -> str:
-        text = output_text.strip()
-        text = re.sub(r"^```(?:json|text|markdown)?\s*", "", text, flags=re.I)
-        text = re.sub(r"\s*```$", "", text)
-        text = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
-        text = re.sub(r"[*_`]+", "", text)
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
-
-    def _extract_wordpress_ai_task_candidate(
-        self,
-        output_text: str,
-        *,
-        task: str,
-        limit: int,
-    ) -> str:
-        if task == "content_rewrite":
-            bold_candidate = self._extract_wordpress_ai_bold_candidate(output_text)
-            if bold_candidate:
-                return self._truncate_wordpress_ai_text(bold_candidate, limit=limit)
-        if task == "title_generation":
-            heading_candidate = self._extract_wordpress_ai_title_heading(output_text)
-            if heading_candidate:
-                return self._truncate_wordpress_ai_text(heading_candidate, limit=limit)
-            list_candidate = self._extract_wordpress_ai_first_list_item(output_text)
-            if list_candidate:
-                return self._truncate_wordpress_ai_text(list_candidate, limit=limit)
-            text = self._strip_wordpress_ai_markdown(output_text)
-            text = re.split(
-                r"\s+(?:摘要|summary)\s*[:：]|\s+---\s+",
-                text,
-                maxsplit=1,
-                flags=re.I,
-            )[0].strip()
-            if not self._is_wordpress_ai_boilerplate_output(text):
-                return self._truncate_wordpress_ai_text(text, limit=limit)
-        return ""
-
-    def _extract_wordpress_ai_title_heading(self, output_text: str) -> str:
-        for line in output_text.splitlines():
-            match = re.match(r"\s*#{1,6}\s+(.+?)\s*$", line)
-            if match is None:
-                continue
-            candidate = self._strip_wordpress_ai_markdown(match.group(1))
-            if self._is_wordpress_ai_boilerplate_output(candidate):
-                continue
-            if 4 <= len(candidate) <= 120:
-                return candidate
-        return ""
-
-    def _extract_wordpress_ai_bold_candidate(self, output_text: str) -> str:
-        for match in re.finditer(r"\*\*(.{4,260}?)\*\*", output_text, flags=re.S):
-            candidate = self._strip_wordpress_ai_markdown(match.group(1))
-            if re.search(r"(?:版|version|option)\s*[:：]?$", candidate, flags=re.I):
-                continue
-            if len(candidate) >= 8:
-                return candidate
-        return ""
-
-    def _extract_wordpress_ai_first_list_item(self, output_text: str) -> str:
-        for line in output_text.splitlines():
-            match = re.match(r"\s*(?:[-*]|\d+[.)、])\s*(.+?)\s*$", line)
-            if match is None:
-                continue
-            candidate = self._strip_wordpress_ai_markdown(match.group(1))
-            candidate = re.sub(r"^[\"'“”‘’《》]+|[\"'“”‘’《》]+$", "", candidate).strip()
-            if 4 <= len(candidate) <= 120:
-                return candidate
-        match = re.search(
-            r"(?:^|\s)\d+[.)、]\s*(.+?)(?=\s+\d+[.)、]\s+|$)",
-            output_text,
-        )
-        if match is not None:
-            candidate = self._strip_wordpress_ai_markdown(match.group(1))
-            candidate = re.sub(r"^[\"'“”‘’《》]+|[\"'“”‘’《》]+$", "", candidate).strip()
-            if 4 <= len(candidate) <= 120:
-                return candidate
-        return ""
-
-    def _is_wordpress_ai_boilerplate_output(self, text: str) -> bool:
-        lowered = text.lower()
-        return any(
-            phrase in lowered
-            for phrase in (
-                "以下是基于",
-                "下面是",
-                "以下是",
-                "如果你愿意",
-                "我还可以",
-                "here are",
-                "based on your",
-                "i can also",
-                "title suggestions",
-                "标题建议",
-                "多个版本",
-            )
-        )
-
-    def _looks_like_wordpress_ai_title_bundle(self, text: str) -> bool:
-        return bool(
-            re.search(r"(?:标题建议|title suggestions)", text, flags=re.I)
-            or re.search(r"(?m)^\s*\d+[.)、]\s*.{4,80}$", text)
-            and len(re.findall(r"(?m)^\s*\d+[.)、]\s+", text)) >= 2
-            or re.match(r"^\s*《[^》]{4,80}》\s*(?:#{1,6}\s*)?", text)
-        )
-
-    def _strip_wordpress_ai_reasoning_noise(self, output_text: str) -> str:
-        text = output_text.strip()
-        text = re.sub(r"(?is)<think\b[^>]*>.*?</think>", " ", text)
-        text = re.sub(r"(?is)^\s*<think\b[^>]*>.*?(?:\r?\n\s*\r?\n|$)", "", text)
-        text = re.sub(
-            r"(?is)^\s*(?:reasoning|explanation|analysis)\s*[:：].*?"
-            r"(?:\r?\n\s*\r?\n|$)",
-            "",
-            text,
-        )
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n{3,}", "\n\n", text)
-        return text.strip()
-
-    def _has_wordpress_ai_reasoning_noise(self, output_text: str) -> bool:
-        return bool(
-            re.search(
-                r"(?is)<think\b|^\s*(?:reasoning|explanation|analysis)\s*[:：]",
-                output_text,
-            )
-        )
-
-    def _is_latin_heavy(self, text: str) -> bool:
-        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
-        latin_count = len(re.findall(r"[A-Za-z]", text))
-        return latin_count > max(24, cjk_count * 2)
-
-    def _extract_wordpress_ai_cjk_text(self, source_text: str, *, limit: int) -> str:
-        fragments = re.findall(
-            r"[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9，。！？、：；（）《》“”\"'\s-]{16,}",
-            source_text,
-        )
-        if not fragments:
-            return ""
-        text = max((fragment.strip() for fragment in fragments), key=len)
-        text = re.sub(r"\s+", " ", text).strip()
-        return self._truncate_wordpress_ai_text(text, limit=limit)
-
-    def _trim_incomplete_wordpress_ai_tail(self, text: str) -> str:
-        return re.sub(r"\s+\d+[.)、]?$", "", text).strip()
-
-    def _truncate_wordpress_ai_text(self, text: str, *, limit: int) -> str:
-        text = text.strip()
-        if len(text) <= limit:
-            return text
-        candidate = text[:limit].rstrip()
-        punctuation_index = max(
-            candidate.rfind("。"),
-            candidate.rfind("！"),
-            candidate.rfind("？"),
-            candidate.rfind("."),
-            candidate.rfind("!"),
-            candidate.rfind("?"),
-        )
-        if punctuation_index >= 80:
-            return candidate[: punctuation_index + 1].strip()
-        return candidate[: max(0, limit - 3)].rstrip("，,；;：:、 ") + "..."
-
-    def _validate_site_knowledge_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_site_knowledge_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except SiteKnowledgeContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
+        except ArtifactInputError as error:
             raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
+                error.error_code,
+                error.message,
+            ) from error
 
     def _build_site_knowledge_policy(self, request: RuntimeRequest) -> dict[str, object]:
         policy = self._apply_runtime_controls(dict(request.policy), request)
@@ -6543,41 +5257,6 @@ class RuntimeService:
             ),
         }
         return policy
-
-    def _validate_cloud_batch_runtime_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_cloud_batch_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except CloudBatchRuntimeContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.ability_name not in CLOUD_BATCH_RUNTIME_ABILITIES:
-            raise RuntimeExecutionContractError(
-                "cloud_batch_runtime.unknown_ability",
-                "cloud batch runtime ability_name is not supported",
-            )
-        if request.execution_pattern not in {"inline", "whole_run_offload"}:
-            raise RuntimeExecutionContractError(
-                "cloud_batch_runtime.execution_pattern_invalid",
-                "cloud batch runtime supports inline or whole_run_offload execution",
-            )
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
 
     def _build_cloud_batch_runtime_policy(self, request: RuntimeRequest) -> dict[str, object]:
         policy = self._apply_runtime_controls(dict(request.policy), request)
@@ -6611,216 +5290,6 @@ class RuntimeService:
             ),
         }
         return policy
-
-    def _validate_image_source_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_image_source_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except ImageSourceContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.ability_name not in IMAGE_SOURCE_ABILITIES:
-            raise RuntimeExecutionContractError(
-                "image_source.unknown_ability",
-                "image source ability_name is not supported",
-            )
-        if request.execution_pattern not in {"inline", "step_offload"}:
-            raise RuntimeExecutionContractError(
-                "image_source.inline_required",
-                "image source currently supports inline-compatible execution only",
-            )
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
-
-    def _validate_audio_generation_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_audio_generation_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except AudioGenerationContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.ability_name not in AUDIO_GENERATION_ABILITIES:
-            raise RuntimeExecutionContractError(
-                "audio_generation.unknown_ability",
-                "audio generation ability_name is not supported",
-            )
-        if request.execution_pattern not in {"inline", "whole_run_offload"}:
-            raise RuntimeExecutionContractError(
-                "audio_generation.execution_pattern_invalid",
-                "audio generation supports inline or whole_run_offload execution",
-            )
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
-
-    def _validate_image_generation_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_image_generation_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except ImageGenerationContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.ability_name not in IMAGE_GENERATION_ABILITIES:
-            raise RuntimeExecutionContractError(
-                "image_generation.unknown_ability",
-                "image generation ability_name is not supported",
-            )
-        if request.execution_pattern not in {"inline", "whole_run_offload"}:
-            raise RuntimeExecutionContractError(
-                "image_generation.execution_pattern_invalid",
-                "image generation supports inline or whole_run_offload execution",
-            )
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
-
-    def _validate_media_batch_plan_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_media_batch_plan_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except MediaBatchPlanContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.ability_name not in MEDIA_BATCH_PLAN_ABILITIES:
-            raise RuntimeExecutionContractError(
-                "media_batch_plan.unknown_ability",
-                "media batch plan ability_name is not supported",
-            )
-        if request.execution_pattern != "inline":
-            raise RuntimeExecutionContractError(
-                "media_batch_plan.inline_required",
-                "media batch plan currently supports inline execution only",
-            )
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
-
-    def _validate_site_ops_analysis_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_site_ops_analysis_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except SiteOpsAnalysisContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.ability_name not in SITE_OPS_ANALYSIS_ABILITIES:
-            raise RuntimeExecutionContractError(
-                "site_ops_analysis.unknown_ability",
-                "site ops analysis ability_name is not supported",
-            )
-        if request.execution_pattern not in {"inline", "whole_run_offload"}:
-            raise RuntimeExecutionContractError(
-                "site_ops_analysis.execution_pattern_unsupported",
-                "site ops analysis supports inline or whole_run_offload execution",
-            )
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
-
-    def _validate_image_context_evidence_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_image_context_evidence_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except ImageContextEvidenceContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.ability_name not in IMAGE_CONTEXT_EVIDENCE_ABILITIES:
-            raise RuntimeExecutionContractError(
-                "image_context_evidence.unknown_ability",
-                "image context evidence ability_name is not supported",
-            )
-        if request.execution_pattern != "inline":
-            raise RuntimeExecutionContractError(
-                "image_context_evidence.inline_required",
-                "image context evidence currently supports inline execution only",
-            )
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
 
     def _build_media_batch_plan_policy(self, request: RuntimeRequest) -> dict[str, object]:
         policy = self._apply_runtime_controls(dict(request.policy), request)
@@ -6910,72 +5379,6 @@ class RuntimeService:
         }
         return policy
 
-    def _validate_wordpress_ai_connector_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_wordpress_ai_connector_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except WordPressAIConnectorContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.execution_pattern != "inline":
-            raise RuntimeExecutionContractError(
-                "wp_ai_connector.inline_required",
-                "WordPress AI connector currently supports inline execution only",
-            )
-        if request.timeout_seconds > WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "wp_ai_connector.timeout_exceeded",
-                "WordPress AI connector timeout_seconds exceeds max allowed value "
-                f"{WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > 1:
-            raise RuntimeExecutionContractError(
-                "wp_ai_connector.retry_exceeded",
-                "WordPress AI connector retry_max exceeds max allowed value 1",
-            )
-        if request.retention_ttl > 86400:
-            raise RuntimeExecutionContractError(
-                "wp_ai_connector.retention_exceeded",
-                "WordPress AI connector retention_ttl exceeds max allowed value 86400",
-            )
-
-    def _validate_web_search_contract(self, request: RuntimeRequest) -> None:
-        try:
-            validate_web_search_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
-            )
-        except WebSearchContractViolation as error:
-            raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.ability_name not in WEB_SEARCH_ABILITIES:
-            raise RuntimeExecutionContractError(
-                "web_search.unknown_ability",
-                "web search ability_name is not supported",
-            )
-        if request.execution_pattern != "inline":
-            raise RuntimeExecutionContractError(
-                "web_search.inline_required",
-                "web search currently supports inline execution only",
-            )
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
-
     def _build_web_search_policy(self, request: RuntimeRequest) -> dict[str, object]:
         policy = self._apply_runtime_controls(dict(request.policy), request)
         policy["allow_fallback"] = False
@@ -6992,24 +5395,6 @@ class RuntimeService:
             "provider_source": "cloud_managed",
         }
         return policy
-
-    def _publish_queue_signal(self, run_id: str) -> None:
-        if self.runtime_queue is None:
-            return
-        try:
-            self.runtime_queue.publish(run_id)
-        except RuntimeQueueError:
-            # The worker also polls queued runs from the database; a lost wake-up signal
-            # must not turn a valid queued run into a failed request.
-            return
-
-    def _consume_queue_signal(self, timeout_seconds: int) -> str | None:
-        if self.runtime_queue is None:
-            return None
-        try:
-            return self.runtime_queue.consume(timeout_seconds)
-        except RuntimeQueueError:
-            return None
 
     def _merge_policy(
         self,
@@ -7053,81 +5438,6 @@ class RuntimeService:
         if site.status != SITE_STATUS_ACTIVE:
             raise RuntimeSiteInactiveError(site_id, site.status)
         return site
-
-    def _build_execution_contract(
-        self,
-        *,
-        request: RuntimeRequest,
-        resolution: RoutingResolution,
-        site: Any,
-    ) -> dict[str, object]:
-        if not str(request.ability_name or "").strip():
-            raise RuntimeExecutionContractError(
-                "runtime.contract_invalid",
-                "ability_name is required for hosted runtime execution",
-            )
-        if not str(request.contract_version or "").strip():
-            raise RuntimeExecutionContractError(
-                "runtime.contract_version_required",
-                "contract_version is required for hosted runtime execution",
-            )
-        if request.profile_id != resolution.profile_id:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_profile_mismatch",
-                "profile_id does not match the resolved routing profile",
-            )
-        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_timeout_exceeded",
-                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
-            )
-        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retry_exceeded",
-                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
-            )
-        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_exceeded",
-                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
-            )
-        if (
-            request.storage_mode == RUNTIME_STORAGE_MODE_FULL_STORE_WITH_TTL
-            and request.retention_ttl <= 0
-        ):
-            raise RuntimeExecutionContractError(
-                "runtime.contract_retention_required",
-                "full_store_with_ttl requires a positive retention_ttl",
-            )
-
-        task_backend = normalize_runtime_task_backend(request.task_backend)
-        callback_mode = str(task_backend.get("callback_mode") or "")
-        callback_target = self._resolve_callback_target(
-            site=site,
-            request=request,
-            callback_mode=callback_mode,
-        )
-        if request.execution_pattern == "whole_run_offload" and not bool(
-            task_backend.get("enabled")
-        ):
-            raise RuntimeExecutionContractError(
-                "runtime.contract_task_backend_required",
-                "whole_run_offload requires task_backend.enabled=true",
-            )
-
-        return {
-            "ability_name": request.ability_name,
-            "contract_version": request.contract_version,
-            "profile_id": resolution.profile_id,
-            "execution_pattern": request.execution_pattern,
-            "data_classification": request.data_classification,
-            "storage_mode": request.storage_mode,
-            "timeout_seconds": max(0, request.timeout_seconds),
-            "retry_max": max(0, request.retry_max),
-            "retention_ttl": max(0, request.retention_ttl),
-            "task_backend": task_backend,
-            "callback_target": callback_target,
-        }
 
     def _enforce_batch_limits(
         self,
@@ -7186,201 +5496,6 @@ class RuntimeService:
             return "media_nightly_image_optimize"
         return ""
 
-    def _resolve_callback_target(
-        self,
-        *,
-        site: Any,
-        request: RuntimeRequest,
-        callback_mode: str,
-    ) -> dict[str, object]:
-        registered = self._resolve_registered_callback_config(site)
-        requires_callback = callback_mode in {"polling_preferred", "terminal_callback_required"}
-        if request.callback_url:
-            raise RuntimeCallbackConfigurationError(
-                request.site_id,
-                "runtime callback_url overrides are not accepted; "
-                "register runtime_callbacks.terminal on the site instead",
-            )
-        if not requires_callback:
-            return {}
-        if not bool(registered.get("enabled")):
-            if callback_mode == "terminal_callback_required":
-                raise RuntimeCallbackConfigurationError(
-                    request.site_id,
-                    "terminal callback is disabled for the site",
-                )
-            return {}
-        callback_url = str(registered.get("callback_url") or "").strip()
-        key_id = str(registered.get("key_id") or "").strip()
-        secret = str(registered.get("secret") or "").strip()
-        secret_error = str(registered.get("secret_error") or "").strip()
-        if secret_error:
-            raise RuntimeCallbackConfigurationError(
-                request.site_id,
-                secret_error,
-            )
-        if not callback_url or not key_id or not secret:
-            if callback_mode == "terminal_callback_required":
-                raise RuntimeCallbackConfigurationError(
-                    request.site_id,
-                    "terminal callback requires registered callback_url, key_id, and secret",
-                )
-            return {}
-        return {
-            "source": "site_registered",
-            "callback_url": callback_url,
-            "key_id": key_id,
-            "callback_id": str(registered.get("callback_id") or "runtime_terminal"),
-            "registered": True,
-        }
-
-    def _resolve_registered_callback_config(self, site: Any) -> dict[str, object]:
-        metadata = getattr(site, "metadata_json", None) or {}
-        callbacks = metadata.get("runtime_callbacks")
-        callback = callbacks.get("terminal") if isinstance(callbacks, dict) else {}
-        callback = callback if isinstance(callback, dict) else {}
-
-        enabled_raw = callback.get("enabled")
-        if enabled_raw is None:
-            enabled_raw = metadata.get("runtime_terminal_callback_enabled")
-
-        secret_ciphertext = str(callback.get("secret_ciphertext") or "").strip()
-        legacy_secret = str(
-            callback.get("secret") or metadata.get("runtime_terminal_callback_secret") or ""
-        ).strip()
-        secret = ""
-        secret_error = ""
-        if secret_ciphertext:
-            try:
-                secret = decrypt_runtime_terminal_callback_secret(
-                    secret_ciphertext,
-                    settings=self.settings,
-                )
-            except RuntimeError as error:
-                secret_error = str(error)
-        elif legacy_secret:
-            secret_error = (
-                "terminal callback secret must be re-saved as ciphertext before hosted callbacks "
-                "can run"
-            )
-
-        return {
-            "enabled": True if enabled_raw is None else bool(enabled_raw),
-            "callback_url": str(
-                callback.get("callback_url")
-                or callback.get("url")
-                or metadata.get("runtime_terminal_callback_url")
-                or ""
-            ).strip(),
-            "key_id": str(
-                callback.get("key_id") or metadata.get("runtime_terminal_callback_key_id") or ""
-            ).strip(),
-            "secret": secret.strip(),
-            "secret_error": secret_error.strip(),
-            "callback_id": str(
-                callback.get("callback_id")
-                or metadata.get("runtime_terminal_callback_id")
-                or "runtime_terminal"
-            ).strip()
-            or "runtime_terminal",
-        }
-
-    def _apply_execution_contract(
-        self,
-        merged_policy: dict[str, object],
-        *,
-        execution_contract: dict[str, object],
-    ) -> dict[str, object]:
-        policy = dict(merged_policy)
-        timeout_seconds = max(
-            0,
-            self._coerce_int(execution_contract.get("timeout_seconds"), default=0),
-        )
-        retry_max = max(0, self._coerce_int(execution_contract.get("retry_max"), default=0))
-        retention_ttl = max(
-            0,
-            self._coerce_int(execution_contract.get("retention_ttl"), default=0),
-        )
-        task_backend = execution_contract.get("task_backend")
-        callback_target = execution_contract.get("callback_target")
-        callback_target = callback_target if isinstance(callback_target, dict) else {}
-
-        if timeout_seconds > 0:
-            policy["timeout_seconds"] = timeout_seconds
-            policy["timeout_ms"] = timeout_seconds * 1000
-        if retry_max > 0 or execution_contract.get("retry_max") == 0:
-            policy["retry_max"] = retry_max
-            policy["max_retries"] = retry_max
-        if retention_ttl > 0:
-            policy["retention_ttl"] = retention_ttl
-        if isinstance(task_backend, dict) and task_backend:
-            policy["task_backend"] = task_backend
-        policy["storage_mode"] = str(
-            execution_contract.get("storage_mode") or RUNTIME_STORAGE_MODE_RESULT_ONLY
-        )
-        policy["execution_contract"] = {
-            "ability_name": str(execution_contract.get("ability_name") or ""),
-            "contract_version": str(execution_contract.get("contract_version") or ""),
-            "profile_id": str(execution_contract.get("profile_id") or ""),
-            "execution_pattern": str(execution_contract.get("execution_pattern") or ""),
-            "data_classification": str(execution_contract.get("data_classification") or ""),
-            "storage_mode": str(execution_contract.get("storage_mode") or ""),
-            "timeout_seconds": timeout_seconds,
-            "retry_max": retry_max,
-            "retention_ttl": retention_ttl,
-            "task_backend": task_backend if isinstance(task_backend, dict) else {},
-        }
-        if callback_target:
-            policy["runtime_callback"] = callback_target
-            policy.pop("callback_url", None)
-        else:
-            policy.pop("runtime_callback", None)
-            policy.pop("callback_url", None)
-        return policy
-
-    def _apply_wordpress_ai_connector_managed_policy(
-        self,
-        merged_policy: dict[str, object],
-        *,
-        default_policy: dict[str, object],
-        profile_id: str,
-    ) -> dict[str, object]:
-        if default_policy.get("managed_surface") != "wordpress_ai_connector":
-            return merged_policy
-
-        policy = dict(merged_policy)
-        spec = resolve_wordpress_ai_connector_profile_spec(profile_id)
-        timeout_ms = max(1, self._coerce_int(default_policy.get("timeout_ms"), default=30_000))
-        timeout_seconds = max(1, int((timeout_ms + 999) / 1000))
-        max_retries = max(0, self._coerce_int(default_policy.get("max_retries"), default=0))
-        task_group = str(default_policy.get("task_group") or (spec.group_id if spec else ""))
-        routing_intent = str(
-            default_policy.get("routing_intent") or (spec.routing_intent if spec else "")
-        )
-        policy["timeout_ms"] = timeout_ms
-        policy["timeout_seconds"] = timeout_seconds
-        policy["max_retries"] = max_retries
-        policy["retry_max"] = max_retries
-        policy["allow_fallback"] = bool(default_policy.get("allow_fallback", True))
-        policy["managed_surface"] = "wordpress_ai_connector"
-        if task_group:
-            policy["task_group"] = task_group
-        if routing_intent:
-            policy["routing_intent"] = routing_intent
-
-        execution_contract = policy.get("execution_contract")
-        if isinstance(execution_contract, dict):
-            execution_contract = dict(execution_contract)
-            execution_contract["timeout_seconds"] = timeout_seconds
-            execution_contract["retry_max"] = max_retries
-            execution_contract["managed_surface"] = "wordpress_ai_connector"
-            if task_group:
-                execution_contract["task_group"] = task_group
-            if routing_intent:
-                execution_contract["routing_intent"] = routing_intent
-            policy["execution_contract"] = execution_contract
-        return policy
-
     def _apply_routing_snapshot(
         self,
         merged_policy: dict[str, object],
@@ -7432,7 +5547,7 @@ class RuntimeService:
                 policy["task_backend"] = task_backend
                 continue
             policy[key] = value
-        policy = self._enforce_policy_within_execution_contract(policy)
+        policy = self.contract_validator.enforce_policy_within_execution_contract(policy)
         policy["commercial_policy"] = {
             "decision_code": str(commercial_decision.get("decision_code") or ""),
             "policy_actions": commercial_decision.get("policy_actions")
@@ -7440,82 +5555,6 @@ class RuntimeService:
             else [],
             "runtime_policy_overrides": overrides,
         }
-        return policy
-
-    def _enforce_policy_within_execution_contract(
-        self,
-        policy: dict[str, object],
-    ) -> dict[str, object]:
-        execution_contract = policy.get("execution_contract")
-        execution_contract = execution_contract if isinstance(execution_contract, dict) else {}
-        if not execution_contract:
-            return policy
-
-        timeout_seconds = max(0, self._coerce_int(policy.get("timeout_seconds"), default=0))
-        contract_timeout_seconds = max(
-            0,
-            self._coerce_int(execution_contract.get("timeout_seconds"), default=0),
-        )
-        if contract_timeout_seconds > 0 and timeout_seconds > contract_timeout_seconds:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_override_out_of_range",
-                "commercial override may not increase timeout_seconds beyond the "
-                "execution contract",
-            )
-
-        retry_max = max(0, self._coerce_int(policy.get("retry_max"), default=0))
-        contract_retry_max = max(
-            0,
-            self._coerce_int(execution_contract.get("retry_max"), default=0),
-        )
-        if retry_max > contract_retry_max:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_override_out_of_range",
-                "commercial override may not increase retry_max beyond the execution contract",
-            )
-
-        retention_ttl = max(0, self._coerce_int(policy.get("retention_ttl"), default=0))
-        contract_retention_ttl = max(
-            0,
-            self._coerce_int(execution_contract.get("retention_ttl"), default=0),
-        )
-        if contract_retention_ttl > 0 and retention_ttl > contract_retention_ttl:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_override_out_of_range",
-                "commercial override may not increase retention_ttl beyond the execution contract",
-            )
-
-        contract_task_backend = execution_contract.get("task_backend")
-        contract_task_backend = (
-            contract_task_backend if isinstance(contract_task_backend, dict) else {}
-        )
-        task_backend = policy.get("task_backend")
-        task_backend = task_backend if isinstance(task_backend, dict) else {}
-
-        if bool(task_backend.get("enabled")) and not bool(contract_task_backend.get("enabled")):
-            raise RuntimeExecutionContractError(
-                "runtime.contract_override_out_of_range",
-                "commercial override may not enable task_backend when the execution "
-                "contract disabled it",
-            )
-        if not bool(task_backend.get("enabled")):
-            return policy
-        contract_mode = str(contract_task_backend.get("mode") or "")
-        override_mode = str(task_backend.get("mode") or "")
-        if contract_mode and override_mode and override_mode != contract_mode:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_override_out_of_range",
-                "commercial override may not replace task_backend.mode outside the "
-                "execution contract",
-            )
-        contract_callback_mode = str(contract_task_backend.get("callback_mode") or "")
-        override_callback_mode = str(task_backend.get("callback_mode") or "")
-        if contract_callback_mode and override_callback_mode not in {"", contract_callback_mode}:
-            raise RuntimeExecutionContractError(
-                "runtime.contract_override_out_of_range",
-                "commercial override may not widen task_backend.callback_mode beyond "
-                "the execution contract",
-            )
         return policy
 
     def _serialize_routing_candidate(self, candidate: RoutingCandidate) -> dict[str, object]:
@@ -7582,12 +5621,8 @@ class RuntimeService:
         merged_policy: dict[str, object],
     ) -> bool:
         if request.execution_pattern == "whole_run_offload":
-            return self._is_task_backend_enabled(merged_policy)
+            return self.run_projector.is_task_backend_enabled(merged_policy)
         return False
-
-    def _is_task_backend_enabled(self, merged_policy: dict[str, object]) -> bool:
-        task_backend = merged_policy.get("task_backend")
-        return isinstance(task_backend, dict) and bool(task_backend.get("enabled"))
 
     def _build_execution_response(
         self,
@@ -7597,10 +5632,16 @@ class RuntimeService:
         idempotent_replay: bool,
     ) -> RuntimeExecutionResponse:
         provider_calls = repository.list_provider_calls(run.run_id)
-        failure_details = self._build_failure_details(run, provider_calls)
-        response_result = _get_transient_result_json(run)
+        failure_details = self.run_projector.build_failure_details(run, provider_calls)
+        response_result = get_transient_runtime_result(run)
         if not isinstance(response_result, dict):
             response_result = run.result_json or {}
+        response_result = project_media_artifact_lifecycle(
+            response_result,
+            session=repository.session,
+            site_id=run.site_id,
+            run_id=run.run_id,
+        )
         result = build_analysis_result_envelope(
             response_result,
             ability_family=run.ability_family or "text",
@@ -7624,10 +5665,10 @@ class RuntimeService:
             retryable=failure_details.retryable,
             retry_exhausted=failure_details.retry_exhausted,
             provider_call_count=len(provider_calls),
-            execution_context=self._build_execution_context(run),
-            task_backend=self._build_task_backend_payload(run),
-            run_lifecycle=self._build_run_lifecycle(run),
-            run_state=self._build_run_state_payload(run, provider_calls),
+            execution_context=self.run_projector.build_execution_context(run),
+            task_backend=self.run_projector.build_task_backend_payload(run),
+            run_lifecycle=self.run_projector.build_run_lifecycle(run),
+            run_state=self.run_projector.build_run_state_payload(run, provider_calls),
             result=self._apply_analysis_envelope(result, run),
         )
 
@@ -7642,302 +5683,7 @@ class RuntimeService:
         )
 
     def cleanup_expired_run_results(self, *, now: datetime | None = None) -> int:
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            purged = repository.purge_expired_run_results(now=now)
-            session.commit()
-            return purged
-
-    def _dispatch_single_pending_callback(self) -> dict[str, object] | None:
-        callback_request = self._claim_next_pending_callback()
-        if callback_request is None:
-            return None
-
-        attempted_at = datetime.now(UTC)
-        dispatcher = self.callback_dispatcher
-        if dispatcher is None:
-            return None
-        try:
-            result = dispatcher.dispatch(callback_request)
-        except RuntimeCallbackDispatchError as error:
-            retry_at = self._resolve_callback_retry_at(
-                callback_request.run_id,
-                retryable=error.retryable,
-                attempted_at=attempted_at,
-            )
-            with get_session(self.database_url) as session:
-                repository = RuntimeRepository(session)
-                run = repository.get_run(callback_request.run_id)
-                if run is None:
-                    session.commit()
-                    return None
-                repository.mark_callback_delivery_failed(
-                    run,
-                    error_code=error.error_code,
-                    error_message=error.message,
-                    retry_at=retry_at,
-                )
-                session.commit()
-                return {
-                    "run_id": run.run_id,
-                    "callback_status": run.callback_status,
-                    "trace_id": run.trace_id,
-                }
-
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            run = repository.get_run(callback_request.run_id)
-            if run is None:
-                session.commit()
-                return None
-            repository.mark_callback_delivered(run, delivered_at=attempted_at)
-            session.commit()
-            return {
-                "run_id": run.run_id,
-                "callback_status": run.callback_status,
-                "trace_id": run.trace_id,
-                "status_code": result.status_code,
-            }
-
-    def _build_failure_details(
-        self,
-        run: RunRecord,
-        provider_calls: list[ProviderCallRecord],
-    ) -> RuntimeFailureDetails:
-        error_taxonomy = get_error_taxonomy(run.error_code)
-        policy = run.policy_json if isinstance(run.policy_json, dict) else {}
-        max_retries = max(0, self._coerce_int(policy.get("max_retries"), default=0))
-        last_provider_call = provider_calls[-1] if provider_calls else None
-        retry_exhausted = False
-        if (
-            run.status == "failed"
-            and last_provider_call is not None
-            and getattr(last_provider_call, "error_code", None)
-        ):
-            retry_exhausted = bool(
-                error_taxonomy.retryable
-                and getattr(last_provider_call, "retry_count", 0) >= max_retries
-            )
-
-        return RuntimeFailureDetails(
-            error_stage=error_taxonomy.error_stage,
-            retryable=error_taxonomy.retryable,
-            retry_exhausted=retry_exhausted,
-        )
-
-    def _build_request_fingerprint(
-        self,
-        request: RuntimeRequest,
-        merged_policy: dict[str, object],
-    ) -> str:
-        canonical_payload = json.dumps(
-            {
-                "site_id": request.site_id,
-                "ability_name": request.ability_name,
-                "ability_family": request.ability_family,
-                "skill_id": request.skill_id,
-                "workflow_id": request.workflow_id,
-                "contract_version": request.contract_version,
-                "channel": request.channel,
-                "execution_kind": request.execution_kind,
-                "execution_tier": request.execution_tier,
-                "execution_pattern": request.execution_pattern,
-                "data_classification": request.data_classification,
-                "profile_id": request.profile_id,
-                "input": request.input_payload,
-                "policy": merged_policy,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        return hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
-
-    def _public_execution_pattern(self, execution_pattern: str) -> str:
-        if execution_pattern == "whole_run_offload":
-            return "whole_run_offload"
-        return "inline"
-
-    def _build_execution_context(self, run: RunRecord) -> RuntimeExecutionContext:
-        policy = run.policy_json if isinstance(run.policy_json, dict) else {}
-        return RuntimeExecutionContext(
-            skill_id=run.skill_id or "",
-            workflow_id=run.workflow_id or "",
-            contract_version=run.contract_version or "",
-            ability_family=run.ability_family or "text",
-            execution_tier=run.execution_tier,
-            execution_pattern=self._public_execution_pattern(run.execution_pattern),
-            data_classification=run.data_classification,
-            storage_mode=str(policy.get("storage_mode") or RUNTIME_STORAGE_MODE_RESULT_ONLY),
-        )
-
-    def _build_execution_context_payload(self, run: RunRecord) -> dict[str, str]:
-        context = self._build_execution_context(run)
-        return {
-            "skill_id": context.skill_id,
-            "workflow_id": context.workflow_id,
-            "contract_version": context.contract_version,
-            "ability_family": context.ability_family,
-            "execution_tier": context.execution_tier,
-            "execution_pattern": context.execution_pattern,
-            "data_classification": context.data_classification,
-            "storage_mode": context.storage_mode,
-        }
-
-    def _build_task_backend_payload(self, run: RunRecord) -> dict[str, object]:
-        policy = run.policy_json if isinstance(run.policy_json, dict) else {}
-        return self._build_task_backend_payload_from_policy(policy, run_status=run.status)
-
-    def _build_run_lifecycle(self, run: RunRecord) -> dict[str, object]:
-        policy = run.policy_json if isinstance(run.policy_json, dict) else {}
-        phase_map = {
-            "queued": "queued",
-            "running": "processing",
-            "succeeded": "terminal",
-            "failed": "terminal",
-            "canceled": "terminal",
-        }
-        callback_requested = self._has_callback_target(policy)
-        retention_ttl = max(0, self._coerce_int(policy.get("retention_ttl"), default=0))
-        terminal_status = run.status if run.status in {"succeeded", "failed", "canceled"} else ""
-        cancel_supported = self._supports_public_cancel(run.execution_pattern, policy)
-
-        return {
-            "phase": phase_map.get(run.status, "requested"),
-            "queue_mode": self._get_queue_mode(run.execution_pattern, policy),
-            "requested_at": self._serialize_timestamp(run.started_at),
-            "processing_started_at": self._serialize_timestamp(run.processing_started_at),
-            "terminal_at": self._serialize_timestamp(run.finished_at),
-            "terminal_status": terminal_status,
-            "cancel": {
-                "supported": cancel_supported,
-                "state": self._resolve_cancel_state(run, supported=cancel_supported),
-                "requested_at": self._serialize_timestamp(run.cancel_requested_at),
-                "canceled_at": self._serialize_timestamp(run.canceled_at),
-            },
-            "callback": {
-                "requested": callback_requested,
-                "mode": self._get_callback_mode(policy),
-                "url_present": callback_requested,
-                "dispatch_status": self._resolve_callback_dispatch_status(run, callback_requested),
-                "attempt_count": max(0, int(run.callback_attempt_count or 0)),
-                "last_attempt_at": self._serialize_timestamp(run.callback_last_attempt_at),
-                "delivered_at": self._serialize_timestamp(run.callback_delivered_at),
-                "next_attempt_at": self._serialize_timestamp(run.callback_next_attempt_at),
-                "last_error_code": run.callback_last_error_code or "",
-            },
-            "retention": {
-                "ttl_seconds": retention_ttl,
-                "expires_at": self._serialize_timestamp(run.retention_expires_at),
-                "state": self._get_retention_state(run, retention_ttl),
-                "result_purged_at": self._serialize_timestamp(run.result_purged_at),
-            },
-        }
-
-    def _build_run_state_payload(
-        self,
-        run: RunRecord,
-        provider_calls: list[ProviderCallRecord],
-    ) -> dict[str, object]:
-        result = run.result_json if isinstance(run.result_json, dict) else {}
-        result_state = result.get("execution_state")
-        result_state = result_state if isinstance(result_state, dict) else {}
-        lifecycle = self._build_run_lifecycle(run)
-        failure_details = self._build_failure_details(run, provider_calls)
-        failed_provider_call = next(
-            (call for call in reversed(provider_calls) if call.error_code),
-            None,
-        )
-        retryable = bool(
-            result_state.get("retry", {}).get("retryable")
-            if isinstance(result_state.get("retry"), dict)
-            else failure_details.retryable
-        )
-        failed_action_ids: list[object] = []
-        if isinstance(result_state.get("retry"), dict):
-            raw_failed_action_ids = result_state["retry"].get("failed_action_ids")
-            if isinstance(raw_failed_action_ids, list):
-                failed_action_ids = raw_failed_action_ids[:10]
-
-        return {
-            "contract_version": "cloud_run_state.v1",
-            "state_machine": "requested->queued->running->terminal",
-            "phase": lifecycle.get("phase", "requested"),
-            "status": run.status,
-            "terminal_status": lifecycle.get("terminal_status", ""),
-            "worker_phase": str(result.get("worker_phase") or ""),
-            "partial_success": bool(result_state.get("partial_success")),
-            "retry": {
-                "retryable": retryable,
-                "retry_owner": (
-                    "cloud_runtime"
-                    if retryable
-                    else "not_needed"
-                    if run.status == "succeeded"
-                    else "operator_review"
-                ),
-                "retry_exhausted": failure_details.retry_exhausted,
-                "failed_action_ids": failed_action_ids,
-                "operator_next_action": self._resolve_run_state_next_action(
-                    run,
-                    retryable=retryable,
-                    failed_action_ids=failed_action_ids,
-                ),
-                "resubmit_requires_new_idempotency_key": retryable,
-                "retry_source": (
-                    "resubmit_runtime_execute_payload"
-                    if self._is_cloud_batch_runtime_run(run)
-                    else "runtime_specific"
-                ),
-            },
-            "idempotency": {
-                "idempotency_key": run.idempotency_key or "",
-                "request_fingerprint": run.request_fingerprint or "",
-                "replay_safe": bool(run.idempotency_key),
-                "canonical_truth": "run_records",
-            },
-            "error": {
-                "error_code": run.error_code or "",
-                "error_message": run.error_message or "",
-                "error_stage": failure_details.error_stage,
-                "provider_error_code": failed_provider_call.error_code
-                if failed_provider_call is not None
-                else "",
-            },
-            "observability": {
-                "trace_id": run.trace_id,
-                "provider_call_count": len(provider_calls),
-                "usage_meter_truth": "usage_meter_events",
-                "run_record_truth": "run_records",
-            },
-            "boundary": {
-                "cloud_role": "runtime_detail",
-                "cloud_scheduler_truth": False,
-                "direct_wordpress_write": False,
-            },
-        }
-
-    def _resolve_run_state_next_action(
-        self,
-        run: RunRecord,
-        *,
-        retryable: bool,
-        failed_action_ids: list[object],
-    ) -> str:
-        if run.status == "queued":
-            return "poll_run_status"
-        if run.status == "running":
-            return "wait_for_terminal_result"
-        if retryable:
-            return (
-                "retry_failed_cloud_analysis"
-                if failed_action_ids
-                else "resubmit_runtime_request_with_new_idempotency_key"
-            )
-        if run.status == "failed":
-            return "inspect_runtime_failure_detail"
-        if run.status == "canceled":
-            return "resubmit_if_operator_still_needs_result"
-        return "review_result"
+        return self.run_lifecycle_service.cleanup_expired_run_results(now=now)
 
     def _serialize_runtime_diagnostic_run(self, run: RunRecord) -> dict[str, object]:
         policy = run.policy_json if isinstance(run.policy_json, dict) else {}
@@ -7949,20 +5695,28 @@ class RuntimeService:
             "ability_name": run.ability_name,
             "ability_family": run.ability_family,
             "profile_id": run.profile_id,
-            "execution_pattern": self._public_execution_pattern(run.execution_pattern),
-            "callback_requested": self._has_callback_target(policy),
+            "execution_pattern": self.run_projector.public_execution_pattern(run.execution_pattern),
+            "callback_requested": self.run_projector.has_callback_target(policy),
             "callback_status": run.callback_status,
             "callback_attempt_count": max(0, int(run.callback_attempt_count or 0)),
-            "callback_next_attempt_at": self._serialize_timestamp(run.callback_next_attempt_at),
-            "callback_last_attempt_at": self._serialize_timestamp(run.callback_last_attempt_at),
+            "callback_next_attempt_at": self.run_projector.serialize_timestamp(
+                run.callback_next_attempt_at
+            ),
+            "callback_last_attempt_at": self.run_projector.serialize_timestamp(
+                run.callback_last_attempt_at
+            ),
             "callback_last_error_code": run.callback_last_error_code or "",
-            "cancel_requested_at": self._serialize_timestamp(run.cancel_requested_at),
-            "canceled_at": self._serialize_timestamp(run.canceled_at),
-            "retention_expires_at": self._serialize_timestamp(run.retention_expires_at),
-            "result_purged_at": self._serialize_timestamp(run.result_purged_at),
-            "started_at": self._serialize_timestamp(run.started_at),
-            "processing_started_at": self._serialize_timestamp(run.processing_started_at),
-            "finished_at": self._serialize_timestamp(run.finished_at),
+            "cancel_requested_at": self.run_projector.serialize_timestamp(run.cancel_requested_at),
+            "canceled_at": self.run_projector.serialize_timestamp(run.canceled_at),
+            "retention_expires_at": self.run_projector.serialize_timestamp(
+                run.retention_expires_at
+            ),
+            "result_purged_at": self.run_projector.serialize_timestamp(run.result_purged_at),
+            "started_at": self.run_projector.serialize_timestamp(run.started_at),
+            "processing_started_at": self.run_projector.serialize_timestamp(
+                run.processing_started_at
+            ),
+            "finished_at": self.run_projector.serialize_timestamp(run.finished_at),
             "suggested_actions": self._build_runtime_suggested_actions(run),
         }
 
@@ -7977,7 +5731,7 @@ class RuntimeService:
         nightly_run_detail = self._dict_or_empty(result.get("nightly_run_detail"))
         operator_summary = self._dict_or_empty(nightly_run_detail.get("operator_summary"))
         retry_guidance = self._dict_or_empty(result.get("retry_guidance"))
-        run_state = self._build_run_state_payload(run, provider_calls)
+        run_state = self.run_projector.build_run_state_payload(run, provider_calls)
         return {
             "run_id": run.run_id,
             "canonical_run_id": run.canonical_run_id or "",
@@ -7987,9 +5741,11 @@ class RuntimeService:
             "worker_phase": str(result.get("worker_phase") or ""),
             "trace_id": run.trace_id,
             "idempotency_key": run.idempotency_key or "",
-            "started_at": self._serialize_timestamp(run.started_at),
-            "processing_started_at": self._serialize_timestamp(run.processing_started_at),
-            "finished_at": self._serialize_timestamp(run.finished_at),
+            "started_at": self.run_projector.serialize_timestamp(run.started_at),
+            "processing_started_at": self.run_projector.serialize_timestamp(
+                run.processing_started_at
+            ),
+            "finished_at": self.run_projector.serialize_timestamp(run.finished_at),
             "error_code": run.error_code or "",
             "error_message": run.error_message or "",
             "summary": {
@@ -8034,7 +5790,7 @@ class RuntimeService:
         }
 
     def _is_queued_run_stale(self, run: RunRecord, current_time: datetime) -> bool:
-        started_at = self._normalize_timestamp(run.started_at)
+        started_at = self.run_projector.normalize_timestamp(run.started_at)
         return run.status == "queued" and started_at <= (
             current_time - timedelta(seconds=RUNTIME_DIAGNOSTIC_QUEUED_STALE_AFTER_SECONDS)
         )
@@ -8042,13 +5798,13 @@ class RuntimeService:
     def _is_running_run_stale(self, run: RunRecord, current_time: datetime) -> bool:
         if run.status != "running" or run.processing_started_at is None:
             return False
-        processing_started_at = self._normalize_timestamp(run.processing_started_at)
+        processing_started_at = self.run_projector.normalize_timestamp(run.processing_started_at)
         return processing_started_at <= (
             current_time - timedelta(seconds=RUNTIME_DIAGNOSTIC_RUNNING_STALE_AFTER_SECONDS)
         )
 
     def _can_redeliver_callback(self, run: RunRecord, current_time: datetime) -> bool:
-        if run.finished_at is None or not self._has_callback_target(
+        if run.finished_at is None or not self.run_projector.has_callback_target(
             run.policy_json if isinstance(run.policy_json, dict) else {}
         ):
             return False
@@ -8058,7 +5814,7 @@ class RuntimeService:
             run.callback_status == RUN_CALLBACK_STATUS_PENDING
             and run.callback_next_attempt_at is not None
         ):
-            return self._normalize_timestamp(run.callback_next_attempt_at) <= (
+            return self.run_projector.normalize_timestamp(run.callback_next_attempt_at) <= (
                 current_time - timedelta(seconds=RUNTIME_DIAGNOSTIC_CALLBACK_OVERDUE_AFTER_SECONDS)
             )
         return False
@@ -8204,9 +5960,9 @@ class RuntimeService:
         current_time: datetime,
     ) -> int:
         if run.status == "running" and run.processing_started_at is not None:
-            started_at = self._normalize_timestamp(run.processing_started_at)
+            started_at = self.run_projector.normalize_timestamp(run.processing_started_at)
         else:
-            started_at = self._normalize_timestamp(run.started_at)
+            started_at = self.run_projector.normalize_timestamp(run.started_at)
         return max(0, int((current_time - started_at).total_seconds()))
 
     def _summarize_backlog_status(
@@ -8356,196 +6112,8 @@ class RuntimeService:
             "path": event.path or "",
             "trace_id": event.trace_id or "",
             "payload": event.payload_json or {},
-            "created_at": self._serialize_timestamp(event.created_at),
+            "created_at": self.run_projector.serialize_timestamp(event.created_at),
         }
-
-    def _build_planned_run_lifecycle(
-        self,
-        *,
-        request: RuntimeRequest,
-        policy: dict[str, object],
-        initial_phase: str,
-    ) -> dict[str, object]:
-        callback_requested = self._has_callback_target(policy)
-        retention_ttl = max(0, self._coerce_int(policy.get("retention_ttl"), default=0))
-        cancel_supported = self._supports_public_cancel(request.execution_pattern, policy)
-        return {
-            "phase": "requested",
-            "next_phase": initial_phase,
-            "queue_mode": self._get_queue_mode(request.execution_pattern, policy),
-            "cancel": {
-                "supported": cancel_supported,
-                "state": "available" if cancel_supported else "not_available",
-                "requested_at": None,
-                "canceled_at": None,
-            },
-            "callback": {
-                "requested": callback_requested,
-                "mode": self._get_callback_mode(policy),
-                "url_present": callback_requested,
-                "dispatch_status": "pending_terminal" if callback_requested else "not_requested",
-                "attempt_count": 0,
-                "last_attempt_at": None,
-                "delivered_at": None,
-                "next_attempt_at": None,
-                "last_error_code": "",
-            },
-            "retention": {
-                "ttl_seconds": retention_ttl,
-                "state": "pending_terminal" if retention_ttl > 0 else "disabled",
-            },
-        }
-
-    def _get_queue_mode(
-        self,
-        execution_pattern: str,
-        policy: dict[str, object],
-    ) -> str:
-        if execution_pattern == "whole_run_offload" and self._is_task_backend_enabled(policy):
-            return "queue_backed"
-        return "inline"
-
-    def _get_callback_mode(self, policy: dict[str, object]) -> str:
-        task_backend = policy.get("task_backend")
-        if isinstance(task_backend, dict):
-            return str(task_backend.get("callback_mode") or "")
-        return ""
-
-    def _get_retention_state(self, run: RunRecord, retention_ttl: int) -> str:
-        if retention_ttl <= 0:
-            return "disabled"
-        if run.finished_at is None:
-            return "pending_terminal"
-        if self._is_run_result_expired(run):
-            return "expired"
-        return "retained"
-
-    def _is_run_result_expired(self, run: RunRecord) -> bool:
-        if run.result_purged_at is not None:
-            return True
-        if run.retention_expires_at is None:
-            return False
-        retention_expires_at = self._normalize_timestamp(run.retention_expires_at)
-        return retention_expires_at <= datetime.now(UTC)
-
-    def _serialize_timestamp(self, value: datetime | None) -> str | None:
-        if value is None:
-            return None
-        return self._normalize_timestamp(value).isoformat()
-
-    def _normalize_timestamp(self, value: datetime) -> datetime:
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
-
-    def _build_task_backend_payload_from_policy(
-        self,
-        policy: dict[str, object],
-        *,
-        run_status: str,
-    ) -> dict[str, object]:
-        raw_task_backend = policy.get("task_backend")
-        raw_task_backend = raw_task_backend if isinstance(raw_task_backend, dict) else {}
-        enabled = bool(raw_task_backend.get("enabled"))
-        callback_target = self._get_callback_target(policy)
-        timeout_seconds = max(0, self._coerce_int(policy.get("timeout_seconds"), default=0))
-        retry_max = max(0, self._coerce_int(policy.get("retry_max"), default=0))
-        retention_ttl = max(0, self._coerce_int(policy.get("retention_ttl"), default=0))
-
-        if (
-            not raw_task_backend
-            and not callback_target
-            and timeout_seconds <= 0
-            and retry_max <= 0
-            and retention_ttl <= 0
-        ):
-            return {}
-
-        status_map = {
-            "queued": "queued",
-            "running": "running",
-            "succeeded": "completed",
-            "failed": "failed",
-            "canceled": "canceled",
-        }
-
-        return {
-            "enabled": enabled,
-            "mode": str(raw_task_backend.get("mode") or ""),
-            "callback_mode": str(raw_task_backend.get("callback_mode") or ""),
-            "polling_interval_sec": max(
-                0,
-                self._coerce_int(raw_task_backend.get("polling_interval_sec"), default=0),
-            ),
-            "callback_url": "",
-            "timeout_seconds": timeout_seconds,
-            "retry_max": retry_max,
-            "retention_ttl": retention_ttl,
-            "status": status_map.get(run_status, "queued" if enabled else "disabled"),
-        }
-
-    def _claim_next_pending_callback(self) -> RuntimeCallbackDispatchRequest | None:
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            due_run_ids = repository.list_due_callback_run_ids(limit=1, now=datetime.now(UTC))
-            if not due_run_ids:
-                session.commit()
-                return None
-
-            run = repository.claim_callback_dispatch(due_run_ids[0], now=datetime.now(UTC))
-            if run is None:
-                session.commit()
-                return None
-
-            callback_policy = run.policy_json if isinstance(run.policy_json, dict) else {}
-            callback_target = self._get_callback_target(callback_policy)
-            if not callback_target:
-                session.commit()
-                return None
-            callback_secret = ""
-            if str(callback_target.get("source") or "") == "site_registered":
-                site = repository.get_site(run.site_id)
-                if site is None:
-                    session.commit()
-                    return None
-                registered = self._resolve_registered_callback_config(site)
-                secret_error = str(registered.get("secret_error") or "").strip()
-                if secret_error:
-                    repository.mark_callback_delivery_failed(
-                        run,
-                        error_code="runtime.callback_config_invalid",
-                        error_message=secret_error,
-                        retry_at=None,
-                    )
-                    session.commit()
-                    return None
-                callback_secret = str(registered.get("secret") or "").strip()
-            payload = self._build_callback_payload(run)
-            session.commit()
-            return RuntimeCallbackDispatchRequest(
-                run_id=run.run_id,
-                trace_id=run.trace_id,
-                callback_url=str(callback_target.get("callback_url") or ""),
-                payload=payload,
-                site_id=run.site_id,
-                event=RUNTIME_CALLBACK_EVENT,
-                key_id=str(callback_target.get("key_id") or ""),
-                secret=callback_secret,
-                callback_id=str(callback_target.get("callback_id") or run.run_id),
-            )
-
-    def _recover_stale_callback_dispatches(self, *, limit: int) -> None:
-        current_time = datetime.now(UTC)
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            recovered_runs = repository.reclaim_stale_callback_dispatches(
-                limit=limit,
-                now=current_time,
-            )
-            session.commit()
-
-        for run in recovered_runs:
-            self._record_callback_dispatch_recovery(run, recovered_at=current_time)
 
     def _record_callback_dispatch_recovery(
         self,
@@ -8555,7 +6123,7 @@ class RuntimeService:
     ) -> None:
         if run.callback_last_attempt_at is None:
             return
-        last_attempt_at = self._normalize_timestamp(run.callback_last_attempt_at)
+        last_attempt_at = self.run_projector.normalize_timestamp(run.callback_last_attempt_at)
         stale_for_seconds = max(0, int((recovered_at - last_attempt_at).total_seconds()))
         try:
             self.commercial_service.record_service_audit_event(
@@ -8580,10 +6148,10 @@ class RuntimeService:
                     "trace_id": run.trace_id,
                     "callback_status": run.callback_status,
                     "callback_attempt_count": max(0, int(run.callback_attempt_count or 0)),
-                    "callback_last_attempt_at": self._serialize_timestamp(
+                    "callback_last_attempt_at": self.run_projector.serialize_timestamp(
                         run.callback_last_attempt_at
                     ),
-                    "callback_next_attempt_at": self._serialize_timestamp(
+                    "callback_next_attempt_at": self.run_projector.serialize_timestamp(
                         run.callback_next_attempt_at
                     ),
                     "callback_last_error_code": (
@@ -8606,25 +6174,6 @@ class RuntimeService:
                 run.callback_last_error_code or RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_ERROR_CODE,
             )
 
-    def _build_callback_payload(self, run: RunRecord) -> dict[str, object]:
-        return {
-            "event": "runtime.run.terminal",
-            "run_id": run.run_id,
-            "canonical_run_id": run.canonical_run_id or "",
-            "site_id": run.site_id,
-            "trace_id": run.trace_id,
-            "status": run.status,
-            "error_code": run.error_code or "",
-            "error_message": run.error_message or "",
-            "execution_context": self._build_execution_context_payload(run),
-            "task_backend": self._build_task_backend_payload(run),
-            "run_lifecycle": self._build_run_lifecycle(run),
-            "result": self._build_callback_result_payload(run),
-        }
-
-    def _build_callback_result_payload(self, run: RunRecord) -> dict[str, object]:
-        return run.result_json if isinstance(run.result_json, dict) else {}
-
     def _prepare_input_for_storage(
         self,
         input_payload: dict[str, Any],
@@ -8643,91 +6192,6 @@ class RuntimeService:
         if ciphertext:
             return decrypt_runtime_execution_input(ciphertext, settings=self.settings)
         return run.input_json if isinstance(run.input_json, dict) else {}
-
-    def _prepare_result_for_storage(
-        self,
-        result_json: dict[str, Any],
-        *,
-        storage_mode: str,
-    ) -> dict[str, Any]:
-        if storage_mode == RUNTIME_STORAGE_MODE_NO_STORE:
-            return {
-                "stored": False,
-                "status": "omitted",
-            }
-        return result_json if isinstance(result_json, dict) else {}
-
-    def _resolve_callback_retry_at(
-        self,
-        run_id: str,
-        *,
-        retryable: bool,
-        attempted_at: datetime,
-    ) -> datetime | None:
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            run = repository.get_run(run_id)
-            session.commit()
-
-        if run is None:
-            return None
-
-        if not retryable or run.callback_attempt_count >= self.callback_max_attempts:
-            return None
-
-        return attempted_at + timedelta(seconds=self.callback_retry_backoff_seconds)
-
-    def _cancel_requested_before_attempt(
-        self,
-        run: RunRecord,
-        *,
-        repository: RuntimeRepository,
-    ) -> bool:
-        repository.refresh_run(run)
-        return run.cancel_requested_at is not None and run.status == "running"
-
-    def _supports_public_cancel(
-        self,
-        execution_pattern: str,
-        policy: dict[str, object],
-    ) -> bool:
-        return self._get_queue_mode(execution_pattern, policy) == "queue_backed"
-
-    def _resolve_cancel_state(self, run: RunRecord, *, supported: bool) -> str:
-        if not supported:
-            return "not_available"
-        if run.status == "canceled":
-            return "canceled"
-        if run.finished_at is not None:
-            return "closed"
-        if run.cancel_requested_at is not None:
-            return "requested"
-        return "available"
-
-    def _resolve_callback_dispatch_status(self, run: RunRecord, callback_requested: bool) -> str:
-        if not callback_requested:
-            return RUN_CALLBACK_STATUS_NOT_REQUESTED
-        if run.finished_at is None:
-            return "pending_terminal"
-        callback_status = str(run.callback_status or RUN_CALLBACK_STATUS_NOT_REQUESTED)
-        if callback_status == RUN_CALLBACK_STATUS_NOT_REQUESTED:
-            return RUN_CALLBACK_STATUS_PENDING
-        if callback_status in {
-            RUN_CALLBACK_STATUS_PENDING,
-            RUN_CALLBACK_STATUS_DISPATCHING,
-            RUN_CALLBACK_STATUS_DELIVERED,
-            RUN_CALLBACK_STATUS_FAILED,
-        }:
-            return callback_status
-        return RUN_CALLBACK_STATUS_PENDING
-
-    def _get_callback_target(self, policy: dict[str, object]) -> dict[str, object]:
-        runtime_callback = policy.get("runtime_callback")
-        runtime_callback = runtime_callback if isinstance(runtime_callback, dict) else {}
-        return runtime_callback
-
-    def _has_callback_target(self, policy: dict[str, object]) -> bool:
-        return bool(self._get_callback_target(policy))
 
     def _get_storage_mode(self, policy: dict[str, object]) -> str:
         storage_mode = str(policy.get("storage_mode") or RUNTIME_STORAGE_MODE_RESULT_ONLY)

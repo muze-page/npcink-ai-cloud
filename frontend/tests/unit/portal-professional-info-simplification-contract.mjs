@@ -7,7 +7,8 @@ const billingSource = readFileSync(resolve(root, 'src/app/portal/billing/page.ts
 const usageSource = readFileSync(resolve(root, 'src/app/portal/usage/page.tsx'), 'utf8');
 const creditTrendSource = readFileSync(resolve(root, 'src/components/portal/PortalCreditTrendPanel.tsx'), 'utf8');
 const aiInsightsPagePath = resolve(root, 'src/app/portal/ai-insights/page.tsx');
-const monitoringSource = readFileSync(resolve(root, 'src/app/portal/monitoring/page.tsx'), 'utf8');
+const monitoringPagePath = resolve(root, 'src/app/portal/monitoring/page.tsx');
+const sitesRedirectPagePath = resolve(root, 'src/app/portal/sites/page.tsx');
 const siteServiceStatusSource = readFileSync(resolve(root, 'src/components/portal/PortalSiteServiceStatus.tsx'), 'utf8');
 const siteKnowledgeSource = readFileSync(resolve(root, 'src/components/portal/PortalSiteKnowledgePanel.tsx'), 'utf8');
 const siteRecordSource = readFileSync(resolve(root, 'src/app/portal/sites/[siteId]/page.tsx'), 'utf8');
@@ -208,11 +209,8 @@ assert.match(
   /title=\{t\('portal\.audit\.nav_label'[\s\S]*portal\.audit\.recent_desc/,
   'Portal recent activity should show plain recent activity copy without a filter console'
 );
-assert.match(
-  monitoringSource,
-  /router\.replace\(`\/portal\/sites\/\$\{encodeURIComponent\(selectedSite\.site_id\)\}#service-status`\)/,
-  'Portal monitoring compatibility route must open the canonical site service-status section'
-);
+assert.equal(existsSync(monitoringPagePath), false, 'retired monitoring redirect must stay deleted');
+assert.equal(existsSync(sitesRedirectPagePath), false, 'retired sites redirect must stay deleted');
 assert.match(
   siteRecordSource,
   /<PortalSiteServiceStatus[\s\S]*overview=\{siteMonitoring\.overview\}/,

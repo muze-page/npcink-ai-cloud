@@ -8,7 +8,13 @@ async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ status: 'ok', data }),
+    body: JSON.stringify({
+      status: 'ok',
+      error_code: '',
+      message: 'ok',
+      data,
+      meta: { trace_id: 'portal-workspace-e2e', revision: 'm6' },
+    }),
   });
 }
 
@@ -21,6 +27,7 @@ function buildPortalSession(selectedSiteId: string) {
       status: 'provisioning',
       created_at: '2026-04-01T00:00:00Z',
       plan_name: '',
+      site_url: 'https://attention.example.test',
     },
     {
       site_id: 'site_clear',
@@ -29,6 +36,7 @@ function buildPortalSession(selectedSiteId: string) {
       status: 'active',
       created_at: '2026-04-02T00:00:00Z',
       plan_name: 'Growth',
+      site_url: 'https://clear.example.test',
     },
   ];
 
@@ -40,7 +48,7 @@ function buildPortalSession(selectedSiteId: string) {
     account_id: 'acct_portal',
     identity_type: 'user',
     role: 'user',
-    allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'manage_site_keys'],
+    allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'provision_sites', 'remove_sites'],
     site: {
       site_id: currentSite.site_id,
       account_id: currentSite.account_id,
@@ -57,7 +65,7 @@ function buildPortalSession(selectedSiteId: string) {
         member_ref: 'user:portal-demo@example.com',
         identity_type: 'user',
         role: 'user',
-        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'manage_site_keys'],
+        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'provision_sites', 'remove_sites'],
         membership_status: 'active',
         site_count: 2,
         sites,
@@ -894,7 +902,7 @@ async function installPortalMocks(
         member_ref: 'user:portal-demo@example.com',
         identity_type: 'user',
         role: 'user',
-        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'manage_site_keys'],
+        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'provision_sites', 'remove_sites'],
         site: {
           site_id: 'site_attention',
           site_name: 'Attention Site',
@@ -918,23 +926,6 @@ async function installPortalMocks(
           tokens_limit: 50000,
           features: ['usage', 'billing'],
         },
-      });
-      return;
-    }
-
-    if (pathname === '/sites/site_attention/api-keys') {
-      await fulfillJson(route, {
-        items: [
-          {
-            key_id: 'key_attention_primary_001',
-            site_id: 'site_attention',
-            label: 'Attention runtime',
-            scopes: ['runtime:execute', 'runtime:resolve'],
-            status: 'active',
-            created_at: '2026-04-01T00:00:00Z',
-            last_used_at: '2026-04-07T09:00:00Z',
-          },
-        ],
       });
       return;
     }
@@ -1150,7 +1141,7 @@ async function installPortalMocks(
         member_ref: 'user:portal-demo@example.com',
         identity_type: 'user',
         role: 'user',
-        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'manage_site_keys'],
+        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'provision_sites', 'remove_sites'],
         site: {
           site_id: 'site_clear',
           site_name: 'Clear Site',
@@ -1181,23 +1172,6 @@ async function installPortalMocks(
           generated_at: '2026-04-07T10:00:00Z',
         },
         generated_at: '2026-04-07T10:00:00Z',
-      });
-      return;
-    }
-
-    if (pathname === '/sites/site_clear/api-keys') {
-      await fulfillJson(route, {
-        items: [
-          {
-            key_id: 'key_clear_primary_001',
-            site_id: 'site_clear',
-            label: 'Clear runtime',
-            scopes: ['runtime:execute', 'runtime:resolve', 'catalog:read'],
-            status: 'active',
-            created_at: '2026-04-02T00:00:00Z',
-            last_used_at: '2026-04-07T08:00:00Z',
-          },
-        ],
       });
       return;
     }
@@ -1309,7 +1283,7 @@ async function installPortalMocks(
         member_ref: 'user:portal-demo@example.com',
         identity_type: 'user',
         role: 'user',
-        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'manage_site_keys'],
+        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'provision_sites', 'remove_sites'],
         timezone: 'Asia/Shanghai',
         generated_at: '2026-04-07T10:00:00Z',
         windows: {
@@ -1347,7 +1321,7 @@ async function installPortalMocks(
         member_ref: 'user:portal-demo@example.com',
         identity_type: 'user',
         role: 'user',
-        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'manage_site_keys'],
+        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit', 'provision_sites', 'remove_sites'],
         site: {
           site_id: 'site_attention',
           site_name: 'Attention Site',
@@ -1502,12 +1476,18 @@ async function installPortalMocks(
     await route.fulfill({
       status: 404,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'error', error: { code: 'not_found' } }),
+      body: JSON.stringify({
+        status: 'error',
+        error_code: 'not_found',
+        message: 'not_found',
+        data: {},
+        meta: { trace_id: 'portal-workspace-e2e', revision: 'm6' },
+      }),
     });
   });
 }
 
-test('portal workspace interaction path: account overview to site drawer and service pages', async ({
+test('portal workspace interaction path: account overview to site detail and service pages', async ({
   page,
 }) => {
   await installPortalMocks(page);
@@ -1530,13 +1510,17 @@ test('portal workspace interaction path: account overview to site drawer and ser
   await expect(page.getByRole('heading', { level: 1, name: /my service|我的服务|服務/i })).toBeVisible();
   await expect(page.getByText(/Current package|当前套餐|目前方案/i).first()).toBeVisible();
   await expect(page.getByText(/2,419|2419/i).first()).toBeVisible();
-  await expect(page.getByText(/Tickets|工单|工單/i).first()).toBeVisible();
+  await expect(
+    page
+      .locator('[data-portal-home="operation-overview"]')
+      .getByText(/^(Tickets|工单|工單)$/i)
+  ).toHaveCount(0);
   await expect(page.getByRole('heading', { level: 2, name: /my sites|站点/i })).toBeVisible();
   const sitesWorkspace = page.locator('[data-portal-home="sites-workspace"]');
-  await expect(sitesWorkspace.getByText(/^2 (?:Needs attention|需要关注)$/i)).toBeVisible();
-  await expect(sitesWorkspace.getByText(/^Needs attention$|^需要关注$/i)).toHaveCount(2);
+  await expect(sitesWorkspace.getByText(/^1 (?:Needs attention|需要关注)$/i)).toBeVisible();
+  await expect(sitesWorkspace.getByText(/^Needs attention$|^需要关注$/i)).toHaveCount(1);
 
-  await expect(page.locator('a[href="/portal/sites/site_attention"]').first()).toBeVisible();
+  await expect(page.locator('a[href="/portal/sites/site_attention#service-status"]').first()).toBeVisible();
   await page.goto('/portal/sites/site_attention');
   await expect(page).toHaveURL(/\/portal\/sites\/site_attention$/);
   await expect(page.getByRole('heading', { level: 1, name: /attention site/i })).toBeVisible();
@@ -1647,19 +1631,6 @@ test('Alipay return polls from pending to paid and shows reconciled credit detai
   await expect(page).toHaveURL('/portal/billing');
 });
 
-test('legacy portal sites route redirects to the merged service workspace', async ({ page }) => {
-  await installPortalMocks(page);
-
-  await page.goto('/portal/sites');
-  await expect(page).toHaveURL(/\/portal#sites$/);
-  await expect(page.getByRole('heading', { level: 1, name: /my service|我的服务|服務/i })).toBeVisible();
-  await expect(page.getByPlaceholder(/Search site name or URL|搜索站点名称或网址/i)).toBeVisible();
-  await expect(page.getByText(/Current site|当前站点|目前站點/i)).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /^Select$|^选择$|^選擇$/i })).toHaveCount(0);
-  await expect(page.locator('a[href="/portal/sites/site_attention"]').first()).toBeVisible();
-  await expect(page.locator('section').first().locator('.btn.btn-primary')).toHaveCount(0);
-});
-
 test('portal account page hides internal identifiers and duplicate summary metrics', async ({ page }) => {
   await installPortalMocks(page);
 
@@ -1676,14 +1647,8 @@ test('portal account page hides internal identifiers and duplicate summary metri
   await expect(page.getByText(/acct_portal/i)).not.toBeVisible();
 });
 
-test('legacy monitoring redirects to site status while audit stays a support deep link', async ({ page }) => {
+test('portal audit stays a bounded support deep link', async ({ page }) => {
   await installPortalMocks(page);
-
-  await page.goto('/portal/monitoring?site=site_attention');
-
-  await expect(page).toHaveURL(/\/portal\/sites\/site_attention#service-status$/);
-  await expect(page.getByText(/Service status|服务状态|服務狀態/i).first()).toBeVisible();
-  await expect(page.getByText(/suggestion only|no direct wordpress write|diagnostic advisor/i)).toHaveCount(0);
 
   await page.goto('/portal/audit');
   await expect(page.locator('[data-portal-support-deeplink="audit"]')).toHaveCount(1);

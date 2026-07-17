@@ -18,6 +18,7 @@ from app.core.models import (
     CREDIT_LEDGER_EVENT_CONSUME,
     IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     IDENTITY_PROVIDER_BINDING_STATUS_REVOKED,
+    PLATFORM_KIND_WORDPRESS,
     PORTAL_LOGIN_CODE_STATUS_CONSUMED,
     PORTAL_LOGIN_CODE_STATUS_EXPIRED,
     PORTAL_LOGIN_CODE_STATUS_LOCKED,
@@ -1170,7 +1171,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
         self,
         *,
         email: str,
-        wordpress_url: str = "",
+        site_url: str = "",
         site_name: str = "",
         use_case: str = "",
         ttl_seconds: int,
@@ -1178,11 +1179,11 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
         normalized_email = _normalize_principal_email(email)
         principal_id = _new_principal_id()
         account_id = f"acct_{principal_id.removeprefix('prn_')}"
-        canonical_wordpress_url = ""
+        canonical_site_url = ""
         site_id = ""
         resolved_site_name = ""
-        if str(wordpress_url or "").strip():
-            canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
+        if str(site_url or "").strip():
+            canonical_site_url, site_source = _normalize_portal_site_url(site_url)
             site_slug = _slugify_portal_site_segment(site_source)
             if not site_slug:
                 raise CommercialPermissionError(
@@ -1192,7 +1193,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             site_id = f"site_{site_slug}"
             resolved_site_name = (
                 str(site_name or "").strip()
-                or urlsplit(canonical_wordpress_url).hostname
+                or urlsplit(canonical_site_url).hostname
                 or site_id
             )
         normalized_use_case = str(use_case or "").strip()[:500]
@@ -1232,7 +1233,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                     "account_id": account_id,
                     "site_id": site_id,
                     "site_name": resolved_site_name,
-                    "wordpress_url": canonical_wordpress_url,
+                    "site_url": canonical_site_url,
                     "use_case": normalized_use_case,
                 },
             )
@@ -1243,7 +1244,8 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             "account_id": account_id,
             "site_id": site_id,
             "site_name": resolved_site_name,
-            "wordpress_url": canonical_wordpress_url,
+            "site_url": canonical_site_url,
+            "platform_kind": PLATFORM_KIND_WORDPRESS,
             "code": code,
             "expires_at": self._serialize_datetime(expires_at),
             "expires_in_seconds": max(60, int(ttl_seconds or 0)),
@@ -1322,13 +1324,13 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
 
             account_id = str(registration_metadata.get("account_id") or "").strip()
             site_id = str(registration_metadata.get("site_id") or "").strip()
-            wordpress_url = str(registration_metadata.get("wordpress_url") or "").strip()
+            site_url = str(registration_metadata.get("site_url") or "").strip()
             site_name = str(registration_metadata.get("site_name") or "").strip() or site_id
             if not principal_id:
                 principal_id = _new_principal_id()
             if not account_id:
                 account_id = f"acct_{principal_id.removeprefix('prn_')}"
-            if (site_id and not wordpress_url) or (wordpress_url and not site_id):
+            if (site_id and not site_url) or (site_url and not site_id):
                 raise CommercialPermissionError(
                     "service.portal_registration_payload_invalid",
                     "portal registration site request is incomplete",
@@ -1369,15 +1371,16 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 last_login_at=now,
             )
             site = None
-            if site_id and wordpress_url:
+            if site_id and site_url:
                 site = repository.upsert_site(
                     site_id=site_id,
                     account_id=account.account_id,
                     name=site_name,
                     status=SITE_STATUS_ACTIVE,
+                    site_url=site_url,
+                    platform_kind=PLATFORM_KIND_WORDPRESS,
                     metadata_json={
                         "source": "portal_self_registration",
-                        "wordpress_url": wordpress_url,
                         "created_via": "portal_register",
                         "use_case": str(registration_metadata.get("use_case") or ""),
                     },

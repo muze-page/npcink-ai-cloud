@@ -170,7 +170,18 @@ export function PortalMediaProcessingPanel({
                   {t('portal.media_obs.formats_table', {}, 'Formats')}
                 </h3>
                 <PortalTag tone="info">
-                  {formatNumber(Number(totals?.artifact_download_count || 0))} downloads
+                  {t(
+                    'portal.media_obs.delivery_evidence',
+                    {
+                      completed: formatNumber(
+                        Number(totals?.delivery_stream_completed_count || 0)
+                      ),
+                      acknowledged: formatNumber(
+                        Number(totals?.delivery_acknowledged_count || 0)
+                      ),
+                    },
+                    '{{completed}} streamed · {{acknowledged}} receipt-verified'
+                  )}
                 </PortalTag>
               </div>
               <div className="space-y-2">

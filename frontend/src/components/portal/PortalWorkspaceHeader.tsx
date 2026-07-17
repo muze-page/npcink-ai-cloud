@@ -6,7 +6,7 @@ import { useLocale } from '@/contexts/LocaleContext';
 import {
   getPortalSiteDisplayName,
   getPortalSiteSecondaryLabel,
-  getPortalSiteWordPressUrl,
+  getPortalSiteUrl,
   getVisiblePortalSites,
 } from '@/lib/portal-site-display';
 import { cn, formatDate } from '@/lib/utils';
@@ -32,7 +32,8 @@ export type PortalWorkspaceMetric = {
 type PortalWorkspaceSite = {
   site_id: string;
   site_name: string;
-  wordpress_url?: string;
+  site_url: string;
+  platform_kind: 'wordpress';
   metadata?: Record<string, unknown>;
   created_at?: string;
 };
@@ -83,7 +84,7 @@ export function PortalWorkspaceHeader({
       </>
     ) : null);
   const selectedSite = sites.find((site) => site.site_id === selectedSiteId) || null;
-  const selectedSiteWordPressUrl = getPortalSiteWordPressUrl(selectedSite);
+  const selectedSiteUrl = getPortalSiteUrl(selectedSite);
   const shouldShowEyebrow = eyebrow.trim().toLowerCase() !== title.trim().toLowerCase();
   const summary = (
     <div className="grid gap-4 xl:grid-cols-[minmax(16rem,0.8fr)_minmax(0,1.9fr)_auto] xl:items-center">
@@ -102,9 +103,9 @@ export function PortalWorkspaceHeader({
         {eyebrowInfo ? <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">{eyebrowInfo}</p> : null}
         {showSiteContextSummary ? (
           <p className="mt-2 max-w-md truncate text-sm text-gray-600 dark:text-gray-400">
-            {selectedSiteName || selectedSiteWordPressUrl || t('portal.current_site', {}, 'Site record')}
+            {selectedSiteName || selectedSiteUrl || t('portal.current_site', {}, 'Site record')}
             {' · '}
-            {selectedSiteWordPressUrl ||
+            {selectedSiteUrl ||
               t('portal.site_url_missing', {}, 'WordPress URL not configured')}
           </p>
         ) : null}

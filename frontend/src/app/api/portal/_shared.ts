@@ -12,10 +12,7 @@ import {
 const COPIED_REQUEST_HEADERS = [
   'accept-language',
   'authorization',
-  'x-npcink-portal-member-ref',
-  'x-npcink-portal-site-admin-ref',
   'idempotency-key',
-  'x-npcink-portal-token',
 ] as const;
 
 function buildPortalBackendPath(pathSegments: string[]): string {
@@ -83,11 +80,11 @@ export async function proxyPortalBackendPath(
       body,
       cache: 'no-store',
     });
-  } catch (error) {
+  } catch {
     return buildErrorResponse(
       502,
       options.unreachableCode,
-      error instanceof Error ? error.message : options.unreachableMessage
+      options.unreachableMessage
     );
   }
 

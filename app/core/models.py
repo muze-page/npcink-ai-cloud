@@ -32,6 +32,7 @@ SITE_STATUS_ACTIVE = "active"
 SITE_STATUS_INACTIVE = "inactive"
 SITE_STATUS_SUSPENDED = "suspended"
 SITE_STATUS_ARCHIVED = "archived"
+PLATFORM_KIND_WORDPRESS = "wordpress"
 
 SITE_API_KEY_STATUS_ACTIVE = "active"
 SITE_API_KEY_STATUS_REVOKED = "revoked"
@@ -366,6 +367,13 @@ class Site(Base):
     status: Mapped[str] = mapped_column(
         String(32),
         default=SITE_STATUS_ACTIVE,
+        index=True,
+    )
+    site_url: Mapped[str] = mapped_column(String(2048), default="", server_default="")
+    platform_kind: Mapped[str] = mapped_column(
+        String(32),
+        default=PLATFORM_KIND_WORDPRESS,
+        server_default=PLATFORM_KIND_WORDPRESS,
         index=True,
     )
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
@@ -1708,59 +1716,241 @@ class CommercialDecisionEvent(Base):
     )
 
 
-class MediaDerivativeArtifact(Base):
-    __tablename__ = "media_derivative_artifacts"
+class MediaArtifact(Base):
+    __tablename__ = "media_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "storage_key",
+            name="uq_media_artifacts_storage_key",
+        ),
+        CheckConstraint(
+            "((purge_claim_id IS NULL AND purge_claim_expires_at IS NULL) OR "
+            "(purge_claim_id IS NOT NULL AND purge_claim_expires_at IS NOT NULL))",
+            name="ck_media_artifacts_purge_claim_pair",
+        ),
+    )
 
     artifact_id: Mapped[str] = mapped_column(String(191), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("run_records.run_id"), index=True)
     site_id: Mapped[str] = mapped_column(String(191), index=True)
-    storage_ref: Mapped[str] = mapped_column(String(512))
-    blob_data: Mapped[bytes] = mapped_column(LargeBinary)
-    mime_type: Mapped[str] = mapped_column(String(64))
+    media_kind: Mapped[str] = mapped_column(String(16), default="image")
+    operation: Mapped[str] = mapped_column(String(64), default="image.transform.v1")
+    content_type: Mapped[str] = mapped_column(String(64))
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    storage_key: Mapped[str] = mapped_column(String(191))
+    status: Mapped[str] = mapped_column(String(32), default="available", index=True)
     format: Mapped[str] = mapped_column(String(16))
     width: Mapped[int] = mapped_column(Integer, default=0)
     height: Mapped[int] = mapped_column(Integer, default=0)
-    filesize_bytes: Mapped[int] = mapped_column(Integer, default=0)
     checksum: Mapped[str] = mapped_column(String(128))
-    source_media_type: Mapped[str] = mapped_column(String(16), default="image")
     processing_warnings_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purge_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    purge_last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purge_next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    purge_last_error_code: Mapped[str | None] = mapped_column(String(64))
+    purge_claim_id: Mapped[str | None] = mapped_column(String(64))
+    purge_claim_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
     )
 
 
-class AudioAsset(Base):
-    __tablename__ = "audio_assets"
+class MediaArtifactReconciliationPass(Base):
+    __tablename__ = "media_artifact_reconciliation_passes"
+    __table_args__ = (
+        UniqueConstraint(
+            "active_slot",
+            name="uq_media_artifact_reconciliation_passes_active_slot",
+        ),
+        UniqueConstraint(
+            "head_slot",
+            name="uq_media_artifact_reconciliation_passes_head_slot",
+        ),
+        CheckConstraint(
+            "state IN ('running', 'completed', 'abandoned')",
+            name="ck_media_artifact_reconciliation_passes_state",
+        ),
+        CheckConstraint(
+            "active_slot IS NULL OR active_slot = 'active'",
+            name="ck_media_artifact_reconciliation_passes_active_slot_value",
+        ),
+        CheckConstraint(
+            "head_slot IS NULL OR head_slot = 'head'",
+            name="ck_media_artifact_reconciliation_passes_head_slot_value",
+        ),
+        CheckConstraint(
+            "((scan_claim_id IS NULL AND lease_expires_at IS NULL) OR "
+            "(scan_claim_id IS NOT NULL AND lease_expires_at IS NOT NULL))",
+            name="ck_media_artifact_reconciliation_passes_claim_pair",
+        ),
+        CheckConstraint(
+            "((state = 'running' AND active_slot = 'active' AND head_slot IS NULL "
+            "AND scan_claim_id IS NOT NULL AND lease_expires_at IS NOT NULL "
+            "AND completed_at IS NULL) OR "
+            "(state = 'completed' AND active_slot IS NULL AND scan_claim_id IS NULL "
+            "AND lease_expires_at IS NULL AND completed_at IS NOT NULL) OR "
+            "(state = 'abandoned' AND active_slot IS NULL AND head_slot IS NULL "
+            "AND scan_claim_id IS NULL AND lease_expires_at IS NULL "
+            "AND completed_at IS NULL))",
+            name="ck_media_artifact_reconciliation_passes_lifecycle",
+        ),
+        Index(
+            "ix_media_artifact_recon_passes_previous_id",
+            "previous_completed_pass_id",
+        ),
+    )
 
-    asset_id: Mapped[str] = mapped_column(String(191), primary_key=True)
-    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
-    source_artifact_id: Mapped[str | None] = mapped_column(String(191), index=True)
-    source_run_id: Mapped[str | None] = mapped_column(String(191), index=True)
-    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
-    storage_ref: Mapped[str] = mapped_column(String(512))
-    blob_data: Mapped[bytes] = mapped_column(LargeBinary)
-    mime_type: Mapped[str] = mapped_column(String(64))
-    format: Mapped[str] = mapped_column(String(16))
-    duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    filesize_bytes: Mapped[int] = mapped_column(Integer, default=0)
-    checksum: Mapped[str] = mapped_column(String(128), index=True)
-    source_content_hash: Mapped[str | None] = mapped_column(String(128), index=True)
-    provider_id: Mapped[str | None] = mapped_column(String(64), index=True)
-    model_id: Mapped[str | None] = mapped_column(String(191), index=True)
-    trace_id: Mapped[str | None] = mapped_column(String(64), index=True)
-    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    pass_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    state: Mapped[str] = mapped_column(String(16), index=True)
+    active_slot: Mapped[str | None] = mapped_column(String(16))
+    head_slot: Mapped[str | None] = mapped_column(String(16))
+    scan_claim_id: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    previous_completed_pass_id: Mapped[str | None] = mapped_column(
+        ForeignKey(
+            "media_artifact_reconciliation_passes.pass_id",
+            name="fk_media_artifact_reconciliation_passes_previous",
+        ),
+    )
+    store_generation: Mapped[str] = mapped_column(String(64), index=True)
+    next_cursor: Mapped[str | None] = mapped_column(String(191))
+    last_storage_key: Mapped[str | None] = mapped_column(String(191))
+    store_examined: Mapped[int] = mapped_column(Integer, default=0)
+    referenced_present: Mapped[int] = mapped_column(Integer, default=0)
+    orphan_observed: Mapped[int] = mapped_column(Integer, default=0)
+    orphan_deferred: Mapped[int] = mapped_column(Integer, default=0)
+    orphan_eligible: Mapped[int] = mapped_column(Integer, default=0)
+    db_available_examined: Mapped[int] = mapped_column(Integer, default=0)
+    referenced_missing: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    cutoff_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+
+
+class MediaArtifactOrphanCandidate(Base):
+    __tablename__ = "media_artifact_orphan_candidates"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('observed', 'eligible', 'claimed', 'retry_wait', "
+            "'deleted', 'invalidated')",
+            name="ck_media_artifact_orphan_candidates_state",
+        ),
+        CheckConstraint(
+            "((claim_id IS NULL AND claim_expires_at IS NULL) OR "
+            "(claim_id IS NOT NULL AND claim_expires_at IS NOT NULL))",
+            name="ck_media_artifact_orphan_candidates_claim_pair",
+        ),
+        CheckConstraint(
+            "((state = 'claimed' AND claim_id IS NOT NULL AND claim_expires_at IS NOT NULL) "
+            "OR (state <> 'claimed' AND claim_id IS NULL AND claim_expires_at IS NULL))",
+            name="ck_media_artifact_orphan_candidates_claim_state",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="ck_media_artifact_orphan_candidates_attempt_count",
+        ),
+        CheckConstraint(
+            "((state = 'retry_wait' AND retry_at IS NOT NULL "
+            "AND last_error_code IS NOT NULL) OR "
+            "(state <> 'retry_wait' AND retry_at IS NULL "
+            "AND last_error_code IS NULL))",
+            name="ck_media_artifact_orphan_candidates_retry_state",
+        ),
+        CheckConstraint(
+            "((state IN ('deleted', 'invalidated') AND resolved_at IS NOT NULL) OR "
+            "(state NOT IN ('deleted', 'invalidated') AND resolved_at IS NULL))",
+            name="ck_media_artifact_orphan_candidates_resolution",
+        ),
+        Index(
+            "ix_media_artifact_orphan_candidates_cleanup",
+            "state",
+            "retry_at",
+            "claim_expires_at",
+        ),
+    )
+
+    storage_key: Mapped[str] = mapped_column(String(191), primary_key=True)
+    object_version: Mapped[str] = mapped_column(String(64))
+    store_generation: Mapped[str] = mapped_column(String(64), index=True)
+    first_pass_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "media_artifact_reconciliation_passes.pass_id",
+            name="fk_media_artifact_orphan_candidates_first_pass",
+        ),
+        index=True,
+    )
+    last_pass_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "media_artifact_reconciliation_passes.pass_id",
+            name="fk_media_artifact_orphan_candidates_last_pass",
+        ),
+        index=True,
+    )
+    state: Mapped[str] = mapped_column(String(16), index=True)
+    claim_id: Mapped[str | None] = mapped_column(String(64))
+    claim_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    first_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MediaArtifactDelivery(Base):
+    __tablename__ = "media_artifact_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "site_id",
+            "ack_idempotency_key",
+            name="uq_media_artifact_deliveries_site_ack_key",
+        ),
+    )
+
+    delivery_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("media_artifacts.artifact_id"), index=True
+    )
+    site_id: Mapped[str] = mapped_column(String(191), index=True)
+    expected_byte_size: Mapped[int] = mapped_column(Integer)
+    expected_checksum: Mapped[str] = mapped_column(String(128))
+    pull_trace_id: Mapped[str] = mapped_column(String(64), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_byte_size: Mapped[int | None] = mapped_column(Integer)
+    completed_checksum: Mapped[str | None] = mapped_column(String(128))
+    ack_deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ack_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    ack_request_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    ack_trace_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    received_byte_size: Mapped[int | None] = mapped_column(Integer)
+    received_checksum: Mapped[str | None] = mapped_column(String(128))
+    byte_size_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    checksum_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    retention_expires_at_before: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    retention_expires_at_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
     )
 
 
@@ -1792,8 +1982,6 @@ class MediaDerivativeJobMetric(Base):
     warnings_count: Mapped[int] = mapped_column(Integer, default=0)
     artifact_id: Mapped[str | None] = mapped_column(String(191), index=True)
     artifact_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    artifact_download_count: Mapped[int] = mapped_column(Integer, default=0)
-    artifact_last_downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

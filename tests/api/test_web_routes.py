@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 
@@ -119,7 +120,7 @@ class FakePortalEmailSender(PortalEmailSender):
         expires_in_seconds: int,
         project_name: str,
         site_name: str = "",
-        wordpress_url: str = "",
+        site_url: str = "",
         locale: str = "zh-CN",
     ) -> None:
         self.messages.append(
@@ -131,7 +132,7 @@ class FakePortalEmailSender(PortalEmailSender):
                 "expires_in_seconds": expires_in_seconds,
                 "project_name": project_name,
                 "site_name": site_name,
-                "wordpress_url": wordpress_url,
+                "site_url": site_url,
                 "locale": locale,
             }
         )
@@ -523,7 +524,7 @@ def test_web_portal_preview_surface_is_removed(tmp_path: Path) -> None:
     dispose_engine(database_url)
 
 
-def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
+def test_web_portal_email_code_and_addon_connection_with_jwt(tmp_path: Path) -> None:
     fake_sender = FakePortalEmailSender()
     database_url, client = _build_client(
         tmp_path,
@@ -535,25 +536,24 @@ def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
         portal_email_sender=fake_sender,
     )
 
-    _seed_account(
-        client,
-        account_id="acct_web",
-    )
-    client.post(
-        "/internal/service/sites",
+    registration_request = client.post(
+        "/portal/v1/register/code/request",
         json={
-            "site_id": "site_web",
-            "account_id": "acct_web",
-            "name": "Web Site",
-            "status": "provisioning",
+            "email": "web@example.com",
+            "site_name": "Web Site",
+            "site_url": "https://web.example.test",
         },
-        headers=build_internal_headers(idempotency_key="web-site-001"),
     )
-    client.post(
-        "/internal/service/sites/site_web/activate",
-        headers=build_internal_headers(idempotency_key="web-site-activate-001"),
+    assert registration_request.status_code == 200, registration_request.text
+    registration_response = client.post(
+        "/portal/v1/register/verify",
+        json={"email": "web@example.com", "code": str(fake_sender.messages[0]["code"])},
     )
-    _grant_account_member_access(client, site_id="site_web", email="web@example.com")
+    assert registration_response.status_code == 200, registration_response.text
+    registration_data = registration_response.json()["data"]
+    account_id = str(registration_data["account_id"])
+    site_id = str(registration_data["site_id"])
+    assert client.post("/portal/v1/logout").status_code == 200
 
     login_request_response = client.post(
         "/portal/v1/auth/code/request",
@@ -562,21 +562,40 @@ def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
     assert login_request_response.status_code == 200
     assert login_request_response.json()["data"]["delivery"] == "email"
     assert login_request_response.json()["data"]["code"] == ""
-    assert len(fake_sender.messages) == 1
+    assert len(fake_sender.messages) == 2
 
     login_verify_response = client.post(
         "/portal/v1/auth/code/verify",
-        json={"email": "web@example.com", "code": str(fake_sender.messages[0]["code"])},
+        json={"email": "web@example.com", "code": str(fake_sender.messages[-1]["code"])},
     )
     assert login_verify_response.status_code == 200
     assert login_verify_response.json()["data"]["principal_id"].startswith("prn_")
 
-    issue_response = client.post(
-        "/portal/v1/sites/site_web/api-keys",
-        json={"label": "Web Key"},
-        headers={"origin": "http://testserver", "referer": "http://testserver/"},
+    addon_state = "web-addon-state"
+    connection_response = client.post(
+        "/portal/v1/addon-connections",
+        json={
+            "account_id": account_id,
+            "site_url": "https://web.example.test",
+            "site_name": "Web Site",
+            "return_url": (
+                "https://web.example.test/wp-admin/admin-post.php"
+                f"?action=npcink_cloud_addon_complete_auth&state={addon_state}"
+            ),
+            "state": addon_state,
+        },
     )
-    assert issue_response.status_code == 200
-    assert issue_response.json()["data"]["cloud_api_key"].startswith("mak1_")
+    assert connection_response.status_code == 200, connection_response.text
+    connection_data = connection_response.json()["data"]
+    assert connection_data["site_id"] == site_id
+    assert "cloud_api_key" not in connection_data
+    redirect_query = parse_qs(urlsplit(str(connection_data["redirect_url"])).query)
+
+    exchange_response = client.post(
+        "/portal/v1/addon-connections/exchange",
+        json={"code": redirect_query["code"][0], "state": addon_state},
+    )
+    assert exchange_response.status_code == 200, exchange_response.text
+    assert exchange_response.json()["data"]["cloud_api_key"].startswith("mak1_")
 
     dispose_engine(database_url)

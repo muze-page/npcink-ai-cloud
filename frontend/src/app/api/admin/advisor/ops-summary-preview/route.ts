@@ -7,6 +7,7 @@ import {
   getExternalRequestOrigin,
   getExternalRequestHost,
   getExternalRequestProto,
+  requireAdminCapability,
   requireAdminSessionData,
 } from '../../_shared';
 import { getInternalAuthToken } from '@/lib/env';
@@ -15,6 +16,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const sessionResult = await requireAdminSessionData(request);
   if (sessionResult instanceof NextResponse) {
     return sessionResult;
+  }
+  const capabilityError = requireAdminCapability(
+    sessionResult.session,
+    'can_review_diagnostics'
+  );
+  if (capabilityError) {
+    return capabilityError;
   }
 
   const requestOrigin = getExternalRequestOrigin(request);
@@ -41,11 +49,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         cache: 'no-store',
       }
     );
-  } catch (error) {
+  } catch {
     return buildErrorResponse(
       502,
       'proxy.admin_advisor_preview_unreachable',
-      error instanceof Error ? error.message : 'failed to reach advisor preview endpoint'
+      'failed to reach advisor preview endpoint'
     );
   }
 

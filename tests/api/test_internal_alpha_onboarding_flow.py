@@ -4,6 +4,7 @@ import base64
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -125,7 +126,7 @@ def _post_internal(
     return response.json()["data"]
 
 
-def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
+def test_internal_alpha_onboarding_flow_closes_admin_addon_usage_audit(
     tmp_path: Path,
 ) -> None:
     database_url, client, provider = _build_client(tmp_path)
@@ -183,11 +184,11 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
         client,
         "/internal/service/sites",
         json_payload={
-            "site_id": "site_alpha_flow",
+            "site_id": "site_alpha-example-test",
             "account_id": "acct_alpha_flow",
             "name": "Alpha WordPress Site",
             "status": "provisioning",
-            "wordpress_url": "https://alpha.example.test",
+            "site_url": "https://alpha.example.test",
         },
         idempotency_key="alpha-site-001",
     )
@@ -237,18 +238,35 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
     assert select_response.status_code == 200, select_response.text
     assert select_response.json()["data"]["site_id"] == site_id
 
-    key_response = client.post(
-        f"/portal/v1/sites/{site_id}/api-keys",
+    addon_state = "alpha-addon-state-001"
+    connection_response = client.post(
+        "/portal/v1/addon-connections",
         json={
-            "label": "Alpha smoke key",
-            "scopes": ["runtime:execute", "runtime:read", "runtime:resolve", "stats:read"],
-            "metadata": {"source": "internal_alpha_onboarding_flow"},
+            "account_id": "acct_alpha_flow",
+            "site_url": "https://alpha.example.test",
+            "site_name": "Alpha WordPress Site",
+            "return_url": (
+                "https://alpha.example.test/wp-admin/admin-post.php"
+                f"?action=npcink_cloud_addon_complete_auth&state={addon_state}"
+            ),
+            "state": addon_state,
         },
-        headers=_origin_headers(idempotency_key="alpha-portal-key-001"),
+        headers=_origin_headers(idempotency_key="alpha-addon-connect-001"),
     )
-    assert key_response.status_code == 200, key_response.text
-    key_data = key_response.json()["data"]
-    assert key_data["site_id"] == site_id
+    assert connection_response.status_code == 200, connection_response.text
+    connection_data = connection_response.json()["data"]
+    assert connection_data["site_id"] == site_id
+    assert "cloud_api_key" not in connection_data
+    redirect_query = parse_qs(urlsplit(str(connection_data["redirect_url"])).query)
+    connection_code = redirect_query["code"][0]
+    assert redirect_query["state"] == [addon_state]
+
+    exchange_response = client.post(
+        "/portal/v1/addon-connections/exchange",
+        json={"code": connection_code, "state": addon_state},
+    )
+    assert exchange_response.status_code == 200, exchange_response.text
+    key_data = exchange_response.json()["data"]
     decoded_key = _decode_customer_api_key(str(key_data["cloud_api_key"]))
     assert decoded_key["site_id"] == site_id
     key_id = decoded_key["key_id"]
@@ -314,6 +332,7 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
     assert {item["event_kind"] for item in portal_audit_items} >= {
         "site.provision",
         "site_key.issue",
+        "wordpress_addon_connection.issue",
     }
 
     admin_audit_response = client.get(
@@ -342,6 +361,10 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
         )
 
     assert {event.meter_key for event in meter_events} >= {"runs", "provider_calls"}
-    assert {event.event_kind for event in audit_events} >= {"site.provision", "site_key.issue"}
+    assert {event.event_kind for event in audit_events} >= {
+        "site.provision",
+        "site_key.issue",
+        "wordpress_addon_connection.issue",
+    }
 
     dispose_engine(database_url)

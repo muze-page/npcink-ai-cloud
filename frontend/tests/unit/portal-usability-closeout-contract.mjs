@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const read = (path) => readFileSync(resolve(path), 'utf8');
@@ -8,7 +8,8 @@ const audit = read('src/app/portal/audit/PortalAuditClient.tsx');
 const billing = read('src/app/portal/billing/page.tsx');
 const globals = read('src/app/globals.css');
 const layout = read('src/app/portal/layout.tsx');
-const monitoring = read('src/app/portal/monitoring/page.tsx');
+const monitoringRedirectPath = resolve('src/app/portal/monitoring/page.tsx');
+const sitesRedirectPath = resolve('src/app/portal/sites/page.tsx');
 const siteServiceStatus = read('src/components/portal/PortalSiteServiceStatus.tsx');
 const packagePanel = read('src/components/portal/PortalPackageChangePanel.tsx');
 const creditPackDialog = read('src/components/portal/PortalCreditPackDialog.tsx');
@@ -23,7 +24,8 @@ assert.doesNotMatch(account, /href="\/portal\/login"/);
 assert.match(account, /portal\.account\.settings_eyebrow/);
 assert.match(audit, /portal\.audit\.records_title/);
 
-assert.match(monitoring, /#service-status/);
+assert.equal(existsSync(monitoringRedirectPath), false);
+assert.equal(existsSync(sitesRedirectPath), false);
 assert.match(siteServiceStatus, /portal\.monitoring\.recorded_errors/);
 assert.match(siteServiceStatus, /portal\.monitoring\.recorded_errors_detail/);
 

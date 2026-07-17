@@ -7,6 +7,7 @@ import {
   getExternalRequestHost,
   getExternalRequestOrigin,
   getExternalRequestProto,
+  requireAdminCapability,
   requireAdminSessionData,
 } from '../../_shared';
 import { getInternalAuthToken } from '@/lib/env';
@@ -15,6 +16,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const sessionResult = await requireAdminSessionData(request);
   if (sessionResult instanceof NextResponse) {
     return sessionResult;
+  }
+  const capabilityError = requireAdminCapability(
+    sessionResult.session,
+    'can_review_diagnostics'
+  );
+  if (capabilityError) {
+    return capabilityError;
   }
 
   const requestOrigin = getExternalRequestOrigin(request);
@@ -41,15 +49,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       headers,
       body: JSON.stringify({
         ...body,
-        actor_ref: sessionResult.session.platform_admin_ref,
+        actor_ref: sessionResult.session.principal_id,
       }),
       cache: 'no-store',
     });
-  } catch (error) {
+  } catch {
     return buildErrorResponse(
       502,
       'proxy.admin_advisor_review_unreachable',
-      error instanceof Error ? error.message : 'failed to reach advisor review endpoint'
+      'failed to reach advisor review endpoint'
     );
   }
 

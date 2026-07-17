@@ -168,7 +168,7 @@ Current managed capability examples include:
 | Image/reference media search | `image-source.managed` | `knowledge` | `image_source` | run, provider call, and cost meters |
 | Web search/evidence | `web-search.managed` | `knowledge` | `web_search` | run, provider call, and cost meters |
 | Site knowledge/vector search | `site-knowledge.managed` | `knowledge` | `knowledge` or `embedding` | run meters plus provider call/token/cost meters for managed embedding providers |
-| Media derivative processing | `media_derivative.worker` | `vision` | `media_derivative` | run meters and queue/concurrency controls |
+| Media image transform | `media.transform.worker` | `vision` | `media_derivative` | run meters and queue/concurrency controls |
 
 New hosted text, image, embedding/vector, search, audio, or multimodal model
 adapters must enter through the same runtime authorization path. They must not

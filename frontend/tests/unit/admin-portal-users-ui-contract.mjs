@@ -122,14 +122,14 @@ assert.match(
 
 assert.match(
   proxySource,
-  /\^portal-users\\\/\[\^\/\]\+\\\/disable\$/,
-  'admin proxy must route portal user disable writes to the admin backend namespace'
+  /methods: \['POST'\],[\s\S]*?pattern: \/\^portal-users\\\/\(\?:batch-disable\|\[\^\/\]\+\\\/disable\)\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_accounts'/,
+  'admin proxy must explicitly allowlist portal user disable writes with account-management authority'
 );
 
 assert.match(
   proxySource,
-  /normalized === 'portal-users\/batch-disable'/,
-  'admin proxy must route portal user batch disable writes to the admin backend namespace'
+  /pattern: \/\^portal-users\\\/\(\?:batch-disable\|\[\^\/\]\+\\\/disable\)\$\//,
+  'admin proxy must keep batch disable inside the same bounded portal-user write policy'
 );
 
 assert.doesNotMatch(

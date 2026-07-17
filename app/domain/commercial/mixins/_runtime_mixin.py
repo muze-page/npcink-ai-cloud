@@ -18,6 +18,7 @@ from app.core.models import (
     ENTITLEMENT_SNAPSHOT_STATUS_ACTIVE,
     PLAN_STATUS_ACTIVE,
     PLAN_VERSION_STATUS_PUBLISHED,
+    PLATFORM_KIND_WORDPRESS,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_ACTIVE,
@@ -111,6 +112,8 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 account_id=resolved_account_id,
                 name=site_name or site_id,
                 status=SITE_STATUS_ACTIVE,
+                site_url="",
+                platform_kind=PLATFORM_KIND_WORDPRESS,
                 metadata_json=(
                     {
                         "source": "seed_runtime",

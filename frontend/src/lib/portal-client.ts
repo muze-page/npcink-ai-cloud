@@ -2,11 +2,11 @@
  * Npcink AI Cloud Portal API Client
  *
  * 对接后端 Portal API (/portal/v1/*)
- * 支持邮箱验证码认证、Session 管理、API Key 管理等
+ * 支持邮箱验证码认证、Session 管理与 Portal 工作区能力
  */
 
+import { ApiClient, type ApiEnvelope, type ApiMethod } from './api-client';
 import { getPortalApiBaseUrl } from './env';
-import { generateIdempotencyKey } from './idempotency';
 
 export type ProductIdentityType = 'platform_admin' | 'user';
 
@@ -79,30 +79,9 @@ export interface Site {
   status: 'active' | 'suspended' | 'inactive' | 'provisioning' | 'archived';
   created_at: string;
   plan_name?: string;
-  wordpress_url?: string;
+  site_url: string;
+  platform_kind: 'wordpress';
   metadata?: Record<string, unknown>;
-}
-
-export interface ApiKey {
-  key_id: string;
-  site_id: string;
-  label: string;
-  scopes: string[];
-  status: 'active' | 'revoked' | 'expired';
-  created_at: string;
-  expires_at?: string;
-  last_used_at?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ApiKeyWithSecret extends ApiKey {
-  secret?: string;
-  cloud_api_key?: string;
-}
-
-export interface RotateKeyResponse {
-  previous: ApiKey;
-  current: ApiKeyWithSecret;
 }
 
 export interface PortalLoginCodeRequest {
@@ -197,63 +176,24 @@ export interface PortalQqStartResponse {
   intent?: 'login' | 'bind';
 }
 
-export interface CreateSiteRequest {
-  account_id: string;
-  site_name?: string;
-  wordpress_url: string;
-}
-
 export interface CreateAddonConnectionRequest {
   account_id: string;
   site_name?: string;
-  wordpress_url: string;
+  site_url: string;
   return_url: string;
   state: string;
 }
 
 export interface AddonConnectionResult {
   site_id: string;
+  site_url: string;
+  platform_kind: 'wordpress';
   key_id: string;
   site_created: boolean;
   redirect_url: string;
   return_url: string;
   expires_at: string;
   expires_in_seconds: number;
-}
-
-export interface CreateKeyRequest {
-  label?: string;
-  scopes?: string[];
-  expires_at?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface RotateKeyRequest {
-  label?: string;
-  scopes?: string[];
-  expires_at?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface UsageSummary {
-  site_id: string;
-  period_start_at: string;
-  period_end_at: string;
-  requests_total: number;
-  requests_limit: number;
-  tokens_total: number;
-  tokens_limit: number;
-  cost_estimate: number;
-  by_model: Array<{
-    model_id: string;
-    requests: number;
-    tokens: number;
-  }>;
-  by_day: Array<{
-    date: string;
-    requests: number;
-    tokens: number;
-  }>;
 }
 
 export interface Entitlements {
@@ -762,7 +702,11 @@ export interface PortalMediaObservabilityTotals {
   output_bytes_total: number;
   bytes_saved_total: number;
   compression_ratio: number;
-  artifact_download_count: number;
+  delivery_started_count: number;
+  delivery_stream_completed_count: number;
+  delivery_acknowledged_count: number;
+  stream_completion_rate: number;
+  acknowledgement_rate: number;
   last_finished_at: string;
   active_site_count: number;
   active_account_count: number;
@@ -1133,94 +1077,6 @@ export interface PortalBillingReconciliation {
   };
 }
 
-export interface PortalSiteBundle {
-  summary: PortalSiteSummaryRecord;
-  apiKeys: ApiKey[];
-}
-
-export interface PortalAnalyticsTrend {
-  site_id: string;
-  account_id?: string;
-  site_admin_ref?: string;
-  identity_type?: string;
-  role?: string;
-  tier_id?: string;
-  allowed_ranges?: string[];
-  selected_range?: string;
-  granularity?: string;
-  start_at?: string;
-  end_at?: string;
-  rows: Array<{
-    bucket_gmt: string;
-    ability_id: string;
-    caller_id: string;
-    request_total: number;
-    success_total: number;
-    guard_fail_total: number;
-    avg_latency_ms: number;
-  }>;
-}
-
-export interface PortalAnalyticsCostBreakdown {
-  site_id: string;
-  account_id?: string;
-  site_admin_ref?: string;
-  identity_type?: string;
-  role?: string;
-  tier_id?: string;
-  allowed_ranges?: string[];
-  selected_range?: string;
-  group_by?: string;
-  total_cost: number;
-  breakdown: Array<{
-    label: string;
-    value: number;
-    percentage: number;
-  }>;
-  generated_at?: string;
-}
-
-export interface PortalAnalyticsPerformance {
-  site_id: string;
-  account_id?: string;
-  site_admin_ref?: string;
-  identity_type?: string;
-  role?: string;
-  tier_id?: string;
-  allowed_ranges?: string[];
-  selected_range?: string;
-  performance?: {
-    latency: {
-      p50_ms: number;
-      p95_ms: number;
-      p99_ms: number;
-      avg_ms: number;
-    };
-    tool_latency: {
-      p50_ms: number;
-      p95_ms: number;
-    };
-    error_rate: number;
-    timeout_rate: number;
-    blocked_rate: number;
-    canceled_rate: number;
-    top_errors: Array<{
-      error_code: string;
-      count: number;
-      percentage: number;
-    }>;
-    status_distribution: {
-      total: number;
-      success: number;
-      error: number;
-      timeout: number;
-      blocked: number;
-      canceled: number;
-    };
-  };
-  generated_at?: string;
-}
-
 function normalizePortalSiteSummaryRecord(raw: unknown): PortalSiteSummaryRecord {
   const record = (raw || {}) as Record<string, unknown>;
   const nestedCoverage = ((record.coverage || {}) as Record<string, unknown>);
@@ -1285,61 +1141,15 @@ function normalizePortalSiteSummaryRecord(raw: unknown): PortalSiteSummaryRecord
   };
 }
 
-export interface ProvisionedSiteRecord {
-  site_id: string;
-  account_id: string;
-  name: string;
-  status: 'active' | 'suspended' | 'inactive' | 'provisioning';
-  metadata?: Record<string, unknown>;
-  provisioned_at?: string;
-  activated_at?: string;
-  suspended_at?: string;
-  suspension_reason?: string;
-  created_at: string;
-  updated_at?: string;
-}
-
-export interface PortalProvisionedSite {
-  account_id: string;
-  site_admin_ref: string;
-  role: string;
-  wordpress_url: string;
-  site: ProvisionedSiteRecord;
-  current_subscription?: {
-    subscription_id?: string;
-    status: string;
-    plan_id: string;
-    plan_version_id?: string;
-    tier_id?: string;
-    plan_kind?: string;
-    package_alias?: string;
-  } | null;
-  commercial_onboarding?: {
-    auto_bound: boolean;
-    tier_id: string;
-    package_alias: string;
-  } | null;
-  next: {
-    connection_path: string;
-    sites_path: string;
-  };
-}
-
-export interface PortalActivatedSite {
-  site_id: string;
-  account_id: string;
-  site_admin_ref: string;
-  role: string;
-  site: ProvisionedSiteRecord;
-}
-
 export interface PortalUsageBundle {
   usage: PortalUsageSummaryPayload;
   entitlements: Entitlements;
-  creditLedger: PortalCreditLedgerPayload;
+}
+
+export interface PortalCommercialBundle {
+  entitlements: Entitlements;
   creditPacks: PortalCreditPackCatalogPayload;
-  paymentOrders: PortalPaymentOrderListPayload;
-  planOffers?: PortalPlanOfferListPayload;
+  planOffers: PortalPlanOfferListPayload;
 }
 
 export interface PortalCreditLedgerEntry {
@@ -1811,16 +1621,12 @@ export interface PortalAuditBundle {
   events: PortalAuditEvent[];
 }
 
-export interface PortalBillingBundle {
-  snapshots: PortalBillingSnapshot[];
-  reconciliation: PortalBillingReconciliation;
-}
-
 export interface PortalSiteDiagnostics {
   site_id: string;
   generated_at: string;
   site_status?: string;
-  wordpress_url?: string;
+  site_url: string;
+  platform_kind: 'wordpress';
   active_key_count?: number;
   latest_key_used_at?: string;
   latest_auth_failure_at?: string;
@@ -1835,128 +1641,33 @@ export interface PortalSiteDiagnostics {
   }>;
 }
 
-export interface PortalEnvelope<T> {
-  status: 'ok' | 'error';
-  message: string;
-  data: T;
-  revision: string;
-}
-
-export interface PortalError {
-  status: 'error';
-  message: string;
-  error_code: string;
-  details?: Record<string, unknown>;
-}
-
-type PortalRequestOptions = {
-  requireAuth?: boolean;
-  headers?: HeadersInit;
-};
-
-// ============================================
-// 错误类
-// ============================================
-
-export class PortalApiError extends Error {
-  constructor(
-    message: string,
-    public readonly statusCode: number,
-    public readonly errorCode: string,
-    public readonly details?: Record<string, unknown>
-  ) {
-    super(message);
-    this.name = 'PortalApiError';
-  }
-
-  static fromResponse(status: number, body: PortalError): PortalApiError {
-    return new PortalApiError(
-      body.message || 'API request failed',
-      status,
-      body.error_code || 'unknown_error',
-      body.details
-    );
-  }
-}
+export type PortalEnvelope<T> = ApiEnvelope<T>;
 
 // ============================================
 // Portal API Client
 // ============================================
 
 export class PortalClient {
-  private baseUrl?: string;
-  private token?: string;
+  private apiClient?: ApiClient;
 
-  constructor(baseUrl?: string, token?: string) {
-    this.baseUrl = baseUrl;
-    this.token = token;
-  }
-
-  /**
-   * 设置认证 Token
-   */
-  setToken(token: string): void {
-    this.token = token;
-  }
-
-  /**
-   * 获取认证头
-   */
-  private getAuthHeaders(): HeadersInit {
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-    };
-
-    if (this.token) {
-      (headers as Record<string, string>)['Authorization'] = `Bearer ${this.token}`;
-    }
-
-    return headers;
-  }
+  constructor(private readonly baseUrl?: string) {}
 
   /**
    * 通用请求方法
    */
   private async request<T>(
-    method: string,
+    method: ApiMethod,
     path: string,
-    body?: unknown,
-    options: PortalRequestOptions = {}
+    body?: unknown
   ): Promise<PortalEnvelope<T>> {
-    const baseUrl = this.baseUrl || getPortalApiBaseUrl();
-    const url = `${baseUrl}${path}`;
-    const methodName = method.toUpperCase();
-    const generatedIdempotencyKey =
-      methodName !== 'GET' && methodName !== 'HEAD'
-        ? generateIdempotencyKey(`portal_${methodName.toLowerCase()}`)
-        : '';
-    
-    const response = await fetch(url, {
-      method,
-      headers: {
-        ...this.getAuthHeaders(),
-        ...(generatedIdempotencyKey ? { 'Idempotency-Key': generatedIdempotencyKey } : {}),
-        ...(options.headers || {}),
-        ...(options.requireAuth ? {} : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      credentials: 'include',
+    this.apiClient ??= new ApiClient({
+      baseUrl: this.baseUrl || getPortalApiBaseUrl(),
+      idempotencyPrefix: 'portal_write',
     });
-
-    const contentType = response.headers.get('content-type') || '';
-    const data = contentType.includes('application/json')
-      ? await response.json()
-      : {
-          status: 'error',
-          message: (await response.text()) || `HTTP ${response.status}`,
-          error_code: 'proxy.non_json_response',
-        };
-
-    if (!response.ok) {
-      throw PortalApiError.fromResponse(response.status, data as PortalError);
-    }
-
-    return data as PortalEnvelope<T>;
+    return this.apiClient.request<T>(path, {
+      method,
+      ...(body === undefined ? {} : { body }),
+    });
   }
 
   // ========================================
@@ -1985,11 +1696,11 @@ export class PortalClient {
   }
 
   async requestEmailChangeCode(payload: PortalEmailChangeCodeRequest): Promise<PortalEnvelope<PortalEmailChangeCodeResponse>> {
-    return this.request('POST', '/account/email-change/request', payload, { requireAuth: true });
+    return this.request('POST', '/account/email-change/request', payload);
   }
 
   async verifyEmailChangeCode(payload: PortalEmailChangeVerifyRequest): Promise<PortalEnvelope<PortalEmailChangeResult>> {
-    return this.request('POST', '/account/email-change/verify', payload, { requireAuth: true });
+    return this.request('POST', '/account/email-change/verify', payload);
   }
 
   /**
@@ -2004,7 +1715,8 @@ export class PortalClient {
     site?: {
       site_id: string;
       site_name: string;
-      wordpress_url: string;
+      site_url: string;
+      platform_kind: 'wordpress';
     };
   }>> {
     return this.request('POST', '/register/code/request', payload);
@@ -2023,7 +1735,7 @@ export class PortalClient {
    * GET /portal/v1/auth/identity-providers
    */
   async getIdentityProviders(): Promise<PortalEnvelope<PortalIdentityProvidersResponse>> {
-    return this.request('GET', '/auth/identity-providers', undefined, { requireAuth: true });
+    return this.request('GET', '/auth/identity-providers', undefined);
   }
 
   /**
@@ -2032,7 +1744,7 @@ export class PortalClient {
    */
   async startQqBind(returnTo = '/portal/account'): Promise<PortalEnvelope<PortalQqStartResponse>> {
     const params = new URLSearchParams({ intent: 'bind', return_to: returnTo });
-    return this.request('GET', `/auth/qq/start?${params.toString()}`, undefined, { requireAuth: true });
+    return this.request('GET', `/auth/qq/start?${params.toString()}`, undefined);
   }
 
   /**
@@ -2040,7 +1752,7 @@ export class PortalClient {
    * POST /portal/v1/auth/qq/unbind
    */
   async unbindQqLogin(): Promise<PortalEnvelope<{ provider: string; principal_id: string; revoked: number }>> {
-    return this.request('POST', '/auth/qq/unbind', { provider: 'qq' }, { requireAuth: true });
+    return this.request('POST', '/auth/qq/unbind', { provider: 'qq' });
   }
 
   // ========================================
@@ -2052,7 +1764,7 @@ export class PortalClient {
    * GET /portal/v1/session
    */
   async getSession(): Promise<PortalEnvelope<PortalSession>> {
-    return this.request('GET', '/session', undefined, { requireAuth: true });
+    return this.request('GET', '/session', undefined);
   }
 
   /**
@@ -2060,7 +1772,7 @@ export class PortalClient {
    * POST /portal/v1/session/site
    */
   async selectSite(siteId: string): Promise<PortalEnvelope<PortalSession>> {
-    return this.request('POST', '/session/site', { site_id: siteId }, { requireAuth: true });
+    return this.request('POST', '/session/site', { site_id: siteId });
   }
 
   /**
@@ -2088,27 +1800,15 @@ export class PortalClient {
    * GET /portal/v1/sites
    */
   async listSites(): Promise<PortalEnvelope<{ items: Site[] }>> {
-    return this.request('GET', '/sites', undefined, { requireAuth: true });
-  }
-
-  async createSite(payload: CreateSiteRequest): Promise<PortalEnvelope<PortalProvisionedSite>> {
-    return this.request('POST', '/sites', payload, { requireAuth: true });
+    return this.request('GET', '/sites', undefined);
   }
 
   async createAddonConnection(payload: CreateAddonConnectionRequest): Promise<PortalEnvelope<AddonConnectionResult>> {
-    return this.request('POST', '/addon-connections', payload, { requireAuth: true });
-  }
-
-  async activateSite(siteId: string): Promise<PortalEnvelope<PortalActivatedSite>> {
-    return this.request('POST', `/sites/${siteId}/activate`, {}, { requireAuth: true });
-  }
-
-  async deactivateSite(siteId: string): Promise<PortalEnvelope<{ site: Site }>> {
-    return this.request('POST', `/sites/${siteId}/deactivate`, {}, { requireAuth: true });
+    return this.request('POST', '/addon-connections', payload);
   }
 
   async removeSite(siteId: string): Promise<PortalEnvelope<{ site: Site; revoked_key_ids: string[] }>> {
-    return this.request('POST', `/sites/${siteId}/remove`, {}, { requireAuth: true });
+    return this.request('POST', `/sites/${siteId}/remove`, {});
   }
 
   /**
@@ -2116,9 +1816,7 @@ export class PortalClient {
    * GET /portal/v1/sites/{siteId}/summary
    */
   async getSiteSummary(siteId: string): Promise<PortalEnvelope<PortalSiteSummaryRecord>> {
-    const response = await this.request<PortalSiteSummaryRecord>('GET', `/sites/${siteId}/summary`, undefined, {
-      requireAuth: true,
-    });
+    const response = await this.request<PortalSiteSummaryRecord>('GET', `/sites/${siteId}/summary`, undefined);
     return {
       ...response,
       data: normalizePortalSiteSummaryRecord(response.data),
@@ -2130,7 +1828,7 @@ export class PortalClient {
    * GET /portal/v1/sites/{siteId}/usage-summary
    */
   async getUsageSummary(siteId: string): Promise<PortalEnvelope<PortalUsageSummaryPayload>> {
-    return this.request('GET', `/sites/${siteId}/usage-summary`, undefined, { requireAuth: true });
+    return this.request('GET', `/sites/${siteId}/usage-summary`, undefined);
   }
 
   async getMonitoringOverview(
@@ -2144,8 +1842,7 @@ export class PortalClient {
     return this.request(
       'GET',
       `/sites/${siteId}/monitoring-overview?${params.toString()}`,
-      undefined,
-      { requireAuth: true }
+      undefined
     );
   }
 
@@ -2160,8 +1857,7 @@ export class PortalClient {
     return this.request(
       'GET',
       `/sites/${siteId}/diagnostic-advisor?${params.toString()}`,
-      undefined,
-      { requireAuth: true }
+      undefined
     );
   }
 
@@ -2180,8 +1876,7 @@ export class PortalClient {
     return this.request(
       'GET',
       `/sites/${siteId}/plugin-observability?${params.toString()}`,
-      undefined,
-      { requireAuth: true }
+      undefined
     );
   }
 
@@ -2200,8 +1895,7 @@ export class PortalClient {
     return this.request(
       'GET',
       `/sites/${siteId}/media-observability?${params.toString()}`,
-      undefined,
-      { requireAuth: true }
+      undefined
     );
   }
 
@@ -2216,8 +1910,7 @@ export class PortalClient {
     return this.request(
       'GET',
       `/sites/${siteId}/vector-observability?${params.toString()}`,
-      undefined,
-      { requireAuth: true }
+      undefined
     );
   }
 
@@ -2232,8 +1925,7 @@ export class PortalClient {
     return this.request(
       'GET',
       `/sites/${siteId}/ai-insights/history?${params.toString()}`,
-      undefined,
-      { requireAuth: true }
+      undefined
     );
   }
 
@@ -2246,8 +1938,7 @@ export class PortalClient {
     return this.request(
       'POST',
       `/sites/${siteId}/ai-insights/analyze`,
-      { force_refresh: Boolean(options?.forceRefresh) },
-      { requireAuth: true }
+      { force_refresh: Boolean(options?.forceRefresh) }
     );
   }
 
@@ -2256,11 +1947,11 @@ export class PortalClient {
    * GET /portal/v1/sites/{siteId}/entitlements
    */
   async getEntitlements(siteId: string): Promise<PortalEnvelope<Entitlements>> {
-    return this.request('GET', `/sites/${siteId}/entitlements`, undefined, { requireAuth: true });
+    return this.request('GET', `/sites/${siteId}/entitlements`, undefined);
   }
 
   async getAccountEntitlements(): Promise<PortalEnvelope<Entitlements>> {
-    return this.request('GET', '/account/entitlements', undefined, { requireAuth: true });
+    return this.request('GET', '/account/entitlements', undefined);
   }
 
   /**
@@ -2276,7 +1967,7 @@ export class PortalClient {
     if (options?.offset) params.set('offset', String(options.offset));
 
     const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/sites/${siteId}/credit-ledger${query}`, undefined, { requireAuth: true });
+    return this.request('GET', `/sites/${siteId}/credit-ledger${query}`, undefined);
   }
 
   async getAccountCreditLedger(
@@ -2287,7 +1978,7 @@ export class PortalClient {
     if (options?.offset) params.set('offset', String(options.offset));
 
     const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/account/credit-ledger${query}`, undefined, { requireAuth: true });
+    return this.request('GET', `/account/credit-ledger${query}`, undefined);
   }
 
   async getAccountCreditTrend(
@@ -2295,7 +1986,7 @@ export class PortalClient {
   ): Promise<PortalEnvelope<PortalCreditTrendPayload>> {
     const params = new URLSearchParams({ window: options.window });
     if (options.siteId) params.set('site_id', options.siteId);
-    return this.request('GET', `/account/credit-trend?${params.toString()}`, undefined, { requireAuth: true });
+    return this.request('GET', `/account/credit-trend?${params.toString()}`, undefined);
   }
 
   async getAccountCreditEvents(options: {
@@ -2314,7 +2005,7 @@ export class PortalClient {
     if (options.offset) params.set('offset', String(options.offset));
     if (options.startAt) params.set('start_at', options.startAt);
     if (options.endAt) params.set('end_at', options.endAt);
-    return this.request('GET', `/account/credit-events?${params.toString()}`, undefined, { requireAuth: true });
+    return this.request('GET', `/account/credit-events?${params.toString()}`, undefined);
   }
 
   async getAccountCreditEventBuckets(options: {
@@ -2330,15 +2021,15 @@ export class PortalClient {
     if (options.feature) params.set('feature', options.feature);
     if (options.limit) params.set('limit', String(options.limit));
     if (options.offset) params.set('offset', String(options.offset));
-    return this.request('GET', `/account/credit-event-buckets?${params.toString()}`, undefined, { requireAuth: true });
+    return this.request('GET', `/account/credit-event-buckets?${params.toString()}`, undefined);
   }
 
   async listCreditPacks(siteId: string): Promise<PortalEnvelope<PortalCreditPackCatalogPayload>> {
-    return this.request('GET', `/sites/${siteId}/credit-packs`, undefined, { requireAuth: true });
+    return this.request('GET', `/sites/${siteId}/credit-packs`, undefined);
   }
 
   async listAccountCreditPacks(): Promise<PortalEnvelope<PortalCreditPackCatalogPayload>> {
-    return this.request('GET', '/account/credit-packs', undefined, { requireAuth: true });
+    return this.request('GET', '/account/credit-packs', undefined);
   }
 
   async listPaymentOrders(
@@ -2351,7 +2042,7 @@ export class PortalClient {
     if (options?.offset) params.set('offset', String(options.offset));
 
     const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/sites/${siteId}/payment-orders${query}`, undefined, { requireAuth: true });
+    return this.request('GET', `/sites/${siteId}/payment-orders${query}`, undefined);
   }
 
   async listAccountPaymentOrders(
@@ -2363,7 +2054,7 @@ export class PortalClient {
     if (options?.offset) params.set('offset', String(options.offset));
 
     const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/account/payment-orders${query}`, undefined, { requireAuth: true });
+    return this.request('GET', `/account/payment-orders${query}`, undefined);
   }
 
   async getAccountPaymentOrder(
@@ -2372,8 +2063,7 @@ export class PortalClient {
     return this.request(
       'GET',
       `/account/payment-orders/${encodeURIComponent(orderId)}`,
-      undefined,
-      { requireAuth: true }
+      undefined
     );
   }
 
@@ -2383,8 +2073,7 @@ export class PortalClient {
     return this.request(
       'POST',
       `/account/payment-orders/${encodeURIComponent(orderId)}/cancellation`,
-      {},
-      { requireAuth: true }
+      {}
     );
   }
 
@@ -2397,31 +2086,31 @@ export class PortalClient {
     if (options?.offset) params.set('offset', String(options.offset));
 
     const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/support-requests${query}`, undefined, { requireAuth: true });
+    return this.request('GET', `/support-requests${query}`, undefined);
   }
 
   async createSupportRequest(
     payload: CreatePortalSupportRequestPayload
   ): Promise<PortalEnvelope<{ request: PortalSupportRequest }>> {
-    return this.request('POST', '/support-requests', payload, { requireAuth: true });
+    return this.request('POST', '/support-requests', payload);
   }
 
   async getSupportRequest(requestId: string): Promise<PortalEnvelope<PortalSupportRequestDetailPayload>> {
-    return this.request('GET', `/support-requests/${requestId}`, undefined, { requireAuth: true });
+    return this.request('GET', `/support-requests/${requestId}`, undefined);
   }
 
   async createSupportRequestMessage(
     requestId: string,
     payload: CreatePortalSupportRequestMessagePayload
   ): Promise<PortalEnvelope<{ request: PortalSupportRequest; message: PortalSupportRequestMessage }>> {
-    return this.request('POST', `/support-requests/${requestId}/messages`, payload, { requireAuth: true });
+    return this.request('POST', `/support-requests/${requestId}/messages`, payload);
   }
 
   async createSupportRequestAttachment(
     requestId: string,
     payload: CreatePortalSupportRequestAttachmentPayload
   ): Promise<PortalEnvelope<{ request: PortalSupportRequest; attachment: PortalSupportRequestAttachment }>> {
-    return this.request('POST', `/support-requests/${requestId}/attachments`, payload, { requireAuth: true });
+    return this.request('POST', `/support-requests/${requestId}/attachments`, payload);
   }
 
   async getSupportRequestAttachment(
@@ -2431,8 +2120,7 @@ export class PortalClient {
     return this.request(
       'GET',
       `/support-requests/${requestId}/attachments/${attachmentId}`,
-      undefined,
-      { requireAuth: true }
+      undefined
     );
   }
 
@@ -2440,7 +2128,7 @@ export class PortalClient {
     requestId: string,
     payload: SubmitPortalSupportRequestFeedbackPayload
   ): Promise<PortalEnvelope<{ request: PortalSupportRequest; feedback: PortalSupportRequestFeedback }>> {
-    return this.request('POST', `/support-requests/${requestId}/feedback`, payload, { requireAuth: true });
+    return this.request('POST', `/support-requests/${requestId}/feedback`, payload);
   }
 
   async createCreditPackOrder(
@@ -2451,8 +2139,7 @@ export class PortalClient {
     return this.request(
       'POST',
       `/sites/${siteId}/credit-pack-orders`,
-      { pack_id: packId, provider },
-      { requireAuth: true }
+      { pack_id: packId, provider }
     );
   }
 
@@ -2463,17 +2150,16 @@ export class PortalClient {
     return this.request(
       'POST',
       '/account/credit-pack-orders',
-      { pack_id: packId, provider },
-      { requireAuth: true }
+      { pack_id: packId, provider }
     );
   }
 
   async listAccountPlanOffers(): Promise<PortalEnvelope<PortalPlanOfferListPayload>> {
-    return this.request('GET', '/account/plan-offers', undefined, { requireAuth: true });
+    return this.request('GET', '/account/plan-offers', undefined);
   }
 
   async startPlanTrial(tierId: 'plus' | 'pro'): Promise<PortalEnvelope<PortalPlanTrialPayload>> {
-    return this.request('POST', '/account/plan-trials', { tier_id: tierId }, { requireAuth: true });
+    return this.request('POST', '/account/plan-trials', { tier_id: tierId });
   }
 
   async createSubscriptionOrder(
@@ -2483,8 +2169,7 @@ export class PortalClient {
     return this.request(
       'POST',
       '/account/subscription-orders',
-      { offer_id: offerId, provider },
-      { requireAuth: true }
+      { offer_id: offerId, provider }
     );
   }
 
@@ -2494,8 +2179,7 @@ export class PortalClient {
     return this.request(
       'DELETE',
       `/account/subscription-orders/${encodeURIComponent(subscriptionOrderId)}`,
-      undefined,
-      { requireAuth: true }
+      undefined
     );
   }
 
@@ -2504,7 +2188,7 @@ export class PortalClient {
     scheduled_tier_id: 'free';
     scheduled_change_at: string;
   }>> {
-    return this.request('POST', '/account/free-downgrade', {}, { requireAuth: true });
+    return this.request('POST', '/account/free-downgrade', {});
   }
 
   /**
@@ -2512,11 +2196,11 @@ export class PortalClient {
    * GET /portal/v1/sites/{siteId}/audit-summary
    */
   async getAuditSummary(siteId: string): Promise<PortalEnvelope<PortalAuditSummary>> {
-    return this.request('GET', `/sites/${siteId}/audit-summary`, undefined, { requireAuth: true });
+    return this.request('GET', `/sites/${siteId}/audit-summary`, undefined);
   }
 
   async getAccountAuditSummary(): Promise<PortalEnvelope<PortalAuditSummary>> {
-    return this.request('GET', '/account/audit-summary', undefined, { requireAuth: true });
+    return this.request('GET', '/account/audit-summary', undefined);
   }
 
   /**
@@ -2537,7 +2221,7 @@ export class PortalClient {
     if (options?.limit) params.set('limit', String(options.limit));
 
     const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/sites/${siteId}/audit-events${query}`, undefined, { requireAuth: true });
+    return this.request('GET', `/sites/${siteId}/audit-events${query}`, undefined);
   }
 
   async listAccountAuditEvents(
@@ -2553,7 +2237,7 @@ export class PortalClient {
     if (options?.limit) params.set('limit', String(options.limit));
 
     const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/account/audit-events${query}`, undefined, { requireAuth: true });
+    return this.request('GET', `/account/audit-events${query}`, undefined);
   }
 
   /**
@@ -2567,7 +2251,7 @@ export class PortalClient {
     role?: string;
     items: PortalBillingSnapshot[];
   }>> {
-    return this.request('GET', `/sites/${siteId}/billing-snapshots`, undefined, { requireAuth: true });
+    return this.request('GET', `/sites/${siteId}/billing-snapshots`, undefined);
   }
 
   /**
@@ -2575,62 +2259,32 @@ export class PortalClient {
    * GET /portal/v1/sites/{siteId}/billing-snapshots/reconciliation
    */
   async getBillingReconciliation(siteId: string): Promise<PortalEnvelope<PortalBillingReconciliation>> {
-    return this.request('GET', `/sites/${siteId}/billing-snapshots/reconciliation`, undefined, { requireAuth: true });
-  }
-
-  async getSiteBundle(siteId: string): Promise<PortalSiteBundle> {
-    const [summaryResponse, apiKeysResponse] = await Promise.all([
-      this.getSiteSummary(siteId),
-      this.listApiKeys(siteId),
-    ]);
-    return {
-      summary: normalizePortalSiteSummaryRecord(summaryResponse.data),
-      apiKeys: apiKeysResponse.data.items || [],
-    };
+    return this.request('GET', `/sites/${siteId}/billing-snapshots/reconciliation`, undefined);
   }
 
   async getAccountUsageSummary(): Promise<PortalEnvelope<PortalUsageSummaryPayload>> {
-    return this.request('GET', '/account/usage-summary', undefined, { requireAuth: true });
+    return this.request('GET', '/account/usage-summary', undefined);
   }
 
   async getUsageBundle(): Promise<PortalUsageBundle> {
-    const [
-      usageResponse,
-      entitlementsResponse,
-      creditLedgerResponse,
-      creditPacksResponse,
-      paymentOrdersResponse,
-    ] = await Promise.all([
+    const [usageResponse, entitlementsResponse] = await Promise.all([
       this.getAccountUsageSummary(),
       this.getAccountEntitlements(),
-      this.getAccountCreditLedger({ limit: 20 }),
-      this.listAccountCreditPacks(),
-      this.listAccountPaymentOrders({ statusGroup: 'all', limit: 10 }),
     ]);
     return {
       usage: usageResponse.data,
       entitlements: entitlementsResponse.data,
-      creditLedger: creditLedgerResponse.data,
-      creditPacks: creditPacksResponse.data,
-      paymentOrders: paymentOrdersResponse.data,
     };
   }
 
-  async getAccountCommercialBundle(): Promise<Pick<PortalUsageBundle, 'entitlements' | 'creditLedger' | 'creditPacks' | 'planOffers'>> {
-    const [
-      entitlementsResponse,
-      creditLedgerResponse,
-      creditPacksResponse,
-      planOffersResponse,
-    ] = await Promise.all([
+  async getAccountCommercialBundle(): Promise<PortalCommercialBundle> {
+    const [entitlementsResponse, creditPacksResponse, planOffersResponse] = await Promise.all([
       this.getAccountEntitlements(),
-      this.getAccountCreditLedger({ limit: 12 }),
       this.listAccountCreditPacks(),
       this.listAccountPlanOffers(),
     ]);
     return {
       entitlements: entitlementsResponse.data,
-      creditLedger: creditLedgerResponse.data,
       creditPacks: creditPacksResponse.data,
       planOffers: planOffersResponse.data,
     };
@@ -2653,357 +2307,10 @@ export class PortalClient {
     };
   }
 
-  async getBillingBundle(siteId: string): Promise<PortalBillingBundle> {
-    const [snapshotsResponse, reconciliationResponse] = await Promise.all([
-      this.listBillingSnapshots(siteId),
-      this.getBillingReconciliation(siteId),
-    ]);
-    return {
-      snapshots: snapshotsResponse.data.items || [],
-      reconciliation: reconciliationResponse.data,
-    };
-  }
-
   async getSiteDiagnostics(siteId: string): Promise<PortalEnvelope<PortalSiteDiagnostics>> {
-    return this.request('GET', `/sites/${siteId}/diagnostics`, undefined, { requireAuth: true });
+    return this.request('GET', `/sites/${siteId}/diagnostics`, undefined);
   }
 
-  // ========================================
-  // Analytics Dashboard
-  // ========================================
-
-  /**
-   * 获取 Analytics Trend
-   * GET /portal/v1/sites/{siteId}/analytics/trend
-   */
-  async getAnalyticsTrend(
-    siteId: string,
-    range: string = '7d',
-    granularity: string = 'daily'
-  ): Promise<PortalEnvelope<PortalAnalyticsTrend>> {
-    const params = new URLSearchParams();
-    params.set('range', range);
-    params.set('granularity', granularity);
-    return this.request('GET', `/sites/${siteId}/analytics/trend?${params.toString()}`, undefined, { requireAuth: true });
-  }
-
-  /**
-   * 获取 Analytics Cost Breakdown
-   * GET /portal/v1/sites/{siteId}/analytics/cost-breakdown
-   */
-  async getAnalyticsCostBreakdown(
-    siteId: string,
-    range: string = '7d',
-    groupBy: string = 'provider'
-  ): Promise<PortalEnvelope<PortalAnalyticsCostBreakdown>> {
-    const params = new URLSearchParams();
-    params.set('range', range);
-    params.set('group_by', groupBy);
-    return this.request('GET', `/sites/${siteId}/analytics/cost-breakdown?${params.toString()}`, undefined, { requireAuth: true });
-  }
-
-  /**
-   * 获取 Analytics Performance
-   * GET /portal/v1/sites/{siteId}/analytics/performance
-   */
-  async getAnalyticsPerformance(
-    siteId: string,
-    range: string = '7d'
-  ): Promise<PortalEnvelope<PortalAnalyticsPerformance>> {
-    return this.request('GET', `/sites/${siteId}/analytics/performance?range=${encodeURIComponent(range)}`, undefined, { requireAuth: true });
-  }
-
-  // ========================================
-  // API Key 管理
-  // ========================================
-
-  /**
-   * 获取 API Key 列表
-   * GET /portal/v1/sites/{siteId}/api-keys
-   */
-  async listApiKeys(siteId: string): Promise<PortalEnvelope<{ items: ApiKey[] }>> {
-    return this.request('GET', `/sites/${siteId}/api-keys`, undefined, { requireAuth: true });
-  }
-
-  /**
-   * 创建 API Key
-   * POST /portal/v1/sites/{siteId}/api-keys
-   */
-  async createApiKey(
-    siteId: string,
-    payload: CreateKeyRequest
-  ): Promise<PortalEnvelope<ApiKeyWithSecret>> {
-    return this.request('POST', `/sites/${siteId}/api-keys`, payload, { requireAuth: true });
-  }
-
-  /**
-   * 轮换 API Key
-   * POST /portal/v1/sites/{siteId}/api-keys/{keyId}/rotate
-   */
-  async rotateApiKey(
-    siteId: string,
-    keyId: string,
-    payload: RotateKeyRequest
-  ): Promise<PortalEnvelope<RotateKeyResponse>> {
-    return this.request('POST', `/sites/${siteId}/api-keys/${keyId}/rotate`, payload, { requireAuth: true });
-  }
-
-  /**
-   * 吊销 API Key
-   * POST /portal/v1/sites/{siteId}/api-keys/{keyId}/revoke
-   */
-  async revokeApiKey(siteId: string, keyId: string): Promise<PortalEnvelope<ApiKey>> {
-    return this.request('POST', `/sites/${siteId}/api-keys/${keyId}/revoke`, undefined, { requireAuth: true });
-  }
-
-  // ========================================
-  // Admin API (Internal Only)
-  // ========================================
-
-  /**
-   * 获取管理员总览
-   * GET /internal/service/admin/overview
-   */
-  async getAdminOverview(): Promise<PortalEnvelope<{
-    total_accounts: number;
-    total_site_admins: number;
-    total_sites: number;
-    total_subscriptions: number;
-    active_site_keys: number;
-    expiring_subscriptions: {
-      total: number;
-      in_7_days: number;
-      in_30_days: number;
-      items: Array<{
-        subscription_id: string;
-        account_id: string;
-        site_id: string;
-        status: string;
-        current_period_end: string;
-      }>;
-    };
-    attention_subscriptions: Array<{
-      subscription_id: string;
-      account_id: string;
-      site_id: string;
-      status: string;
-      reason: string;
-    }>;
-    runtime_summary: {
-      queued_runs: number;
-      callback_failed: number;
-      guard_events: number;
-    };
-  }>> {
-    return this.request('GET', '/internal/service/admin/overview', undefined, { requireAuth: true });
-  }
-
-  /**
-   * 获取账户列表
-   * GET /internal/service/admin/accounts
-   */
-  async listAdminAccounts(options?: {
-    status?: string;
-    expires_before?: string;
-    limit?: number;
-  }): Promise<PortalEnvelope<{
-    items: Array<{
-      account_id: string;
-      name: string;
-      status: string;
-      site_count: number;
-      subscription_count: number;
-      top_plan?: string;
-      nearest_expiry?: string;
-    }>;
-    total: number;
-  }>> {
-    const params = new URLSearchParams();
-    if (options?.status) params.set('status', options.status);
-    if (options?.expires_before) params.set('expires_before', options.expires_before);
-    if (options?.limit) params.set('limit', String(options.limit));
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/internal/service/admin/accounts${query}`, undefined, { requireAuth: true });
-  }
-
-  /**
-   * 获取账户详情
-   * GET /internal/service/admin/accounts/{account_id}
-   */
-  async getAdminAccount(accountId: string): Promise<PortalEnvelope<{
-    account_id: string;
-    name: string;
-    status: string;
-    created_at: string;
-    site_count: number;
-    subscription_count: number;
-    subscriptions: Array<{
-      subscription_id: string;
-      status: string;
-      plan_id: string;
-      plan_version_id?: string;
-      package_alias?: string;
-      current_period_end: string;
-    }>;
-  }>> {
-    return this.request('GET', `/internal/service/admin/accounts/${accountId}`, undefined, { requireAuth: true });
-  }
-
-  /**
-   * 获取站点列表
-   * GET /internal/service/admin/sites
-   */
-  async listAdminSites(options?: {
-    status?: string;
-    account_id?: string;
-    subscription_status?: string;
-    expires_before?: string;
-    limit?: number;
-  }): Promise<PortalEnvelope<{
-    items: Array<{
-      site_id: string;
-      account_id: string;
-      site_name: string;
-      status: string;
-      key_count: number;
-      subscription_status: string;
-      plan_id: string;
-      current_period_end: string;
-      recent_usage?: {
-        requests: number;
-        tokens: number;
-      };
-    }>;
-    total: number;
-  }>> {
-    const params = new URLSearchParams();
-    if (options?.status) params.set('status', options.status);
-    if (options?.account_id) params.set('account_id', options.account_id);
-    if (options?.subscription_status) params.set('subscription_status', options.subscription_status);
-    if (options?.expires_before) params.set('expires_before', options.expires_before);
-    if (options?.limit) params.set('limit', String(options.limit));
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/internal/service/admin/sites${query}`, undefined, { requireAuth: true });
-  }
-
-  /**
-   * 获取站点详情
-   * GET /internal/service/admin/sites/{site_id}
-   */
-  async getAdminSite(siteId: string): Promise<PortalEnvelope<{
-    site_id: string;
-    account_id: string;
-    site_name: string;
-    status: string;
-    created_at: string;
-    key_count: number;
-    subscription?: {
-      subscription_id: string;
-      status: string;
-      plan_id: string;
-      current_period_start: string;
-      current_period_end: string;
-    };
-    usage_summary?: {
-      requests_total: number;
-      tokens_total: number;
-      cost_estimate: number;
-    };
-    billing_summary?: {
-      total_snapshots: number;
-      latest_snapshot?: {
-        snapshot_id: string;
-        status: string;
-        cost: number;
-      };
-    };
-    runtime_summary?: {
-      total_runs: number;
-      failed_runs: number;
-      last_run_at?: string;
-    };
-  }>> {
-    return this.request('GET', `/internal/service/admin/sites/${siteId}`, undefined, { requireAuth: true });
-  }
-
-  /**
-   * 获取订阅列表
-   * GET /internal/service/admin/subscriptions
-   */
-  async listAdminSubscriptions(options?: {
-    status?: string;
-    account_id?: string;
-    site_id?: string;
-    plan_id?: string;
-    expires_before?: string;
-    limit?: number;
-  }): Promise<PortalEnvelope<{
-    items: Array<{
-      subscription_id: string;
-      account_id: string;
-      site_id?: string;
-      site_name?: string;
-      account_name?: string;
-      status: string;
-      plan_id: string;
-      plan_version_id: string;
-      current_period_start: string;
-      current_period_end: string;
-      grace_state?: string;
-      billing_summary?: {
-        total_cost: number;
-        latest_snapshot_id?: string;
-      };
-    }>;
-    total: number;
-  }>> {
-    const params = new URLSearchParams();
-    if (options?.status) params.set('status', options.status);
-    if (options?.account_id) params.set('account_id', options.account_id);
-    if (options?.site_id) params.set('site_id', options.site_id);
-    if (options?.plan_id) params.set('plan_id', options.plan_id);
-    if (options?.expires_before) params.set('expires_before', options.expires_before);
-    if (options?.limit) params.set('limit', String(options.limit));
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return this.request('GET', `/internal/service/admin/subscriptions${query}`, undefined, { requireAuth: true });
-  }
-
-  /**
-   * 获取订阅详情
-   * GET /internal/service/admin/subscriptions/{subscription_id}
-   */
-  async getAdminSubscription(subscriptionId: string): Promise<PortalEnvelope<{
-    subscription_id: string;
-    account_id: string;
-    site_id?: string;
-    status: string;
-    plan_id: string;
-    plan_version_id: string;
-    current_period_start: string;
-    current_period_end: string;
-    grace_state?: string;
-    downgrade_state?: string;
-    billing_snapshots: Array<{
-      snapshot_id: string;
-      period_start: string;
-      period_end: string;
-      status: string;
-      cost: number;
-      created_at: string;
-    }>;
-    audit_events: Array<{
-      event_id: string;
-      event_kind: string;
-      outcome: string;
-      message: string;
-      created_at: string;
-    }>;
-  }>> {
-    return this.request('GET', `/internal/service/admin/subscriptions/${subscriptionId}`, undefined, { requireAuth: true });
-  }
 }
 
 // ============================================

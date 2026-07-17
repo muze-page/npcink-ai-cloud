@@ -134,6 +134,7 @@ def _build_client(
         "environment": "test",
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
+        "artifact_store_root": str(tmp_path / "artifacts"),
         "internal_auth_token": TEST_INTERNAL_AUTH_TOKEN,
         "admin_session_secret": TEST_ADMIN_SESSION_SECRET,
         "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
@@ -176,6 +177,9 @@ def _runtime_service_settings(database_url: str) -> Settings:
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
+        artifact_store_root=str(
+            Path(database_url.removeprefix("sqlite+pysqlite:///")).parent / "artifacts"
+        ),
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
         admin_session_secret=TEST_ADMIN_SESSION_SECRET,
         portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
@@ -3725,10 +3729,19 @@ def test_runtime_telemetry_diagnostics_summarizes_runtime_families(
             run_id="run-model-gov-vision",
             ability_family="vision",
             execution_kind="media_derivative",
-            profile_id="media_derivative.worker",
-            provider_id="media_derivative",
+            profile_id="media.transform.worker",
+            provider_id="media_processor",
             model_id="pillow",
             instance_id="cloud-worker",
+        )
+        add_run(
+            run_id="run-model-gov-uncovered-text",
+            ability_family="uncovered_text",
+            execution_kind="text",
+            profile_id="text.free-gpt55",
+            provider_id="openai-global-gpt-5-5",
+            model_id="gpt-5.5",
+            instance_id="openai-global-gpt-5-5-text",
         )
         session.flush()
         session.add_all(
@@ -3826,10 +3839,14 @@ def test_runtime_telemetry_diagnostics_summarizes_runtime_families(
     assert legacy_response.status_code == 404
     assert legacy_admin_alias_response.status_code == 404
     data = response.json()["data"]
-    assert admin_alias_response.json()["data"]["totals"]["runs"] == 3
+    assert admin_alias_response.json()["data"]["totals"]["runs"] == 4
     assert admin_alias_response.json()["data"]["filters"]["recent_minutes"] == 10080
-    assert data["totals"]["runs"] == 3
+    assert data["totals"]["runs"] == 4
+    assert data["totals"]["ai_evidence_required_runs"] == 4
+    assert data["totals"]["non_ai_zero_credit_runs"] == 0
     assert data["totals"]["provider_calls"] == 2
+    assert data["totals"]["provider_call_run_coverage_rate"] == 0.5
+    assert data["totals"]["metered_run_coverage_rate"] == 0.75
     assert data["boundary"]["direct_wordpress_write"] is False
     assert data["boundary"]["contains_prompt_or_result_payloads"] is False
     capability_by_id = {item["group_id"]: item for item in data["capability_groups"]}
@@ -3838,12 +3855,22 @@ def test_runtime_telemetry_diagnostics_summarizes_runtime_families(
     assert capability_by_id["knowledge"]["provider_calls"] == 1
     assert "site-knowledge.managed" in capability_by_id["knowledge"]["profile_ids"]
     assert capability_by_id["vision"]["provider_calls"] == 0
-    assert data["governance_gaps"]["unmetered_capabilities"] == []
-    assert data["alert_summary"]["status"] == "warning"
+    assert data["governance_gaps"]["unmetered_capabilities"] == ["uncovered_text"]
+    assert data["governance_gaps"]["missing_provider_call_capabilities"] == ["uncovered_text"]
+    assert data["governance_gaps"]["unmetered_run_count"] == 1
+    assert data["governance_gaps"]["runs_without_provider_call_count"] == 2
+    assert data["alert_summary"]["status"] == "error"
+    assert any(
+        alert["code"] == "hosted_model.unmetered_runs"
+        and alert["count"] == 1
+        and "uncovered_text" in alert["capabilities"]
+        for alert in data["alert_summary"]["alerts"]
+    )
     assert any(
         alert["code"] == "hosted_model.provider_call_gap"
-        and alert["count"] == 1
+        and alert["count"] == 2
         and "vision" in alert["capabilities"]
+        and "uncovered_text" in alert["capabilities"]
         for alert in data["alert_summary"]["alerts"]
     )
     assert data["alert_summary"]["boundary"]["direct_wordpress_write"] is False
@@ -6140,8 +6167,12 @@ def test_service_routes_expose_ops_cadence_summary(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["totals"]["tasks_total"] == 9
+    assert payload["totals"]["tasks_total"] == 10
     assert any(item["task_id"] == "retention_cleanup" for item in payload["items"])
+    assert any(
+        item["task_id"] == "artifact_inventory_reconciliation"
+        for item in payload["items"]
+    )
     assert any(item["task_id"] == "payment_order_expiration" for item in payload["items"])
     assert all(item["task_id"] != "hosted_model_governance" for item in payload["items"])
     retention_item = next(
@@ -6197,7 +6228,11 @@ def test_service_routes_expose_observability_summary(tmp_path: Path) -> None:
     assert "feature_flags" not in payload
     assert payload["workers"]["totals"]["workers_total"] == 3
     assert any(item["worker_id"] == "runtime_queue" for item in payload["workers"]["items"])
-    assert payload["cadence"]["totals"]["tasks_total"] == 9
+    assert payload["cadence"]["totals"]["tasks_total"] == 10
+    assert any(
+        item["task_id"] == "artifact_inventory_reconciliation"
+        for item in payload["cadence"]["items"]
+    )
     assert any(
         item["task_id"] == "payment_order_expiration"
         for item in payload["cadence"]["items"]

@@ -18,6 +18,7 @@ from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import PRINCIPAL_STATUS_ACTIVE
 from app.core.security import (
+    PUBLIC_REPLAY_POLICY_METHOD_DEFAULT,
     PUBLIC_RUNTIME_MAX_BODY_BYTES,
     REPLAY_SCOPE_INTERNAL,
     REPLAY_SCOPE_INTERNAL_POST,
@@ -25,6 +26,7 @@ from app.core.security import (
     RUNTIME_GUARD_SURFACE_INTERNAL,
     RequestAuthContext,
     RequestAuthError,
+    RequestBodyEvidenceLoader,
     _enforce_guard_cooldown,
     _enforce_short_window_rate_limit,
     _reserve_replay_receipt,
@@ -376,6 +378,8 @@ async def authorize_public_request(
     require_idempotency: bool,
     required_scope: str | None = None,
     max_body_bytes: int | None = None,
+    body_evidence_loader: RequestBodyEvidenceLoader | None = None,
+    replay_policy: str = PUBLIC_REPLAY_POLICY_METHOD_DEFAULT,
 ) -> RequestAuthContext | JSONResponse:
     services = get_cloud_services(request)
 
@@ -411,7 +415,25 @@ async def authorize_public_request(
             ),
             require_idempotency=require_idempotency,
             required_scope=required_scope,
-            max_body_bytes=max_body_bytes or PUBLIC_RUNTIME_MAX_BODY_BYTES,
+            max_body_bytes=(
+                max_body_bytes
+                if max_body_bytes is not None
+                else PUBLIC_RUNTIME_MAX_BODY_BYTES
+            ),
+            body_evidence_loader=body_evidence_loader,
+            replay_policy=replay_policy,
+            public_pull_rate_limit_window_seconds=(
+                services.settings.public_pull_rate_limit_window_seconds
+            ),
+            public_pull_max_requests_per_window=(
+                services.settings.public_pull_max_requests_per_window
+            ),
+            public_pull_max_requests_per_key_window=(
+                services.settings.public_pull_max_requests_per_key_window
+            ),
+            public_pull_max_requests_per_ip_window=(
+                services.settings.public_pull_max_requests_per_ip_window
+            ),
         )
     except RequestAuthError as error:
         return _build_auth_error_response(

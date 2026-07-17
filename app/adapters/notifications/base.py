@@ -41,7 +41,7 @@ class PortalEmailSender(ABC):
         expires_in_seconds: int,
         project_name: str,
         site_name: str = "",
-        wordpress_url: str = "",
+        site_url: str = "",
         locale: str = "zh-CN",
     ) -> None:
         raise NotImplementedError

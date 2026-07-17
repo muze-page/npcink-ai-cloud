@@ -197,6 +197,10 @@ def test_provider_registry_uses_enabled_provider_connections_instead_of_env_fall
             "base_url": "https://db-openai.example/v1",
             "capability_ids": ["text_generation", "image_generation"],
             "runtime_profile_ids": ["text.ai", "image.generation.default"],
+            "config": {
+                "image_output_hosts": ["cdn.openai.example", "assets.openai.example"],
+                "image_response_format": "b64_json",
+            },
             "credential": "db-openai-key",
         }
     )
@@ -208,6 +212,11 @@ def test_provider_registry_uses_enabled_provider_connections_instead_of_env_fall
     assert openai.display_name == "OpenAI primary from DB"
     assert openai.base_url == "https://db-openai.example/v1"
     assert openai.api_key == "db-openai-key"
+    assert openai.image_output_hosts == (
+        "cdn.openai.example",
+        "assets.openai.example",
+    )
+    assert openai.image_response_format == "b64_json"
 
     env_only_providers = build_provider_adapters(settings, include_enabled_connections=False)
     assert "openai" not in env_only_providers

@@ -202,8 +202,8 @@ _WORKFLOWS: dict[str, WorkflowMetadata] = {
             "Fixed worker workflow for temporary image derivatives. Cloud returns "
             "an artifact reference; local WordPress remains the approval and write owner."
         ),
-        ability_name="npcink-cloud/media-derivative",
-        contract="media_derivative_cloud_request.v1",
+        ability_name="npcink-cloud/media-image-transform",
+        contract="media_job_request.v1",
         owner="cloud_worker",
         handoff_owner="wordpress_local",
         execution_pattern="whole_run_offload",
@@ -213,7 +213,7 @@ _WORKFLOWS: dict[str, WorkflowMetadata] = {
             StatusBadge(label="write blocked", status="success"),
         ),
         steps=(
-            "Validate media derivative request",
+            "Validate media job request and artifact references",
             "Queue runtime worker job",
             "Process static image derivative",
             "Store short TTL artifact",

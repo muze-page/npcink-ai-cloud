@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from argparse import Namespace
 from types import SimpleNamespace
 
@@ -57,6 +58,9 @@ def test_seed_runtime_uses_provider_registry(monkeypatch, capsys) -> None:
     seed_runtime.main()
 
     output = capsys.readouterr().out
+    public_result = json.loads(output)
     assert "catalog-test" in output
+    assert "database_url" not in public_result
+    assert "secret_hash" not in public_result["auth"]
     assert captured["database_url"] == "postgresql+psycopg://test"
     assert captured["providers"] is sentinel_providers

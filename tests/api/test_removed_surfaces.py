@@ -19,7 +19,8 @@ def _client(tmp_path) -> TestClient:
 
 def test_removed_public_control_plane_surfaces_are_absent_from_openapi(tmp_path) -> None:
     client = _client(tmp_path)
-    paths = set(client.get("/openapi.json").json()["paths"])
+    openapi_paths = client.get("/openapi.json").json()["paths"]
+    paths = set(openapi_paths)
 
     removed_prefixes = (
         "/v1/orchestration",
@@ -46,10 +47,21 @@ def test_removed_public_control_plane_surfaces_are_absent_from_openapi(tmp_path)
         "/internal/service/admin/models",
         "/internal/service/admin/recognition",
         "/internal/service/admin/wordpress-ai-routing",
+        "/v1/runtime/audio-assets",
+        "/v1/runtime/artifacts",
     )
 
     for path in paths:
         assert not path.startswith(removed_prefixes), path
+
+    assert "post" not in openapi_paths["/portal/v1/sites"]
+    assert {
+        "/portal/v1/sites/{site_id}/activate",
+        "/portal/v1/sites/{site_id}/deactivate",
+        "/portal/v1/sites/{site_id}/api-keys",
+        "/portal/v1/sites/{site_id}/api-keys/{key_id}/rotate",
+        "/portal/v1/sites/{site_id}/api-keys/{key_id}/revoke",
+    }.isdisjoint(paths)
 
 
 def test_removed_urls_return_404(tmp_path) -> None:
@@ -72,6 +84,7 @@ def test_removed_urls_return_404(tmp_path) -> None:
         "/portal/v1/sites/site_alpha/topup-pack-requests",
         "/portal/v1/sites/site_alpha/delete-requests",
         "/portal/v1/sites/site_alpha/usage-alert-settings",
+        "/portal/v1/sites/site_alpha/api-keys",
         "/internal/service/admin/topup-packs",
         "/internal/service/admin/portal-action-requests",
         "/internal/service/admin/impersonations",
@@ -89,10 +102,34 @@ def test_removed_urls_return_404(tmp_path) -> None:
         "/internal/service/admin/recognition",
         "/internal/service/admin/wordpress-ai-routing",
         "/internal/service/sites/site_alpha/user-grants",
+        "/v1/runtime/artifacts/art_00000000000000000000000000000000/download",
+        (
+            "/v1/runtime/artifacts/art_00000000000000000000000000000000/"
+            "public-download?token=removed"
+        ),
+        "/v1/runtime/audio-assets/aud_removed/playback-url?ttl_seconds=180",
+        "/v1/runtime/audio-assets/aud_removed/playback?expires=1&token=removed",
     )
 
     for url in removed_urls:
         assert client.get(url).status_code == 404, url
+
+    assert (
+        client.post(
+            "/v1/runtime/audio-assets",
+            json={"artifact_id": "art_removed"},
+        ).status_code
+        == 404
+    )
+    assert client.post("/portal/v1/sites", json={}).status_code == 405
+    for url in (
+        "/portal/v1/sites/site_alpha/activate",
+        "/portal/v1/sites/site_alpha/deactivate",
+        "/portal/v1/sites/site_alpha/api-keys",
+        "/portal/v1/sites/site_alpha/api-keys/key_alpha/rotate",
+        "/portal/v1/sites/site_alpha/api-keys/key_alpha/revoke",
+    ):
+        assert client.post(url, json={}).status_code == 404, url
 
 
 def test_minimal_surfaces_remain_in_openapi(tmp_path) -> None:
@@ -104,12 +141,13 @@ def test_minimal_surfaces_remain_in_openapi(tmp_path) -> None:
         "/v1/catalog/models",
         "/v1/runtime/resolve",
         "/v1/runtime/execute",
+        "/v1/runtime/media/artifacts/{artifact_id}/download",
+        "/v1/runtime/media/artifacts/{artifact_id}/delivery-ack",
         "/v1/runs/{run_id}",
         "/v1/router/recommendation",
         "/portal/v1/session",
         "/portal/v1/sites",
         "/portal/v1/sites/{site_id}/summary",
-        "/portal/v1/sites/{site_id}/api-keys",
         "/portal/v1/sites/{site_id}/usage-summary",
         "/portal/v1/sites/{site_id}/entitlements",
         "/portal/v1/sites/{site_id}/billing-snapshots",

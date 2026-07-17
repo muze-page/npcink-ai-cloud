@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ALLOWED_TARGET_FORMATS = frozenset({"webp", "avif", "jpeg", "png", "original"})
 ALLOWED_SOURCE_MEDIA_TYPES = frozenset({"image"})
@@ -31,12 +31,29 @@ ALLOWED_CROP_POSITIONS = frozenset(
     }
 )
 MAX_UPLOAD_BYTES_IMAGE = 50 * 1024 * 1024
-MAX_PIXEL_COUNT = 178_956_970
+# Temporary derivative outputs must remain consumable by every current local
+# connector. This is a platform-neutral delivery-envelope limit, not a
+# WordPress storage limit; larger source uploads may still be accepted when the
+# requested transform produces a bounded result.
+MAX_DELIVERABLE_ARTIFACT_BYTES = 25 * 1024 * 1024
+# A 16,777,216-pixel RGBA decode occupies 64 MiB before Pillow creates any
+# crop, resize, watermark, or encoder buffers. Keep both the total area and a
+# per-axis ceiling frozen so compressed images cannot force an unbounded decode
+# in the current low-memory worker runtime.
+MAX_DECODED_IMAGE_BYTES = 64 * 1024 * 1024
+DECODED_RGBA_BYTES_PER_PIXEL = 4
+MAX_PIXEL_COUNT = MAX_DECODED_IMAGE_BYTES // DECODED_RGBA_BYTES_PER_PIXEL
+MAX_IMAGE_DIMENSION = 8_192
 ARTIFACT_DEFAULT_TTL_MINUTES = 30
 ARTIFACT_MIN_TTL_MINUTES = 15
 ARTIFACT_MAX_TTL_MINUTES = 60
 BATCH_CONTEXT_MAX_ITEMS = 1000
 BATCH_CONTEXT_MAX_CHUNK_SIZE = 20
+
+MEDIA_UPLOAD_ARTIFACT_TYPE = "media_upload_artifact"
+MEDIA_UPLOAD_RESULT_CONTRACT = "media_upload_result.v1"
+MEDIA_DERIVATIVE_ARTIFACT_TYPE = "media_derivative_artifact"
+MEDIA_DERIVATIVE_RESULT_CONTRACT = "media_derivative_result.v1"
 
 BLOCKED_RESPONSE_FIELDS = frozenset(
     {
@@ -48,6 +65,9 @@ BLOCKED_RESPONSE_FIELDS = frozenset(
         "apply_decision",
         "approval_decision",
         "target_attachment_id",
+        "storage_key",
+        "storage_ref",
+        "blob" + "_data",
     }
 )
 
@@ -70,7 +90,6 @@ class WatermarkPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["image", "text"]
-    artifact_id: str | None = None
     text: str = "AI"
     position: str = "bottom_right"
     opacity: float = 0.75
@@ -89,22 +108,15 @@ class CropPayload(BaseModel):
     position: str = "center"
 
 
-class CloudJobPayload(BaseModel):
+class ImageTransformPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    job_type: Literal["generate_optimized_media_derivative"]
     target_format: str
     max_width: int = 1200
     quality: int = 82
     source_media_type: str = "image"
     crop: CropPayload | None = None
     watermark: WatermarkPayload | None = None
-
-
-class SourceRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    artifact_id: str
 
 
 class BatchContextPayload(BaseModel):
@@ -117,18 +129,37 @@ class BatchContextPayload(BaseModel):
     explicit_avif: bool = False
 
 
-class MediaDerivativeRequest(BaseModel):
+class MediaUploadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    request_contract_version: Literal["media_derivative_cloud_request.v1"]
-    cloud_job_payload: CloudJobPayload
-    source: SourceRef | None = None
-    batch_context: BatchContextPayload | None = None
+    request_contract_version: Literal["media_upload_request.v1"]
+    media_kind: Literal["image"]
     ttl_minutes: int = ARTIFACT_DEFAULT_TTL_MINUTES
 
     @model_validator(mode="after")
-    def validate_fields(self) -> MediaDerivativeRequest:
-        payload = self.cloud_job_payload
+    def validate_fields(self) -> MediaUploadRequest:
+        if not (ARTIFACT_MIN_TTL_MINUTES <= self.ttl_minutes <= ARTIFACT_MAX_TTL_MINUTES):
+            raise ValueError(
+                f"ttl_minutes must be between "
+                f"{ARTIFACT_MIN_TTL_MINUTES} and {ARTIFACT_MAX_TTL_MINUTES}"
+            )
+        return self
+
+
+class MediaJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_contract_version: Literal["media_job_request.v1"]
+    operation: Literal["image.transform.v1"]
+    source_artifact_id: str = Field(min_length=1, max_length=191)
+    watermark_artifact_id: str | None = Field(default=None, min_length=1, max_length=191)
+    params: ImageTransformPayload
+    batch_context: BatchContextPayload | None = None
+    result_ttl_minutes: int = ARTIFACT_DEFAULT_TTL_MINUTES
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> MediaJobRequest:
+        payload = self.params
         if payload.target_format not in ALLOWED_TARGET_FORMATS:
             raise ValueError(f"target_format '{payload.target_format}' is not supported")
         if payload.source_media_type not in ALLOWED_SOURCE_MEDIA_TYPES:
@@ -181,7 +212,11 @@ class MediaDerivativeRequest(BaseModel):
                 raise ValueError("watermark.opacity must be between 0.0 and 1.0")
             if watermark.type == "image" and not (1 <= watermark.scale_percent <= 100):
                 raise ValueError("watermark.scale_percent must be between 1 and 100")
+            if watermark.type == "image" and not self.watermark_artifact_id:
+                raise ValueError("watermark_artifact_id is required for an image watermark")
             if watermark.type == "text":
+                if self.watermark_artifact_id:
+                    raise ValueError("watermark_artifact_id is not allowed for a text watermark")
                 if not watermark.text.strip():
                     raise ValueError("watermark.text is required")
                 if len(watermark.text) > 64:
@@ -190,15 +225,11 @@ class MediaDerivativeRequest(BaseModel):
                     raise ValueError("watermark.font_size must be between 8 and 256")
             if not (0 <= watermark.margin_px <= 1000):
                 raise ValueError("watermark.margin_px must be between 0 and 1000")
-        if not (ARTIFACT_MIN_TTL_MINUTES <= self.ttl_minutes <= ARTIFACT_MAX_TTL_MINUTES):
+        elif self.watermark_artifact_id:
+            raise ValueError("params.watermark is required when watermark_artifact_id is provided")
+        if not (ARTIFACT_MIN_TTL_MINUTES <= self.result_ttl_minutes <= ARTIFACT_MAX_TTL_MINUTES):
             raise ValueError(
-                f"ttl_minutes must be between "
+                f"result_ttl_minutes must be between "
                 f"{ARTIFACT_MIN_TTL_MINUTES} and {ARTIFACT_MAX_TTL_MINUTES}"
             )
         return self
-
-
-def validate_blocked_fields(data: dict[str, Any]) -> None:
-    for key in BLOCKED_RESPONSE_FIELDS:
-        if key in data:
-            raise ValueError(f"response contains blocked field '{key}'")

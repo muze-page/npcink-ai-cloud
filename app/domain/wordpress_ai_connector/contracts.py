@@ -3,22 +3,20 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-from urllib.parse import urlsplit
 
-WP_AI_CONNECTOR_ABILITY = "npcink-cloud/wp-ai-connector"
-WP_AI_CONNECTOR_ABILITIES = frozenset({WP_AI_CONNECTOR_ABILITY})
-WP_AI_CONNECTOR_CONTRACT = "wp_ai_connector_runtime.v1"
+WORDPRESS_OPERATION_CONTRACT = "wordpress_operation.v1"
+WORDPRESS_OPERATION_FIELDS = frozenset({"contract_version", "task", "request"})
 WP_AI_CONNECTOR_EXECUTION_KIND = "text"
 WP_AI_CONNECTOR_ABILITY_FAMILY = "text"
 WP_AI_CONNECTOR_DATA_CLASSIFICATION = "public_site_content"
 WP_AI_CONNECTOR_VISION_EXECUTION_KIND = "vision"
 WP_AI_CONNECTOR_VISION_ABILITY_FAMILY = "vision"
-WP_AI_CONNECTOR_VISION_DATA_CLASSIFICATION = "public_reference_media"
-WP_AI_CONNECTOR_RESULT_CONTRACT = "wp_ai_connector_result.v1"
+WP_AI_CONNECTOR_VISION_DATA_CLASSIFICATION = "internal"
 WP_AI_CONNECTOR_MAX_PROMPT_CHARS = 12000
+WP_AI_CONNECTOR_MAX_SOURCE_TEXT_CHARS = WP_AI_CONNECTOR_MAX_PROMPT_CHARS
+WP_AI_CONNECTOR_MAX_SYSTEM_INSTRUCTION_CHARS = WP_AI_CONNECTOR_MAX_PROMPT_CHARS
 WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS = 60
-WP_AI_CONNECTOR_MAX_IMAGE_URL_CHARS = 2048
-WP_AI_CONNECTOR_MAX_IMAGE_DATA_URL_CHARS = 900_000
+WP_AI_CONNECTOR_SOURCE_ARTIFACT_ID_CHARS = 36
 WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODES_BY_TASK = {
     "title_generation": "site_title_style",
     "excerpt_generation": "site_excerpt_style",
@@ -26,24 +24,44 @@ WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODES_BY_TASK = {
     "content_summary": "site_summary_style",
     "content_classification": "site_taxonomy_history",
 }
-WP_AI_CONNECTOR_IMAGE_DATA_URL_PATTERN = re.compile(
-    r"^data:(image/(?:gif|jpeg|png|webp))(?:;[^,]*)?;base64,([A-Za-z0-9+/=\r\n]+)$",
+WP_AI_CONNECTOR_SOURCE_ARTIFACT_ID_PATTERN = re.compile(r"^art_[0-9a-f]{32}$")
+WP_AI_CONNECTOR_ALT_TEXT_REQUEST_FIELDS = frozenset(
+    {
+        "existing_alt",
+        "existing_caption",
+        "filename",
+        "locale",
+        "max_tokens",
+        "prompt",
+        "source_artifact_id",
+        "title",
+    }
+)
+WP_AI_CONNECTOR_ALT_TEXT_OPTIONAL_STRING_LIMITS = {
+    "filename": 160,
+    "title": 160,
+    "existing_alt": 240,
+    "existing_caption": 240,
+    "locale": 32,
+}
+WP_AI_CONNECTOR_INLINE_MEDIA_PATTERN = re.compile(
+    r"data:image/[a-z0-9.+-]+(?:;[^,]*)?;base64,",
     re.IGNORECASE,
 )
-WP_AI_CONNECTOR_ALT_TEXT_IMAGE_MIME_TYPES = frozenset(
-    {
-        "image/gif",
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-    }
+WP_AI_CONNECTOR_B64_JSON_PATTERN = re.compile(
+    r"\bb64[\s_-]*json\s*[:=]",
+    re.IGNORECASE,
+)
+WP_AI_CONNECTOR_LONG_BASE64_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{128,}={0,2}(?![A-Za-z0-9+/=])"
+)
+WP_AI_CONNECTOR_IMAGE_BASE64_MAGIC_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9+/])(?:iVBORw0KGgo|/9j/|UklGR)[A-Za-z0-9+/=]*"
 )
 
 WP_AI_CONNECTOR_ALLOWED_TASKS = frozenset(
     {
         "alt_text_suggest",
-        "article_audio_summary",
-        "article_narration",
         "audio_summary_script",
         "comment_moderation",
         "comment_reply_suggest",
@@ -51,9 +69,32 @@ WP_AI_CONNECTOR_ALLOWED_TASKS = frozenset(
         "content_rewrite",
         "content_summary",
         "excerpt_generation",
-        "image_generation",
         "meta_description",
         "title_generation",
+    }
+)
+WP_AI_CONNECTOR_SOURCE_TEXT_TASKS = frozenset(
+    {
+        "content_rewrite",
+        "content_summary",
+        "title_generation",
+    }
+)
+
+WORDPRESS_OPERATION_REQUEST_CONTROL_FIELDS = frozenset(
+    {
+        "source_surface",
+        "connector_id",
+        "connector_version",
+        "site_url",
+        "platform_kind",
+        "object_ref",
+        "operation_contract",
+        "expected_response_contract",
+        "suggestion_only",
+        "write_posture",
+        "no_conversation",
+        "direct_wordpress_write",
     }
 )
 
@@ -92,6 +133,7 @@ WP_AI_CONNECTOR_FORBIDDEN_KEYS = frozenset(
         "conversation_id",
         "cookie",
         "credentials",
+        "direct_wordpress_write",
         "function_call",
         "functions",
         "headers",
@@ -119,110 +161,168 @@ WP_AI_CONNECTOR_FORBIDDEN_KEYS = frozenset(
 )
 
 
-class WordPressAIConnectorContractViolation(ValueError):
+class WordPressOperationContractViolation(ValueError):
     def __init__(self, error_code: str, message: str) -> None:
         super().__init__(message)
         self.error_code = error_code
         self.message = message
 
 
-def validate_wordpress_ai_connector_runtime_contract(
-    *,
-    ability_name: str,
-    contract_version: str,
-    input_payload: dict[str, Any],
-) -> None:
-    if ability_name not in WP_AI_CONNECTOR_ABILITIES:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.unknown_ability",
-            "WordPress AI connector ability_name is not supported",
+def validate_wordpress_operation_contract(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.invalid",
+            "WordPress operation contract must be an object",
         )
-    if contract_version != WP_AI_CONNECTOR_CONTRACT:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.contract_mismatch",
-            "WordPress AI connector contract_version does not match ability_name",
+    if set(value) != WORDPRESS_OPERATION_FIELDS:
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.fields_invalid",
+            "WordPress operation contract requires exactly contract_version, task, and request",
         )
-    if not isinstance(input_payload, dict):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.invalid_input",
-            "WordPress AI connector input must be an object",
+    if str(value.get("contract_version") or "") != WORDPRESS_OPERATION_CONTRACT:
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.contract_mismatch",
+            "WordPress operation contract_version is not supported",
         )
-    if str(input_payload.get("contract_version") or contract_version) != (
-        WP_AI_CONNECTOR_CONTRACT
-    ):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.input_contract_mismatch",
-            "WordPress AI connector input contract_version does not match runtime contract",
-        )
-    if str(input_payload.get("source_surface") or "") != "wordpress_ai_connector":
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.source_surface_required",
-            "WordPress AI connector input must declare source_surface=wordpress_ai_connector",
-        )
-    if str(input_payload.get("connector_id") or "") != "npcink-cloud":
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.connector_id_required",
-            "WordPress AI connector input must declare connector_id=npcink-cloud",
-        )
-    task = str(input_payload.get("task") or "").strip()
-    request = input_payload.get("request")
+
+    task = str(value.get("task") or "").strip()
+    request = value.get("request")
     if not isinstance(request, dict):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.request_required",
-            "WordPress AI connector input requires a scene request object",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.request_required",
+            "WordPress operation contract requires a scene request object",
         )
+    if task == "alt_text_suggest":
+        request = validate_alt_text_suggest_request(request)
 
     task_contract = request.get("task_contract")
     if task_contract is not None:
         validate_ai_task_contract(task_contract, task=task)
     elif task not in WP_AI_CONNECTOR_ALLOWED_TASKS:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.task_not_allowed",
-            "WordPress AI connector task is not supported",
-        )
-    if str(input_payload.get("write_posture") or "") != "suggestion_only":
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.write_posture_required",
-            "WordPress AI connector input must use suggestion_only write_posture",
-        )
-    if input_payload.get("direct_wordpress_write") is not False:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.direct_write_forbidden",
-            "WordPress AI connector input must set direct_wordpress_write=false",
-        )
-    if input_payload.get("no_conversation") is not True:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.no_conversation_required",
-            "WordPress AI connector input must set no_conversation=true",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.task_not_allowed",
+            "WordPress operation task is not supported",
         )
 
-    forbidden_path = find_forbidden_wordpress_ai_connector_field(input_payload)
+    forbidden_control_path = find_forbidden_wordpress_operation_control_field(
+        request
+    )
+    if forbidden_control_path:
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.control_field_forbidden",
+            "WordPress operation request may not include connector envelope, result, "
+            f"or write-control field '{forbidden_control_path}'",
+        )
+
+    forbidden_path = find_forbidden_wordpress_ai_connector_field(value)
     if forbidden_path:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.chat_or_secret_field_forbidden",
-            "WordPress AI connector input may not include generic chat, tool, stream, "
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.chat_or_secret_field_forbidden",
+            "WordPress operation contract may not include generic chat, tool, stream, "
             f"credential, or signed-header field '{forbidden_path}'",
         )
 
-    prompt = str(request.get("prompt") or "")
-    if len(prompt) > WP_AI_CONNECTOR_MAX_PROMPT_CHARS:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.prompt_too_large",
-            "WordPress AI connector prompt exceeds the scene runtime size limit",
-        )
+    normalized_request = dict(request)
+    if task in WP_AI_CONNECTOR_SOURCE_TEXT_TASKS:
+        normalized_request["source_text"] = validate_source_text_request(request)
+        if "system_instruction" in request:
+            normalized_request["system_instruction"] = validate_system_instruction(
+                request
+            )
+    else:
+        prompt = str(request.get("prompt") or "")
+        if len(prompt) > WP_AI_CONNECTOR_MAX_PROMPT_CHARS:
+            raise WordPressOperationContractViolation(
+                "wordpress_operation.prompt_too_large",
+                "WordPress operation prompt exceeds the scene runtime size limit",
+            )
     validate_site_knowledge_reference(
-        request,
+        normalized_request,
         task=task,
         task_contract=task_contract if isinstance(task_contract, dict) else {},
     )
-    if task == "alt_text_suggest":
-        validate_alt_text_suggest_request(request)
+    return {
+        "contract_version": WORDPRESS_OPERATION_CONTRACT,
+        "task": task,
+        "request": normalized_request,
+    }
+
+
+def validate_source_text_request(request: dict[str, Any]) -> str:
+    if "prompt" in request:
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.prompt_forbidden",
+            "WordPress text scene tasks require source_text and do not accept prompt",
+        )
+    source_text = request.get("source_text")
+    if not isinstance(source_text, str) or not source_text.strip():
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.source_text_required",
+            "WordPress text scene tasks require source_text as a nonempty string",
+        )
+    normalized = source_text.strip()
+    if len(normalized) > WP_AI_CONNECTOR_MAX_SOURCE_TEXT_CHARS:
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.source_text_too_large",
+            "WordPress text scene source_text exceeds the 12000 character limit",
+        )
+    return normalized
+
+
+def validate_system_instruction(request: dict[str, Any]) -> str:
+    system_instruction = request.get("system_instruction")
+    if not isinstance(system_instruction, str):
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.system_instruction_invalid",
+            "WordPress text scene system_instruction must be a string",
+        )
+    normalized = system_instruction.strip()
+    if len(normalized) > WP_AI_CONNECTOR_MAX_SYSTEM_INSTRUCTION_CHARS:
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.system_instruction_too_large",
+            "WordPress text scene system_instruction exceeds the 12000 character limit",
+        )
+    return normalized
+
+
+def find_forbidden_wordpress_operation_control_field(
+    value: Any,
+    *,
+    path: str = "request",
+    depth: int = 0,
+) -> str:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = str(key or "").strip().lower().replace("-", "_")
+            current_path = f"{path}.{normalized_key}"
+            if (
+                depth == 0
+                and normalized_key in WORDPRESS_OPERATION_REQUEST_CONTROL_FIELDS
+            ) or normalized_key == "direct_wordpress_write":
+                return current_path
+            nested = find_forbidden_wordpress_operation_control_field(
+                item,
+                path=current_path,
+                depth=depth + 1,
+            )
+            if nested:
+                return nested
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            nested = find_forbidden_wordpress_operation_control_field(
+                item,
+                path=f"{path}[{index}]",
+                depth=depth + 1,
+            )
+            if nested:
+                return nested
+    return ""
 
 
 def validate_ai_task_contract(value: Any, *, task: str) -> None:
     if not isinstance(value, dict):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_invalid",
             "AI task contract must be an object",
         )
     allowed_fields = {
@@ -236,13 +336,13 @@ def validate_ai_task_contract(value: Any, *, task: str) -> None:
         "write_posture",
     }
     if set(value) - allowed_fields:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_fields_forbidden",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_fields_forbidden",
             "AI task contract contains unsupported fields",
         )
     if str(value.get("contract_version") or "") != AI_TASK_CONTRACT:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_version_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_version_invalid",
             "AI task contract requires ai_task_contract.v1",
         )
     ability_name = str(value.get("ability_name") or "").strip()
@@ -256,13 +356,13 @@ def validate_ai_task_contract(value: Any, *, task: str) -> None:
         or projected_task != task
         or family not in AI_TASK_ALLOWED_FAMILIES
     ):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_identity_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_identity_invalid",
             "AI task contract identity does not match the registered task projection",
         )
     if str(value.get("write_posture") or "") != "suggestion_only":
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_write_posture_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_write_posture_invalid",
             "AI task contract must remain suggestion_only",
         )
     contexts = value.get("context_requirements")
@@ -276,31 +376,31 @@ def validate_ai_task_contract(value: Any, *, task: str) -> None:
             for item in constraints
         )
     ):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_vocabulary_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_vocabulary_invalid",
             "AI task contract contains an unsupported context requirement or constraint",
         )
     if "none" in contexts and len(contexts) != 1:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_none_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_none_invalid",
             "AI task contract context none cannot be combined with other values",
         )
     output_schema = value.get("output_schema")
     if not isinstance(output_schema, dict):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_output_schema_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_output_schema_invalid",
             "AI task contract requires an Ability-owned output schema",
         )
     try:
         encoded_schema = json.dumps(output_schema, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as error:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_output_schema_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_output_schema_invalid",
             "AI task contract output schema must be JSON serializable",
         ) from error
     if len(encoded_schema.encode("utf-8")) > AI_TASK_MAX_OUTPUT_SCHEMA_BYTES:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.ai_task_contract_output_schema_too_large",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.ai_task_contract_output_schema_too_large",
             "AI task contract output schema exceeds the runtime projection limit",
         )
 
@@ -336,22 +436,22 @@ def validate_site_knowledge_reference(
     if reference is None:
         return
     if not isinstance(reference, dict):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.site_knowledge_reference_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.site_knowledge_reference_invalid",
             "WordPress AI connector site_knowledge_reference must be an object",
         )
 
     unknown_fields = set(reference) - {"enabled", "mode"}
     if unknown_fields:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.site_knowledge_reference_fields_forbidden",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.site_knowledge_reference_fields_forbidden",
             "WordPress AI connector site_knowledge_reference accepts only enabled and mode",
         )
 
     enabled = reference.get("enabled")
     if not isinstance(enabled, bool):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.site_knowledge_reference_enabled_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.site_knowledge_reference_enabled_invalid",
             "WordPress AI connector site_knowledge_reference.enabled must be boolean",
         )
     expected_mode = resolve_site_knowledge_reference_mode(
@@ -360,15 +460,15 @@ def validate_site_knowledge_reference(
     )
     mode = str(reference.get("mode") or expected_mode or "site_title_style")
     if enabled and not expected_mode:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.site_knowledge_reference_task_not_allowed",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.site_knowledge_reference_task_not_allowed",
             "WordPress AI connector Site Knowledge reference is not supported for this task",
         )
     if (expected_mode and mode != expected_mode) or (
         not expected_mode and mode != "site_title_style"
     ):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.site_knowledge_reference_mode_invalid",
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.site_knowledge_reference_mode_invalid",
             "WordPress AI connector site_knowledge_reference.mode is not supported",
         )
 
@@ -391,59 +491,114 @@ def find_forbidden_wordpress_ai_connector_field(value: Any, *, path: str = "") -
     return ""
 
 
-def validate_alt_text_suggest_request(request: dict[str, Any]) -> None:
-    image_url = str(request.get("image_url") or "").strip()
-    thumbnail_url = str(request.get("thumbnail_url") or "").strip()
-    if not image_url and not thumbnail_url:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.alt_text_image_required",
-            "WordPress AI alt text suggestions require image_url or thumbnail_url",
+def validate_alt_text_suggest_request(request: dict[str, Any]) -> dict[str, Any]:
+    inline_candidates = {
+        raw_key: item
+        for raw_key, item in request.items()
+        if not isinstance(raw_key, str)
+        or re.sub(r"[-\s]+", "_", raw_key.strip().lower()) != "source_artifact_id"
+    }
+    if contains_inline_media_transport(inline_candidates):
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.alt_text_inline_media_forbidden",
+            "WordPress AI alt text suggestions do not accept inline media transport",
         )
 
-    for field_name, url in (("image_url", image_url), ("thumbnail_url", thumbnail_url)):
-        if url:
-            validate_alt_text_image_url(url, field_name=field_name)
+    normalized_request: dict[str, Any] = {}
+    for raw_key, item in request.items():
+        if not isinstance(raw_key, str):
+            raise WordPressOperationContractViolation(
+                "wordpress_operation.alt_text_request_fields_forbidden",
+                "WordPress AI alt text scene request fields must use canonical names",
+            )
+        stripped_key = raw_key.strip()
+        canonical_key = re.sub(r"[-\s]+", "_", stripped_key.lower())
+        if (
+            raw_key != canonical_key
+            or canonical_key in normalized_request
+            or canonical_key not in WP_AI_CONNECTOR_ALT_TEXT_REQUEST_FIELDS
+        ):
+            raise WordPressOperationContractViolation(
+                "wordpress_operation.alt_text_request_fields_forbidden",
+                "WordPress AI alt text scene request contains an unsupported, aliased, "
+                "or duplicate field",
+            )
+        normalized_request[canonical_key] = item
 
-    mime_type = str(request.get("mime_type") or "").split(";", 1)[0].strip().lower()
-    if mime_type and mime_type not in WP_AI_CONNECTOR_ALT_TEXT_IMAGE_MIME_TYPES:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.alt_text_mime_type_not_allowed",
-            "WordPress AI alt text suggestions require a supported image MIME type",
+    artifact_id = normalized_request.get("source_artifact_id")
+    if not isinstance(artifact_id, str):
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.alt_text_source_artifact_required",
+            "WordPress AI alt text suggestions require source_artifact_id",
         )
+    normalized = artifact_id.strip()
+    if (
+        not normalized
+        or len(normalized) != WP_AI_CONNECTOR_SOURCE_ARTIFACT_ID_CHARS
+        or WP_AI_CONNECTOR_SOURCE_ARTIFACT_ID_PATTERN.fullmatch(normalized) is None
+    ):
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.alt_text_source_artifact_required",
+            "WordPress AI alt text suggestions require a valid source_artifact_id",
+        )
+    normalized_request["source_artifact_id"] = normalized
+
+    prompt = normalized_request.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.alt_text_prompt_invalid",
+            "WordPress AI alt text prompt must be a nonempty string",
+        )
+    normalized_prompt = prompt.strip()
+    if len(normalized_prompt) > 500:
+        raise WordPressOperationContractViolation(
+            "wordpress_operation.alt_text_prompt_too_large",
+            "WordPress AI alt text prompt exceeds the 500 character limit",
+        )
+    normalized_request["prompt"] = normalized_prompt
+
+    for field_name, max_chars in WP_AI_CONNECTOR_ALT_TEXT_OPTIONAL_STRING_LIMITS.items():
+        if field_name not in normalized_request:
+            continue
+        field_value = normalized_request[field_name]
+        if not isinstance(field_value, str):
+            raise WordPressOperationContractViolation(
+                "wordpress_operation.alt_text_request_value_invalid",
+                f"WordPress AI alt text {field_name} must be a string",
+            )
+        normalized_value = field_value.strip()
+        if len(normalized_value) > max_chars:
+            raise WordPressOperationContractViolation(
+                "wordpress_operation.alt_text_request_value_too_large",
+                f"WordPress AI alt text {field_name} exceeds its character limit",
+            )
+        normalized_request[field_name] = normalized_value
+
+    if "max_tokens" in normalized_request:
+        max_tokens = normalized_request["max_tokens"]
+        if (
+            isinstance(max_tokens, bool)
+            or not isinstance(max_tokens, int)
+            or not 1 <= max_tokens <= 96
+        ):
+            raise WordPressOperationContractViolation(
+                "wordpress_operation.alt_text_max_tokens_invalid",
+                "WordPress AI alt text max_tokens must be an integer from 1 to 96",
+            )
+    return normalized_request
 
 
-def validate_alt_text_image_url(url: str, *, field_name: str) -> None:
-    if url.lower().startswith("data:"):
-        validate_alt_text_image_data_url(url, field_name=field_name)
-        return
-    if len(url) > WP_AI_CONNECTOR_MAX_IMAGE_URL_CHARS:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.alt_text_image_url_too_long",
-            f"WordPress AI alt text {field_name} is too long",
+def contains_inline_media_transport(value: Any) -> bool:
+    if isinstance(value, str):
+        compacted = re.sub(r"\s+", "", value)
+        return bool(
+            WP_AI_CONNECTOR_INLINE_MEDIA_PATTERN.search(compacted)
+            or WP_AI_CONNECTOR_B64_JSON_PATTERN.search(value)
+            or WP_AI_CONNECTOR_LONG_BASE64_PATTERN.search(value)
+            or WP_AI_CONNECTOR_IMAGE_BASE64_MAGIC_PATTERN.search(compacted)
         )
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.alt_text_image_url_invalid",
-            f"WordPress AI alt text {field_name} must be an http(s) URL or image data URL",
-        )
-
-
-def validate_alt_text_image_data_url(url: str, *, field_name: str) -> None:
-    if len(url) > WP_AI_CONNECTOR_MAX_IMAGE_DATA_URL_CHARS:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.alt_text_image_data_url_too_long",
-            f"WordPress AI alt text {field_name} data URL is too long",
-        )
-    match = WP_AI_CONNECTOR_IMAGE_DATA_URL_PATTERN.match(url)
-    if match is None:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.alt_text_image_url_invalid",
-            f"WordPress AI alt text {field_name} must be an http(s) URL or image data URL",
-        )
-    mime_type = match.group(1).lower()
-    if mime_type not in WP_AI_CONNECTOR_ALT_TEXT_IMAGE_MIME_TYPES:
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.alt_text_mime_type_not_allowed",
-            "WordPress AI alt text suggestions require a supported image MIME type",
-        )
+    if isinstance(value, dict):
+        return any(contains_inline_media_transport(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_inline_media_transport(item) for item in value)
+    return False

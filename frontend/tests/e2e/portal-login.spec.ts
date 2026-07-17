@@ -13,7 +13,13 @@ async function fulfillJson(route: Route, data: unknown, headers: Record<string, 
     status: 200,
     contentType: 'application/json',
     headers,
-    body: JSON.stringify({ status: 'ok', data, revision: 'm6' }),
+    body: JSON.stringify({
+      status: 'ok',
+      error_code: '',
+      message: 'ok',
+      data,
+      meta: { trace_id: 'portal-login-e2e', revision: 'm6' },
+    }),
   });
 }
 
@@ -25,7 +31,8 @@ async function fulfillError(route: Route, status: number, errorCode: string) {
       status: 'error',
       error_code: errorCode,
       message: errorCode,
-      revision: 'm6',
+      data: {},
+      meta: { trace_id: 'portal-login-e2e', revision: 'm6' },
     }),
   });
 }
@@ -248,7 +255,7 @@ test('addon binding survives login and returns the complete payload to WordPress
   const calls = await installLoginFlowMocks(page);
   const returnUrl =
     'https://demo.example.com/wp-admin/admin-post.php?action=npcink_cloud_addon_complete_auth&state=addon-state-001';
-  const bindingPath = `/portal/sites?${new URLSearchParams({
+  const bindingPath = `/portal?${new URLSearchParams({
     connect: 'wordpress-addon',
     site_url: 'https://demo.example.com',
     site_name: 'Demo Site',
@@ -270,7 +277,7 @@ test('addon binding survives login and returns the complete payload to WordPress
   await expect(page).toHaveURL(/\/wordpress-addon-return\?code=exchange-code&state=addon-state-001/);
   expect(calls.addonConnectionPayload()).toEqual({
     account_id: 'acct_portal_login_e2e',
-    wordpress_url: 'https://demo.example.com',
+    site_url: 'https://demo.example.com',
     site_name: 'Demo Site',
     return_url: returnUrl,
     state: 'addon-state-001',
