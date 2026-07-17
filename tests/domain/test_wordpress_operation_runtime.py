@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.domain.media_artifacts.input_loading import LoadedArtifactInput
+from app.domain.runtime.errors import RuntimeExecutionContractError
 from app.domain.wordpress_ai_connector.contracts import (
     WordPressOperationContractViolation,
     validate_wordpress_operation_contract,
@@ -269,9 +270,7 @@ def test_alt_text_contract_rejects_legacy_alias_and_unknown_fields(
             }
         )
 
-    assert error.value.error_code == (
-        "wordpress_operation.alt_text_request_fields_forbidden"
-    )
+    assert error.value.error_code == ("wordpress_operation.alt_text_request_fields_forbidden")
 
 
 @pytest.mark.parametrize(
@@ -298,9 +297,7 @@ def test_alt_text_contract_recursively_rejects_obfuscated_inline_media(
             }
         )
 
-    assert error.value.error_code == (
-        "wordpress_operation.alt_text_inline_media_forbidden"
-    )
+    assert error.value.error_code == ("wordpress_operation.alt_text_inline_media_forbidden")
 
 
 def test_alt_text_provider_output_is_strict_text_only_projection() -> None:
@@ -460,7 +457,10 @@ def test_managed_policy_projects_profile_runtime_controls() -> None:
     policy = runtime.apply_managed_policy(
         merged_policy,
         default_policy={
-            "managed_surface": "wordpress_ai_connector",
+            "managed_surface": "hosted_runtime_profiles",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
             "timeout_ms": 12_001,
             "max_retries": 1,
             "allow_fallback": False,
@@ -473,19 +473,75 @@ def test_managed_policy_projects_profile_runtime_controls() -> None:
     assert policy["max_retries"] == 1
     assert policy["retry_max"] == 1
     assert policy["allow_fallback"] is False
-    assert policy["managed_surface"] == "wordpress_ai_connector"
+    assert policy["managed_surface"] == "hosted_runtime_profiles"
+    assert policy["platform_kind"] == "wordpress"
+    assert policy["connector_id"] == "wordpress_ai_connector"
+    assert policy["connector_contract_version"] == "wp_ai_connector_runtime.v1"
     assert policy["task_group"]
     assert policy["routing_intent"]
     execution_contract = cast(dict[str, object], policy["execution_contract"])
     assert execution_contract["retry_max"] == 1
-    assert {
-        key: value for key, value in execution_contract.items() if key != "retry_max"
-    } == {
+    assert {key: value for key, value in execution_contract.items() if key != "retry_max"} == {
         "ability_name": "connector_runtime.execute",
         "timeout_seconds": 13,
-        "managed_surface": "wordpress_ai_connector",
+        "managed_surface": "hosted_runtime_profiles",
+        "platform_kind": "wordpress",
+        "connector_id": "wordpress_ai_connector",
+        "connector_contract_version": "wp_ai_connector_runtime.v1",
         "task_group": policy["task_group"],
         "routing_intent": policy["routing_intent"],
+    }
+
+
+@pytest.mark.parametrize(
+    "default_policy",
+    [
+        {
+            "managed_surface": "hosted_runtime_profiles",
+            "connector_id": "wordpress_ai_connector",
+        },
+        {
+            "managed_surface": "hosted_runtime_profiles",
+            "platform_kind": "typecho",
+            "connector_id": "wordpress_ai_connector",
+        },
+        {
+            "managed_surface": "hosted_runtime_profiles",
+            "platform_kind": "wordpress",
+        },
+        {
+            "managed_surface": "hosted_runtime_profiles",
+            "platform_kind": "wordpress",
+            "connector_id": "npcink-cloud-addon",
+        },
+        {
+            "managed_surface": "hosted_runtime_profiles",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v2",
+        },
+    ],
+)
+def test_managed_policy_fails_closed_for_incomplete_or_wrong_platform_contract(
+    default_policy: dict[str, object],
+) -> None:
+    runtime = _runtime()
+    merged_policy: dict[str, object] = {
+        "timeout_ms": 99,
+        "execution_contract": {"ability_name": "connector_runtime.execute"},
+    }
+
+    with pytest.raises(RuntimeExecutionContractError) as error:
+        runtime.apply_managed_policy(
+            merged_policy,
+            default_policy=default_policy,
+            profile_id=WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+        )
+
+    assert error.value.error_code == "runtime_profiles.managed_contract_invalid"
+    assert merged_policy == {
+        "timeout_ms": 99,
+        "execution_contract": {"ability_name": "connector_runtime.execute"},
     }
 
 

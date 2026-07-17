@@ -85,16 +85,40 @@ assert.doesNotMatch(
   'admin proxy must not expose retired env-backed capability provider settings routes'
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
-  /pattern: \/\^audio-jobs\$\/[\s\S]*?namespace: 'admin'/,
-  'audio workbench job creation must route through the backend admin service namespace'
+  /audio-jobs/,
+  'the browser admin proxy must not expose internal audio job routes without a browser consumer'
 );
 
 assert.doesNotMatch(
   source,
   /normalized === 'ai-resources\/profile-preferences'[\s\S]*?return '\/internal\/service\/admin\/ai-resources\/profile-preferences';/,
-  'admin proxy must not expose retired AI resource profile-preferences route after audio routes moved to ability-model routing'
+  'admin proxy must not expose the retired AI resource profile-preferences route'
+);
+
+assert.match(
+  source,
+  /methods: \['GET'\],[\s\S]*?pattern: \/\^\(\?:ai-resources\|provider-connections\|model-references\|site-knowledge-vector-profile\|runtime-profiles\)\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_catalog'/,
+  'hosted runtime profiles must expose one exact can_manage_catalog GET route'
+);
+
+assert.match(
+  source,
+  /methods: \['PUT'\],[\s\S]*?pattern: \/\^runtime-profiles\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_catalog'/,
+  'hosted runtime profiles must expose one exact can_manage_catalog PUT route'
+);
+
+assert.doesNotMatch(
+  source,
+  /ability-models/,
+  'admin proxy must fail closed for every retired ability-model endpoint'
+);
+
+assert.equal(
+  source.match(/runtime-profiles/g)?.length,
+  2,
+  'hosted runtime profiles must only appear in the exact GET and PUT rules so every other method fails closed'
 );
 
 assert.match(

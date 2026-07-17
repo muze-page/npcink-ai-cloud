@@ -46,9 +46,11 @@ and other CMS adapters are post-P5 validation work.
 - [docs/decisions/004-wordpress-first-cloud-runtime-refactor.md](docs/decisions/004-wordpress-first-cloud-runtime-refactor.md)
 - [docs/multi-platform-connector-boundary-v1.md](docs/multi-platform-connector-boundary-v1.md)
 - [docs/media-runtime-boundary-v1.md](docs/media-runtime-boundary-v1.md)
+- [docs/cloud-hosted-runtime-profiles-v1.md](docs/cloud-hosted-runtime-profiles-v1.md)
 - [docs/refactor-deletion-inventory-v1.md](docs/refactor-deletion-inventory-v1.md)
 - [docs/p4-portal-admin-surface-inventory-2026-07-16.md](docs/p4-portal-admin-surface-inventory-2026-07-16.md)
 - [docs/decisions/016-fail-closed-portal-admin-service-boundaries.md](docs/decisions/016-fail-closed-portal-admin-service-boundaries.md)
+- [docs/decisions/018-cloud-hosted-runtime-profile-admin-surface.md](docs/decisions/018-cloud-hosted-runtime-profile-admin-surface.md)
 
 Baseline evidence (not target-contract completion proof):
 
@@ -543,11 +545,11 @@ and `migrations`, excludes `app/workers/*`, and sets
 `--timeout-graceful-shutdown 5` so a stale in-process background task cannot
 hold reload forever.
 
-If an admin page such as `/admin/ability-models` keeps showing a loading state
+If an admin page such as `/admin/runtime-profiles` keeps showing a loading state
 but has no visible error, first separate auth and API latency:
 
 ```bash
-curl -i http://127.0.0.1:8010/admin/ability-models
+curl -i http://127.0.0.1:8010/admin/runtime-profiles
 docker compose -f docker-compose.dev.yml logs --tail=120 api
 docker compose -f docker-compose.dev.yml logs --tail=120 frontend
 ```
@@ -566,10 +568,9 @@ not treat this as a Cloud runtime routing bug unless the API has restarted and
 the specific endpoint still returns an application error.
 
 Worker-only edits should not reload the API. If `frontend` logs show
-`/api/admin/ability-models/runtime-projection`,
-`/api/admin/ai-resources`, and `/api/admin/wordpress-ai-routing` all taking
-tens of seconds after a worker file edit, confirm the compose command still
-contains `--reload-exclude app/workers/*` and recreate the dev API container:
+`/api/admin/runtime-profiles` taking tens of seconds after a worker file edit,
+confirm the compose command still contains `--reload-exclude app/workers/*`
+and recreate the dev API container:
 
 ```bash
 docker compose -f docker-compose.dev.yml up -d api

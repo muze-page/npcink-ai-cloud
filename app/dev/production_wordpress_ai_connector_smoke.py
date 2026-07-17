@@ -476,7 +476,7 @@ def _next_steps(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run production WordPress AI Connector ability-model routing smoke.",
+        description="Run production WordPress AI Connector hosted runtime-profile smoke.",
     )
     parser.add_argument("--secret-file", type=Path, required=True)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)

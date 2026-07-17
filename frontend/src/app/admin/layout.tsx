@@ -217,13 +217,13 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       groupKey: 'admin.nav_group_runtime_ops',
       descKey: 'admin.nav_group_runtime_ops_desc',
       fallback: 'Runtime Plane',
-      descFallback: 'Provider readiness and Cloud runtime model binding.',
+      descFallback: 'Provider readiness, hosted runtime profiles, and diagnostics.',
       items: [
         {
           href: '/admin/ai-resources',
           labelKey: 'admin.nav_ai_resources',
           fallback: 'Model Suppliers',
-          activePrefixes: ['/admin/ai-resources', '/admin/ability-models'],
+          activePrefixes: ['/admin/ai-resources'],
         },
         {
           href: '/admin/external-services',
@@ -236,6 +236,12 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           labelKey: 'admin.nav_vector_settings',
           fallback: 'Vector Settings',
           activePrefixes: ['/admin/vector-settings'],
+        },
+        {
+          href: '/admin/runtime-profiles',
+          labelKey: 'admin.nav_runtime_profiles',
+          fallback: 'Runtime Profiles',
+          activePrefixes: ['/admin/runtime-profiles'],
         },
         {
           href: '/admin/troubleshooting',

@@ -11,15 +11,22 @@ const toolbarSource = read('src/components/admin/SupplierToolbar.tsx');
 const summarySource = read('src/components/admin/SupplierSummaryCards.tsx');
 const tablesSource = read('src/components/admin/SupplierConnectionTables.tsx');
 const i18nSource = read('src/lib/i18n.ts');
+const aiResourcesTranslationSource = i18nSource
+  .split('\n')
+  .filter((line) => line.includes("'admin.ai_resources."))
+  .join('\n');
 
 const aiResourcesNavIndex = layoutSource.indexOf("href: '/admin/ai-resources'");
 const externalServicesNavIndex = layoutSource.indexOf("href: '/admin/external-services'");
 const vectorSettingsNavIndex = layoutSource.indexOf("href: '/admin/vector-settings'");
 const diagnosticsNavIndex = layoutSource.indexOf("href: '/admin/troubleshooting'");
+const runtimeProfilesNavIndex = layoutSource.indexOf("href: '/admin/runtime-profiles'");
 
 assert.ok(aiResourcesNavIndex >= 0, 'Model suppliers must have a primary admin navigation entry');
 assert.ok(externalServicesNavIndex > aiResourcesNavIndex, 'Search and images must follow model suppliers');
 assert.ok(vectorSettingsNavIndex > externalServicesNavIndex, 'Vector settings must follow search and images');
+assert.ok(runtimeProfilesNavIndex > vectorSettingsNavIndex, 'Hosted runtime profiles must follow vector settings');
+assert.ok(diagnosticsNavIndex > runtimeProfilesNavIndex, 'Runtime diagnostics must follow hosted runtime profiles');
 assert.ok(diagnosticsNavIndex > vectorSettingsNavIndex, 'Runtime diagnostics must remain the final runtime-plane entry');
 assert.match(layoutSource, /href: '\/admin\/ai-resources'[\s\S]*fallback: 'Model Suppliers'/);
 assert.match(layoutSource, /href: '\/admin\/external-services'[\s\S]*fallback: 'Search & Images'/);
@@ -29,7 +36,15 @@ assert.match(i18nSource, /'admin\.ai_resources\.title': '模型供应商'/);
 
 assert.match(pageSource, /<SupplierToolbar[\s\S]*onAddModelSupplier=\{openNewProviderConnection\}/);
 assert.match(pageSource, /<ModelSupplierTable[\s\S]*connections=\{aiSupplierConnections\}/);
-assert.match(pageSource, /href="\/admin\/ability-models"[\s\S]*action_open_model_binding/);
+assert.match(pageSource, /href="\/admin\/runtime-profiles"[\s\S]*action_open_runtime_profiles/);
+assert.match(pageSource, /modelFeatureLabel/);
+assert.match(pageSource, /hosted runtime profile candidate chains/);
+assert.doesNotMatch(pageSource, /abilityModelFeatureLabel|ability-model routing|new routing choices/i);
+assert.doesNotMatch(
+  aiResourcesTranslationSource,
+  /ability-model routing|能力-模型路由|能力路由只能|模型路由和 WordPress|新的路由选择/i,
+  'Model suppliers copy must use hosted runtime profile vocabulary instead of the retired ability-model routing boundary'
+);
 assert.match(pageSource, /supplierCategory\(connection\) === 'ai'/);
 assert.match(pageSource, /connection\.kind === 'embedding_provider'/);
 assert.doesNotMatch(pageSource, /connection\.capability_ids\.includes\('embedding'\)/);

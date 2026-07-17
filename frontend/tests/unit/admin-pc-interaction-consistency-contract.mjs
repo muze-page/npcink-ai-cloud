@@ -10,7 +10,7 @@ const serviceSettings = read('src/app/admin/service-settings/page.tsx');
 const modal = read('src/components/ui/Modal.tsx');
 const providerDialog = read('src/components/admin/ProviderConnectionDialog.tsx');
 const dialogHook = read('src/hooks/useDialogKeyboard.ts');
-const abilityModels = read('src/app/admin/ability-models/page.tsx');
+const runtimeProfiles = read('src/app/admin/runtime-profiles/page.tsx');
 const aiResources = read('src/app/admin/ai-resources/page.tsx');
 const planDetail = read('src/app/admin/plans/[planId]/page.tsx');
 const layout = read('src/app/admin/layout.tsx');
@@ -26,7 +26,8 @@ for (const [name, source] of [
 }
 
 assert.match(dialogHook, /event\.key === 'Escape'[\s\S]*event\.key !== 'Tab'[\s\S]*previouslyFocused\?\.focus\(\)/, 'custom admin dialogs must share Escape, focus containment, and trigger restoration');
-assert.match(abilityModels, /abilityModelDialogRef = useDialogKeyboard[\s\S]*cloudBindingDialogRef = useDialogKeyboard[\s\S]*ref=\{abilityModelDialogRef\}[\s\S]*ref=\{cloudBindingDialogRef\}/, 'both ability-model dialogs must use shared keyboard behavior');
+assert.match(runtimeProfiles, /const dialogRef = useDialogKeyboard<[\s\S]*ref=\{dialogRef\}/, 'hosted runtime profile editing must use the shared keyboard behavior');
+assert.doesNotMatch(runtimeProfiles, /cloudBindingDialogRef|runtime-binding|embedding/i, 'hosted runtime profiles must not retain the removed Cloud dependency dialog');
 assert.doesNotMatch(aiResources, /capabilityAddDialogRef|capabilityAddDialogOpen/, 'model supplier management must not keep the retired capability supplier dialog');
 assert.match(planDetail, /editorDialogRef = useDialogKeyboard[\s\S]*ref=\{editorDialogRef\}/, 'package editor must use shared keyboard behavior');
 assert.match(serviceSettings, /emailPreviewDialogRef = useDialogKeyboard[\s\S]*ref=\{emailPreviewDialogRef\}/, 'email preview drawer must use shared keyboard behavior');

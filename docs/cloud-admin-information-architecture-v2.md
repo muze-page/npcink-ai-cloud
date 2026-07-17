@@ -80,9 +80,9 @@ must share their parent workspace navigation and visual model.
 ### 4.3 Runtime Operations
 
 - Model suppliers (`/admin/ai-resources`)
+- Runtime profiles (`/admin/runtime-profiles`)
 - Search and images (`/admin/external-services`)
 - Vector settings (`/admin/vector-settings`)
-- Model routing (`/admin/ability-models`)
 - Runtime diagnostics (`/admin/troubleshooting`)
 
 Plugin, media, vector, Agent feedback, and Operations Advisor routes are
@@ -221,7 +221,7 @@ consolidation.
 | `/admin/ai-resources` | Runtime Operations | `queue` | Model suppliers | Keep model-provider connections and model visibility together |
 | `/admin/external-services` | Runtime Operations | `configuration` | Search and images | Fixed Cloud runtime service directory for web search and stock-image sources |
 | `/admin/vector-settings` | Runtime Operations | `configuration` | Providers | Keep vector embedding, storage, and rerank configuration separate from provider queues and diagnostics |
-| `/admin/ability-models` | Runtime Operations | `configuration` | Model routing | Keep; candidates load only inside edit flow |
+| `/admin/runtime-profiles` | Runtime Operations | `configuration` | Runtime profiles | Keep only platform-tagged Cloud hosted candidate-chain configuration; candidate selection renders only inside edit flow |
 | `/admin/troubleshooting` | Runtime Operations | `diagnostic` | Runtime diagnostics | Canonical diagnostic index |
 | `/admin/plugin-observability` | Runtime Operations | `diagnostic` | Runtime diagnostics | Shared observability frame |
 | `/admin/media-observability` | Runtime Operations | `diagnostic` | Runtime diagnostics | Shared observability frame |

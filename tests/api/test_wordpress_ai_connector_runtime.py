@@ -22,7 +22,17 @@ from app.adapters.providers.base import (
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
-from app.core.models import MediaArtifact, ProviderConnection, RunRecord, Site
+from app.core.models import (
+    CatalogInstance,
+    CatalogModel,
+    MediaArtifact,
+    ProviderConnection,
+    RoutingBinding,
+    RoutingProfile,
+    RunRecord,
+    ServiceAuditEvent,
+    Site,
+)
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.media_artifacts.input_loading import VISION_IMAGE_MAX_BYTES
@@ -100,9 +110,7 @@ def _seed_alt_text_artifact(
 
 def test_wordpress_ai_connector_text_profiles_prefer_gpt55_with_fallbacks() -> None:
     short_text_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID]
-    editorial_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
-        WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID
-    ]
+    editorial_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID]
     alt_text_vision_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
         WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID
     ]
@@ -297,8 +305,7 @@ class WordPressAIConnectorTextProvider:
             )
         if task == "content_classification":
             output_text = (
-                '{"suggestions":[{"term":"经验教程","confidence":0.8,'
-                '"is_new":false}]}'
+                '{"suggestions":[{"term":"经验教程","confidence":0.8,"is_new":false}]}'
                 if "<available-terms>" in source_text
                 else "- WordPress AI\n- Cloud connector\n- Scene runtime"
             )
@@ -329,9 +336,7 @@ class WordPressAIConnectorTextProvider:
             if "provider inline echo" in source_text:
                 return ProviderExecutionResult(
                     output={
-                        "output_text": (
-                            "data:image/png;base64," + ALT_TEXT_PROVIDER_ECHO_MARKER
-                        ),
+                        "output_text": ("data:image/png;base64," + ALT_TEXT_PROVIDER_ECHO_MARKER),
                         "model_id": request.model_id,
                         "messages": [
                             {
@@ -339,9 +344,7 @@ class WordPressAIConnectorTextProvider:
                                 "content": ALT_TEXT_PROVIDER_ECHO_MARKER,
                             }
                         ],
-                        "usage": {
-                            "nested": {"private_echo": ALT_TEXT_PROVIDER_ECHO_MARKER}
-                        },
+                        "usage": {"nested": {"private_echo": ALT_TEXT_PROVIDER_ECHO_MARKER}},
                     },
                     latency_ms=18,
                     tokens_in=42,
@@ -360,9 +363,7 @@ class WordPressAIConnectorTextProvider:
                             }
                         ],
                         "output": {"raw_echo": ALT_TEXT_PROVIDER_ECHO_MARKER},
-                        "usage": {
-                            "nested": {"private_echo": ALT_TEXT_PROVIDER_ECHO_MARKER}
-                        },
+                        "usage": {"nested": {"private_echo": ALT_TEXT_PROVIDER_ECHO_MARKER}},
                     },
                     latency_ms=18,
                     tokens_in=42,
@@ -710,9 +711,7 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
         "task": "title_generation",
     }
     assert "request" not in result["operation_contract"]
-    assert result["output"]["output_text"] == (
-        "Npcink Cloud Addon: WordPress AI scene helper"
-    )
+    assert result["output"]["output_text"] == ("Npcink Cloud Addon: WordPress AI scene helper")
     assert data["execution_context"]["contract_version"] == "cloud_connector_runtime.v1"
     assert data["execution_context"]["ability_family"] == "text"
     assert data["execution_context"]["data_classification"] == "public_site_content"
@@ -743,14 +742,24 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
         assert run.channel == "editor"
         assert run.execution_kind == "text"
         assert run.profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
-        assert run.policy_json["managed_surface"] == "wordpress_ai_connector"
+        assert run.policy_json["managed_surface"] == "hosted_runtime_profiles"
+        assert run.policy_json["platform_kind"] == "wordpress"
+        assert run.policy_json["connector_id"] == "wordpress_ai_connector"
+        assert run.policy_json["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
         assert run.policy_json["task_group"] == "short_text"
         assert run.policy_json["routing_intent"] == "content.short_text"
         assert run.policy_json["timeout_ms"] == 45000
         assert run.policy_json["execution_contract"]["contract_version"] == (
             "cloud_connector_runtime.v1"
         )
-        assert run.policy_json["execution_contract"]["managed_surface"] == "wordpress_ai_connector"
+        assert run.policy_json["execution_contract"]["managed_surface"] == (
+            "hosted_runtime_profiles"
+        )
+        assert run.policy_json["execution_contract"]["platform_kind"] == "wordpress"
+        assert run.policy_json["execution_contract"]["connector_id"] == ("wordpress_ai_connector")
+        assert run.policy_json["execution_contract"]["connector_contract_version"] == (
+            "wp_ai_connector_runtime.v1"
+        )
         assert run.policy_json["execution_contract"]["task_group"] == "short_text"
         assert run.policy_json["execution_contract"]["routing_intent"] == "content.short_text"
         assert run.result_json == result
@@ -1086,9 +1095,7 @@ def test_wordpress_operation_rejects_request_control_fields(
     )
 
     assert response.status_code == 400
-    assert response.json()["error_code"] == (
-        "wordpress_operation.control_field_forbidden"
-    )
+    assert response.json()["error_code"] == ("wordpress_operation.control_field_forbidden")
     assert provider.requests == []
 
 
@@ -1309,9 +1316,7 @@ def test_connector_runtime_queued_worker_persists_pollable_result(tmp_path: Path
         "contract_version": "wordpress_operation.v1",
         "task": "title_generation",
     }
-    assert result["output"]["output_text"] == (
-        "Npcink Cloud Addon: WordPress AI scene helper"
-    )
+    assert result["output"]["output_text"] == ("Npcink Cloud Addon: WordPress AI scene helper")
     assert provider.requests[0].profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
     assert provider.requests[0].input_payload["metadata"]["task"] == "title_generation"
     assert "site_url" not in provider.requests[0].input_payload
@@ -1446,9 +1451,7 @@ def test_wordpress_ai_connector_runtime_accepts_registered_task_projection(
     assert "Generate the requested value" in provider_input["input"]
     assert "Return exactly one value" in provider_input["input"]
     assert provider_input["max_tokens"] == 160
-    assert provider_input["metadata"]["generation_context_reason"] != (
-        "task_policy_unavailable"
-    )
+    assert provider_input["metadata"]["generation_context_reason"] != ("task_policy_unavailable")
 
 
 def test_wordpress_ai_connector_runtime_rejects_open_ended_task_projection(
@@ -1957,9 +1960,7 @@ def test_alt_text_provider_nested_success_echo_is_projected_to_text_only(
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["status"] == "succeeded"
-    assert data["result"]["output"] == {
-        "output_text": "Blue ceramic mug on a white table"
-    }
+    assert data["result"]["output"] == {"output_text": "Blue ceramic mug on a white table"}
     assert ALT_TEXT_PROVIDER_ECHO_MARKER not in json.dumps(data, ensure_ascii=False)
     assert len(provider.requests) == 1
     with get_session(database_url) as session:
@@ -2063,9 +2064,7 @@ def test_wordpress_ai_connector_runtime_replays_before_artifact_expiry_revalidat
             {
                 "request": {
                     "source_artifact_id": ALT_TEXT_SOURCE_ARTIFACT_ID,
-                    "prompt": {
-                        "nested": "DaTa : ImAgE / PnG ; BaSe64 , cHJpdmF0ZQ=="
-                    },
+                    "prompt": {"nested": "DaTa : ImAgE / PnG ; BaSe64 , cHJpdmF0ZQ=="},
                 }
             },
             "wordpress_operation.alt_text_inline_media_forbidden",
@@ -2381,11 +2380,7 @@ def test_queued_alt_text_nested_alias_value_fails_before_encryption_or_provider(
         {
             "request": {
                 "source_artifact_id": ALT_TEXT_SOURCE_ARTIFACT_ID,
-                "prompt": {
-                    "nested": {
-                        "Image_URL": "https://example.test/private-media.png"
-                    }
-                },
+                "prompt": {"nested": {"Image_URL": "https://example.test/private-media.png"}},
             }
         }
     )
@@ -2404,9 +2399,7 @@ def test_queued_alt_text_nested_alias_value_fails_before_encryption_or_provider(
     )
 
     assert response.status_code == 400
-    assert response.json()["error_code"] == (
-        "wordpress_operation.alt_text_prompt_invalid"
-    )
+    assert response.json()["error_code"] == ("wordpress_operation.alt_text_prompt_invalid")
     assert provider.requests == []
     with get_session(database_url) as session:
         assert session.scalars(select(RunRecord)).all() == []
@@ -2574,9 +2567,7 @@ def test_wordpress_ai_connector_runtime_strips_reasoning_noise_from_title(
     payload = _payload(
         {
             "request": {
-                "source_text": (
-                    "<content>reasoning leakage verification content.</content>"
-                ),
+                "source_text": ("<content>reasoning leakage verification content.</content>"),
             },
         }
     )
@@ -2976,7 +2967,7 @@ def test_wordpress_ai_connector_image_generation_uses_managed_image_profile(
         assert run.channel == "wordpress_ai_connector"
         assert run.execution_kind == "image_generation"
         assert run.profile_id == WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID
-        assert run.policy_json["managed_surface"] == "wordpress_ai_connector"
+        assert run.policy_json["managed_surface"] == "hosted_runtime_profiles"
         assert run.policy_json["task_group"] == "image_generation"
         assert run.policy_json["routing_intent"] == "media.image_generation"
         assert run.policy_json["timeout_ms"] == 90000
@@ -3038,34 +3029,112 @@ def test_wordpress_ai_connector_runtime_rejects_generic_chat_shape(tmp_path: Pat
     assert provider.requests == []
 
 
-def test_admin_ability_model_plugin_routing_updates_platform_managed_candidates(
+def test_wordpress_ai_connector_runtime_fails_closed_on_managed_profile_contract_drift(
     tmp_path: Path,
 ) -> None:
-    database_url, client, _ = _build_client(tmp_path)
+    database_url, client, provider = _build_client(tmp_path)
+    with get_session(database_url) as session:
+        profile = session.get(
+            RoutingProfile,
+            WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+        )
+        assert profile is not None
+        policy = dict(profile.default_policy_json or {})
+        policy["connector_contract_version"] = "wp_ai_connector_runtime.v2"
+        profile.default_policy_json = policy
+        session.commit()
+
+    response = _execute(
+        client,
+        _payload(),
+        idempotency_key="runtime-profile-contract-drift",
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "runtime_profiles.managed_contract_invalid"
+    assert "connector_contract_version=wp_ai_connector_runtime.v1" in payload["message"]
+    assert provider.requests == []
+    with get_session(database_url) as session:
+        assert session.scalars(select(RunRecord)).all() == []
+
+
+def _runtime_profile_replacement_from_projection(
+    profiles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "profile_id": profile["profile_id"],
+            "candidate_instance_ids": profile["candidate_instance_ids"],
+            "timeout_ms": profile["timeout_ms"],
+            "allow_fallback": profile["allow_fallback"],
+            "max_retries": profile["max_retries"],
+            "note": profile["note"],
+        }
+        for profile in profiles
+    ]
+
+
+def test_admin_runtime_profiles_updates_hosted_candidates(
+    tmp_path: Path,
+) -> None:
+    database_url, client, provider = _build_client(tmp_path)
 
     get_response = client.get(
-        "/internal/service/admin/ability-models/plugin-routing",
+        "/internal/service/admin/runtime-profiles",
         headers=build_internal_headers(),
     )
 
     assert get_response.status_code == 200
+    assert get_response.json()["message"] == "Hosted runtime profiles loaded"
     data = get_response.json()["data"]
-    assert data["contract_version"] == "cloud-ability-model-routing.v1"
-    assert data["projection_kind"] == "runtime_profile_binding"
-    assert data["customer_model_selection"] is False
-    assert data["direct_wordpress_write"] is False
-    assert data["boundary"]["cloud_ability_registry"] is False
-    assert data["boundary"]["wordpress_ability_truth"] == "local_plugin"
+    assert data["contract_version"] == "cloud-hosted-runtime-profiles.v1"
+    assert data["surface"] == "admin_hosted_runtime_profiles"
+    assert data["projection_kind"] == "hosted_runtime_profile_configuration"
+    assert data["owner"] == "cloud_runtime"
+    assert data["platform_kind"] == "wordpress"
+    assert data["connector_id"] == "wordpress_ai_connector"
+    assert data["connector_contract_version"] == "wp_ai_connector_runtime.v1"
+    assert data["boundary"]["admin_surface"] == "platform_admin_only"
+    assert data["boundary"]["results_write_posture"] == "suggestion_only"
+    assert data["boundary"]["public_runtime_accepts_raw_model_instance"] is False
+    assert data["boundary"]["cloud_owns"] == ["hosted_candidate_chain"]
+    assert data["boundary"]["local_plugin_owns"] == [
+        "ability_truth",
+        "workflow_truth",
+        "prompt_truth",
+        "router_truth",
+        "adoption_truth",
+        "final_write_truth",
+    ]
+    assert data["boundary"]["direct_wordpress_write"] is False
     assert len(data["profiles"]) == 6
-    assert data["available_text_instances"][0]["instance_id"] == ("openai-wp-ai-connector-test")
-    assert data["available_vision_instances"][0]["instance_id"] == ("openai-wp-ai-vision-test")
-    assert data["available_image_instances"][0]["instance_id"] == "openai-wp-ai-image-test"
-    assert data["available_audio_instances"][0]["instance_id"] == "openai-wp-ai-audio-test"
+    assert all(len(profile["candidate_instance_ids"]) <= 2 for profile in data["profiles"])
+    assert set(data["available_instances"]) == {
+        "text",
+        "vision",
+        "image_generation",
+        "audio_generation",
+    }
+    assert data["available_instances"]["text"][0]["instance_id"] == ("openai-wp-ai-connector-test")
+    assert data["available_instances"]["vision"][0]["instance_id"] == ("openai-wp-ai-vision-test")
+    assert data["available_instances"]["image_generation"][0]["instance_id"] == (
+        "openai-wp-ai-image-test"
+    )
+    assert data["available_instances"]["audio_generation"][0]["instance_id"] == (
+        "openai-wp-ai-audio-test"
+    )
+    assert "embedding" not in data["available_instances"]
     short_text = next(
         profile
         for profile in data["profiles"]
         if profile["profile_id"] == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
     )
+    assert short_text["platform_kind"] == "wordpress"
+    assert short_text["connector_id"] == "wordpress_ai_connector"
+    assert "candidates" not in short_text
+    assert "selection_policy" not in short_text
+    assert short_text["note"] == ""
     assert short_text["tasks"] == [
         "excerpt_generation",
         "meta_description",
@@ -3105,36 +3174,53 @@ def test_admin_ability_model_plugin_routing_updates_platform_managed_candidates(
     ]
     assert audio_generation["candidate_instance_ids"] == ["openai-wp-ai-audio-test"]
 
-    response = client.post(
-        "/internal/service/admin/ability-models/plugin-routing",
-        headers=merge_json_headers(
-            build_internal_headers(idempotency_key="wp-ai-routing-admin-save-001")
-        ),
-        json={
-            "profiles": [
+    replacement_profiles = _runtime_profile_replacement_from_projection(data["profiles"])
+    assert len(replacement_profiles) == len(WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID)
+    assert {profile["profile_id"] for profile in replacement_profiles} == set(
+        WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID
+    )
+    for profile in replacement_profiles:
+        if profile["profile_id"] == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID:
+            profile.update(
                 {
-                    "profile_id": WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
                     "candidate_instance_ids": ["openai-wp-ai-connector-test"],
                     "timeout_ms": 12000,
                     "allow_fallback": True,
                     "max_retries": 1,
                     "note": "short-text canary",
-                },
+                }
+            )
+        if profile["profile_id"] == WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID:
+            profile.update(
                 {
-                    "profile_id": WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
-                    "candidate_instance_ids": ["openai-wp-ai-image-test"],
                     "timeout_ms": 90000,
                     "allow_fallback": False,
                     "max_retries": 0,
                     "note": "image-generation canary",
-                },
-            ]
+                }
+            )
+
+    response = client.put(
+        "/internal/service/admin/runtime-profiles",
+        headers=merge_json_headers(
+            build_internal_headers(idempotency_key="wp-ai-routing-admin-save-001")
+        ),
+        json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "profiles": replacement_profiles,
         },
     )
 
     assert response.status_code == 200
+    assert response.json()["message"] == "Hosted runtime profiles saved"
     payload = response.json()["data"]
-    assert payload["receipt"]["event_kind"] == "ability_model_plugin_routing.update"
+    assert payload["receipt"]["event_kind"] == "runtime_profiles.update"
+    assert payload["receipt"]["scope_kind"] == "runtime_profile_catalog"
+    assert payload["receipt"]["scope_id"] == "wordpress_ai_connector"
+    assert payload["receipt"]["effective_summary"] == ("Hosted runtime profiles were updated.")
     updated = next(
         profile
         for profile in payload["profiles"]
@@ -3143,6 +3229,9 @@ def test_admin_ability_model_plugin_routing_updates_platform_managed_candidates(
     assert updated["candidate_instance_ids"] == ["openai-wp-ai-connector-test"]
     assert updated["timeout_ms"] == 12000
     assert updated["max_retries"] == 1
+    assert updated["note"] == "short-text canary"
+    assert "selection_policy" not in updated
+    assert "candidates" not in updated
     updated_image = next(
         profile
         for profile in payload["profiles"]
@@ -3151,6 +3240,40 @@ def test_admin_ability_model_plugin_routing_updates_platform_managed_candidates(
     assert updated_image["candidate_instance_ids"] == ["openai-wp-ai-image-test"]
     assert updated_image["timeout_ms"] == 90000
     assert updated_image["allow_fallback"] is False
+    assert updated_image["note"] == "image-generation canary"
+    assert updated["revision"].startswith("runtime-profiles-admin-")
+
+    round_trip_response = client.get(
+        "/internal/service/admin/runtime-profiles",
+        headers=build_internal_headers(),
+    )
+    assert round_trip_response.status_code == 200
+    round_trip_profiles = round_trip_response.json()["data"]["profiles"]
+    round_trip_short_text = next(
+        profile
+        for profile in round_trip_profiles
+        if profile["profile_id"] == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    )
+    assert round_trip_short_text["note"] == "short-text canary"
+    assert "selection_policy" not in round_trip_short_text
+    assert "candidates" not in round_trip_short_text
+
+    CatalogService(database_url, providers={"openai": provider}).refresh_catalog()
+    refreshed_response = client.get(
+        "/internal/service/admin/runtime-profiles",
+        headers=build_internal_headers(),
+    )
+    assert refreshed_response.status_code == 200
+    refreshed_short_text = next(
+        profile
+        for profile in refreshed_response.json()["data"]["profiles"]
+        if profile["profile_id"] == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    )
+    assert refreshed_short_text["candidate_instance_ids"] == ["openai-wp-ai-connector-test"]
+    assert refreshed_short_text["timeout_ms"] == 12000
+    assert refreshed_short_text["max_retries"] == 1
+    assert refreshed_short_text["note"] == "short-text canary"
+    assert refreshed_short_text["revision"] == updated["revision"]
 
     run_response = _execute(
         client,
@@ -3167,17 +3290,60 @@ def test_admin_ability_model_plugin_routing_updates_platform_managed_candidates(
         assert run.policy_json["timeout_ms"] == 12000
         assert run.policy_json["max_retries"] == 1
         assert run.policy_json["routing_intent"] == "content.short_text"
+        assert run.policy_json["managed_surface"] == "hosted_runtime_profiles"
+        assert run.policy_json["platform_kind"] == "wordpress"
+        assert run.policy_json["connector_id"] == "wordpress_ai_connector"
+        assert run.policy_json["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
+        routing_profile = session.get(
+            RoutingProfile,
+            WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+        )
+        assert routing_profile is not None
+        default_policy = routing_profile.default_policy_json
+        assert isinstance(default_policy, dict)
+        assert default_policy["operator_note"] == "short-text canary"
+        assert default_policy["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
+        routing_binding = session.get(
+            RoutingBinding,
+            WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+        )
+        assert routing_binding is not None
+        selection_policy = routing_binding.selection_policy_json
+        assert isinstance(selection_policy, dict)
+        assert selection_policy["strategy"] == "ordered"
+        assert selection_policy["managed_surface"] == "hosted_runtime_profiles"
+        assert selection_policy["platform_kind"] == "wordpress"
+        assert selection_policy["connector_id"] == "wordpress_ai_connector"
+        assert selection_policy["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
+        assert selection_policy["operator_note"] == "short-text canary"
+        audit_event = session.execute(
+            select(ServiceAuditEvent).where(
+                ServiceAuditEvent.event_kind == "runtime_profiles.update"
+            )
+        ).scalar_one()
+        assert audit_event.scope_kind == "runtime_profile_catalog"
+        assert audit_event.scope_id == "wordpress_ai_connector"
+        audit_payload = audit_event.payload_json
+        assert isinstance(audit_payload, dict)
+        assert audit_payload["contract_version"] == "cloud-hosted-runtime-profiles.v1"
+        assert audit_payload["platform_kind"] == "wordpress"
+        assert audit_payload["connector_id"] == "wordpress_ai_connector"
+        assert audit_payload["connector_contract_version"] == ("wp_ai_connector_runtime.v1")
 
 
-def test_admin_ability_model_plugin_routing_rejects_unknown_profile(tmp_path: Path) -> None:
+def test_admin_runtime_profiles_rejects_unknown_profile(tmp_path: Path) -> None:
     _, client, _ = _build_client(tmp_path)
 
-    response = client.post(
-        "/internal/service/admin/ability-models/plugin-routing",
+    response = client.put(
+        "/internal/service/admin/runtime-profiles",
         headers=merge_json_headers(
             build_internal_headers(idempotency_key="wp-ai-routing-admin-save-unknown")
         ),
         json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
             "profiles": [
                 {
                     "profile_id": "text.balanced",
@@ -3186,25 +3352,175 @@ def test_admin_ability_model_plugin_routing_rejects_unknown_profile(tmp_path: Pa
                     "allow_fallback": True,
                     "max_retries": 0,
                 }
-            ]
+            ],
         },
     )
 
     assert response.status_code == 400
-    assert response.json()["error_code"] == "ability_model_plugin_routing.invalid_profile"
+    assert response.json()["error_code"] == "runtime_profiles.invalid_profile"
 
 
-def test_admin_ability_model_plugin_routing_rejects_execution_kind_mismatch(
+def test_admin_runtime_profiles_rejects_incomplete_replacement(tmp_path: Path) -> None:
+    _, client, _ = _build_client(tmp_path)
+    get_response = client.get(
+        "/internal/service/admin/runtime-profiles",
+        headers=build_internal_headers(),
+    )
+    assert get_response.status_code == 200
+    replacement_profiles = _runtime_profile_replacement_from_projection(
+        get_response.json()["data"]["profiles"]
+    )
+    omitted = replacement_profiles.pop()
+
+    response = client.put(
+        "/internal/service/admin/runtime-profiles",
+        headers=merge_json_headers(
+            build_internal_headers(idempotency_key="runtime-profiles-incomplete-replacement")
+        ),
+        json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "profiles": replacement_profiles,
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "runtime_profiles.invalid_profile"
+    assert "must replace the complete catalog" in payload["message"]
+    assert omitted["profile_id"] in payload["message"]
+
+
+def test_admin_runtime_profiles_rejects_more_than_primary_and_fallback(
+    tmp_path: Path,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    get_response = client.get(
+        "/internal/service/admin/runtime-profiles",
+        headers=build_internal_headers(),
+    )
+    assert get_response.status_code == 200
+    replacement_profiles = _runtime_profile_replacement_from_projection(
+        get_response.json()["data"]["profiles"]
+    )
+    short_text_profile = next(
+        profile
+        for profile in replacement_profiles
+        if profile["profile_id"] == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    )
+    short_text_profile["candidate_instance_ids"] = [
+        "openai-wp-ai-connector-test",
+        "zz-openai-wp-ai-connector-fallback-test",
+        "third-candidate-must-be-rejected",
+    ]
+
+    response = client.put(
+        "/internal/service/admin/runtime-profiles",
+        headers=merge_json_headers(
+            build_internal_headers(idempotency_key="runtime-profiles-three-candidates")
+        ),
+        json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "profiles": replacement_profiles,
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "runtime_profiles.invalid_profile"
+    assert "supports at most two candidate instances" in payload["message"]
+
+
+@pytest.mark.parametrize(
+    "payload_overrides",
+    [
+        {"contract_version": "cloud-hosted-runtime-profiles.v2"},
+        {"platform_kind": "typecho"},
+        {"connector_id": "npcink-cloud-addon"},
+        {"connector_contract_version": "wp_ai_connector_runtime.v2"},
+        {"unexpected_control_plane": True},
+    ],
+)
+def test_admin_runtime_profiles_requires_frozen_platform_contract(
+    tmp_path: Path,
+    payload_overrides: dict[str, Any],
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    payload: dict[str, Any] = {
+        "contract_version": "cloud-hosted-runtime-profiles.v1",
+        "platform_kind": "wordpress",
+        "connector_id": "wordpress_ai_connector",
+        "connector_contract_version": "wp_ai_connector_runtime.v1",
+        "profiles": [],
+    }
+    payload.update(payload_overrides)
+
+    response = client.put(
+        "/internal/service/admin/runtime-profiles",
+        headers=merge_json_headers(
+            build_internal_headers(
+                idempotency_key=(
+                    f"runtime-profiles-invalid-platform-contract-{next(iter(payload_overrides))}"
+                )
+            )
+        ),
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["contract_version", "connector_contract_version"],
+)
+def test_admin_runtime_profiles_requires_explicit_contract_versions(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    payload: dict[str, Any] = {
+        "contract_version": "cloud-hosted-runtime-profiles.v1",
+        "platform_kind": "wordpress",
+        "connector_id": "wordpress_ai_connector",
+        "connector_contract_version": "wp_ai_connector_runtime.v1",
+        "profiles": [],
+    }
+    payload.pop(missing_field)
+
+    response = client.put(
+        "/internal/service/admin/runtime-profiles",
+        headers=merge_json_headers(
+            build_internal_headers(
+                idempotency_key=f"runtime-profiles-missing-version-{missing_field}"
+            )
+        ),
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+def test_admin_runtime_profiles_rejects_execution_kind_mismatch(
     tmp_path: Path,
 ) -> None:
     _, client, _ = _build_client(tmp_path)
 
-    response = client.post(
-        "/internal/service/admin/ability-models/plugin-routing",
+    response = client.put(
+        "/internal/service/admin/runtime-profiles",
         headers=merge_json_headers(
             build_internal_headers(idempotency_key="wp-ai-routing-admin-save-kind-mismatch")
         ),
         json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
             "profiles": [
                 {
                     "profile_id": WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
@@ -3213,17 +3529,214 @@ def test_admin_ability_model_plugin_routing_rejects_execution_kind_mismatch(
                     "allow_fallback": True,
                     "max_retries": 0,
                 }
-            ]
+            ],
         },
     )
 
     assert response.status_code == 400
     payload = response.json()
-    assert payload["error_code"] == "ability_model_plugin_routing.invalid_profile"
-    assert "may only use available text instances" in payload["message"]
+    assert payload["error_code"] == "runtime_profiles.invalid_profile"
+    assert "may only use text instances" in payload["message"]
 
 
-def test_admin_ability_model_plugin_routing_requires_enabled_provider_model(
+def test_admin_runtime_profiles_enforces_per_profile_timeout_limits(
+    tmp_path: Path,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    get_response = client.get(
+        "/internal/service/admin/runtime-profiles",
+        headers=build_internal_headers(),
+    )
+    assert get_response.status_code == 200
+    replacement_profiles = _runtime_profile_replacement_from_projection(
+        get_response.json()["data"]["profiles"]
+    )
+    audio_profile = next(
+        profile
+        for profile in replacement_profiles
+        if profile["profile_id"] == WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID
+    )
+    audio_profile["timeout_ms"] = 120000
+
+    audio_response = client.put(
+        "/internal/service/admin/runtime-profiles",
+        headers=merge_json_headers(
+            build_internal_headers(idempotency_key="runtime-profiles-audio-timeout-max")
+        ),
+        json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "profiles": replacement_profiles,
+        },
+    )
+
+    assert audio_response.status_code == 200
+    saved_audio_profile = next(
+        profile
+        for profile in audio_response.json()["data"]["profiles"]
+        if profile["profile_id"] == WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID
+    )
+    assert saved_audio_profile["timeout_ms"] == 120000
+
+    replacement_profiles = _runtime_profile_replacement_from_projection(
+        audio_response.json()["data"]["profiles"]
+    )
+    short_text_profile = next(
+        profile
+        for profile in replacement_profiles
+        if profile["profile_id"] == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    )
+    short_text_profile["timeout_ms"] = 60001
+
+    short_text_response = client.put(
+        "/internal/service/admin/runtime-profiles",
+        headers=merge_json_headers(
+            build_internal_headers(idempotency_key="runtime-profiles-short-text-timeout-over-max")
+        ),
+        json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "profiles": replacement_profiles,
+        },
+    )
+
+    assert short_text_response.status_code == 400
+    payload = short_text_response.json()
+    assert payload["error_code"] == "runtime_profiles.invalid_profile"
+    assert "timeout_ms exceeds max 60000" in payload["message"]
+
+
+def test_admin_runtime_profiles_matches_routing_readiness_for_projection_and_put(
+    tmp_path: Path,
+) -> None:
+    database_url, client, _ = _build_client(tmp_path)
+    with get_session(database_url) as session:
+        unhealthy_instance = session.get(
+            CatalogInstance,
+            "openai-wp-ai-connector-test",
+        )
+        deprecated_model = session.get(
+            CatalogModel,
+            "gpt-wp-ai-connector-fallback-test",
+        )
+        unavailable_model = session.get(
+            CatalogModel,
+            "speech-wp-ai-connector-test",
+        )
+        degraded_instance = session.get(
+            CatalogInstance,
+            "openai-wp-ai-vision-test",
+        )
+        unknown_instance = session.get(
+            CatalogInstance,
+            "openai-wp-ai-image-test",
+        )
+        assert unhealthy_instance is not None
+        assert deprecated_model is not None
+        assert unavailable_model is not None
+        assert degraded_instance is not None
+        assert unknown_instance is not None
+        unhealthy_instance.health_status = "unhealthy"
+        deprecated_model.is_deprecated = True
+        unavailable_model.status = "disabled"
+        degraded_instance.health_status = "degraded"
+        unknown_instance.health_status = "unknown"
+        session.commit()
+
+    get_response = client.get(
+        "/internal/service/admin/runtime-profiles",
+        headers=build_internal_headers(),
+    )
+
+    assert get_response.status_code == 200
+    data = get_response.json()["data"]
+    available_instance_ids = {
+        kind: {instance["instance_id"] for instance in instances}
+        for kind, instances in data["available_instances"].items()
+    }
+    assert "openai-wp-ai-connector-test" not in available_instance_ids["text"]
+    assert "zz-openai-wp-ai-connector-fallback-test" not in available_instance_ids["text"]
+    assert "openai-wp-ai-audio-test" not in available_instance_ids["audio_generation"]
+    assert "openai-wp-ai-vision-test" in available_instance_ids["vision"]
+    assert "openai-wp-ai-image-test" in available_instance_ids["image_generation"]
+
+    profiles_by_id = {profile["profile_id"]: profile for profile in data["profiles"]}
+    assert profiles_by_id[WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID]["candidate_instance_ids"] == []
+    assert (
+        profiles_by_id[WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID]["candidate_instance_ids"] == []
+    )
+    assert profiles_by_id[WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID]["candidate_instance_ids"] == [
+        "openai-wp-ai-vision-test"
+    ]
+    assert profiles_by_id[WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID][
+        "candidate_instance_ids"
+    ] == ["openai-wp-ai-image-test"]
+
+    eligible_replacement = _runtime_profile_replacement_from_projection(data["profiles"])
+    eligible_response = client.put(
+        "/internal/service/admin/runtime-profiles",
+        headers=merge_json_headers(
+            build_internal_headers(idempotency_key="runtime-profiles-readiness-eligible")
+        ),
+        json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "profiles": eligible_replacement,
+        },
+    )
+    assert eligible_response.status_code == 200
+
+    invalid_candidates = (
+        (
+            WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+            "openai-wp-ai-connector-test",
+            "unhealthy",
+        ),
+        (
+            WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+            "zz-openai-wp-ai-connector-fallback-test",
+            "deprecated",
+        ),
+        (
+            WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+            "openai-wp-ai-audio-test",
+            "unavailable",
+        ),
+    )
+    for profile_id, instance_id, case in invalid_candidates:
+        replacement = _runtime_profile_replacement_from_projection(
+            eligible_response.json()["data"]["profiles"]
+        )
+        target_profile = next(
+            profile for profile in replacement if profile["profile_id"] == profile_id
+        )
+        target_profile["candidate_instance_ids"] = [instance_id]
+        response = client.put(
+            "/internal/service/admin/runtime-profiles",
+            headers=merge_json_headers(
+                build_internal_headers(idempotency_key=f"runtime-profiles-readiness-{case}")
+            ),
+            json={
+                "contract_version": "cloud-hosted-runtime-profiles.v1",
+                "platform_kind": "wordpress",
+                "connector_id": "wordpress_ai_connector",
+                "connector_contract_version": "wp_ai_connector_runtime.v1",
+                "profiles": replacement,
+            },
+        )
+        assert response.status_code == 400
+        payload = response.json()
+        assert payload["error_code"] == "runtime_profiles.invalid_profile"
+        assert "may only use routing-eligible" in payload["message"]
+
+
+def test_admin_runtime_profiles_requires_enabled_provider_model(
     tmp_path: Path,
 ) -> None:
     database_url, client, _ = _build_client(tmp_path)
@@ -3239,13 +3752,13 @@ def test_admin_ability_model_plugin_routing_requires_enabled_provider_model(
         session.commit()
 
     get_response = client.get(
-        "/internal/service/admin/ability-models/plugin-routing",
+        "/internal/service/admin/runtime-profiles",
         headers=build_internal_headers(),
     )
 
     assert get_response.status_code == 200
     data = get_response.json()["data"]
-    assert data["available_audio_instances"] == []
+    assert data["available_instances"]["audio_generation"] == []
     audio_generation = next(
         profile
         for profile in data["profiles"]
@@ -3254,12 +3767,47 @@ def test_admin_ability_model_plugin_routing_requires_enabled_provider_model(
     assert audio_generation["candidate_instance_ids"] == []
     assert audio_generation["status"] == "needs_candidates"
 
-    response = client.post(
-        "/internal/service/admin/ability-models/plugin-routing",
+    replacement_profiles = _runtime_profile_replacement_from_projection(data["profiles"])
+    empty_chain_response = client.put(
+        "/internal/service/admin/runtime-profiles",
+        headers=merge_json_headers(
+            build_internal_headers(idempotency_key="runtime-profiles-empty-audio-chain")
+        ),
+        json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "profiles": replacement_profiles,
+        },
+    )
+
+    assert empty_chain_response.status_code == 200
+    empty_chain_audio = next(
+        profile
+        for profile in empty_chain_response.json()["data"]["profiles"]
+        if profile["profile_id"] == WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID
+    )
+    assert empty_chain_audio["candidate_instance_ids"] == []
+    assert empty_chain_audio["status"] == "needs_candidates"
+    with get_session(database_url) as session:
+        audio_binding = session.get(
+            RoutingBinding,
+            WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+        )
+        assert audio_binding is not None
+        assert audio_binding.candidate_instance_ids == []
+
+    response = client.put(
+        "/internal/service/admin/runtime-profiles",
         headers=merge_json_headers(
             build_internal_headers(idempotency_key="wp-ai-routing-admin-save-model-allowlist")
         ),
         json={
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
             "profiles": [
                 {
                     "profile_id": WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
@@ -3268,11 +3816,11 @@ def test_admin_ability_model_plugin_routing_requires_enabled_provider_model(
                     "allow_fallback": True,
                     "max_retries": 0,
                 }
-            ]
+            ],
         },
     )
 
     assert response.status_code == 400
     payload = response.json()
-    assert payload["error_code"] == "ability_model_plugin_routing.invalid_profile"
+    assert payload["error_code"] == "runtime_profiles.invalid_profile"
     assert "may only use models enabled for provider openai" in payload["message"]

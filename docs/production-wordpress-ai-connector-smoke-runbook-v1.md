@@ -1,7 +1,7 @@
 # Production WordPress AI Connector Smoke Runbook v1
 
 Status: active.
-Updated: 2026-07-15.
+Updated: 2026-07-17.
 
 P1-E05 status: operator-only pending. This runbook and its local builder tests
 are preparation, not evidence that the production title smoke passed.
@@ -12,8 +12,8 @@ smoke.
 
 ## Purpose
 
-This runbook verifies the production Cloud runtime path for WordPress AI
-Connector ability-model routing after deploying `npcink-ai-cloud`.
+This runbook verifies the production Cloud hosted runtime-profile path for the
+WordPress AI Connector after deploying `npcink-ai-cloud`.
 
 The smoke proves:
 

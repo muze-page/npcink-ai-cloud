@@ -444,7 +444,7 @@ export default function AdminTroubleshootingPage() {
           <div className="grid gap-4 md:grid-cols-2">
             {runtimeEvidenceItems.map((item) => <div key={item.titleKey}><h3 className="text-sm font-semibold text-slate-950 dark:text-white">{t(item.titleKey, {}, item.titleFallback)}</h3><p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{t(item.descKey, {}, item.descFallback)}</p></div>)}
           </div>
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4 dark:border-slate-800"><p className="max-w-3xl text-xs leading-5 text-slate-500 dark:text-slate-400">{t('admin.advanced.runtime_evidence_boundary', {}, 'Evidence source remains Cloud runtime metadata such as run records, provider-call records, usage meter events, runtime profiles, and capability projection rows.')}</p><Link href="/admin/ability-models" className="btn btn-secondary btn-sm">{t('admin.advanced.action_open_model_binding', {}, 'Open model binding')}</Link></div>
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4 dark:border-slate-800"><p className="max-w-3xl text-xs leading-5 text-slate-500 dark:text-slate-400">{t('admin.advanced.runtime_evidence_boundary', {}, 'Evidence source remains Cloud runtime metadata such as run records, provider-call records, usage meter events, runtime profiles, and capability projection rows.')}</p><Link href="/admin/runtime-profiles" className="btn btn-secondary btn-sm">{t('admin.advanced.action_open_runtime_profiles', {}, 'Open runtime profiles')}</Link></div>
         </div>
       </details>
     </BackofficePageStack>

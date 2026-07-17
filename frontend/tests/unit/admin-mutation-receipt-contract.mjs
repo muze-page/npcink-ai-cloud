@@ -10,7 +10,7 @@ const aiResourcesSource = readFileSync(fromFrontendRoot('src/app/admin/ai-resour
 const supplierToolbarSource = readFileSync(fromFrontendRoot('src/components/admin/SupplierToolbar.tsx'), 'utf8');
 const toastSource = readFileSync(fromFrontendRoot('src/components/ui/Toast.tsx'), 'utf8');
 const feedbackContractSource = readFileSync(fromFrontendRoot('../docs/cloud-admin-feedback-and-layout-contract-v1.md'), 'utf8');
-const abilityModelsSource = readFileSync(fromFrontendRoot('src/app/admin/ability-models/page.tsx'), 'utf8');
+const runtimeProfilesSource = readFileSync(fromFrontendRoot('src/app/admin/runtime-profiles/page.tsx'), 'utf8');
 const serviceSettingsSource = readFileSync(fromFrontendRoot('src/app/admin/service-settings/page.tsx'), 'utf8');
 const i18nSource = readFileSync(fromFrontendRoot('src/lib/i18n.ts'), 'utf8');
 const zhStart = i18nSource.indexOf("'zh-CN': {");
@@ -135,15 +135,15 @@ assert.match(
 );
 
 assert.match(
-  abilityModelsSource,
+  runtimeProfilesSource,
   /AdminMutationReceipt[\s\S]*AdminMutationReceiptPayload/,
-  'Ability-model routing writes must render the shared admin mutation receipt'
+  'Hosted runtime profile writes must render the shared admin mutation receipt'
 );
 
 assert.match(
-  abilityModelsSource,
-  /setDialogReceipt\(\(payload\.data\?\.receipt \|\| null\) as AdminMutationReceiptPayload \| null\)/,
-  'Ability-model routing writes must store backend receipts in the save dialog'
+  runtimeProfilesSource,
+  /receipt[\s\S]{0,200}AdminMutationReceiptPayload \| null/,
+  'Hosted runtime profile writes must store the backend receipt'
 );
 
 for (const [source, label] of [
@@ -158,9 +158,9 @@ for (const [source, label] of [
 }
 
 assert.match(
-  abilityModelsSource,
-  /<BackofficeLayer[\s\S]*description=\{text\('description'/,
-  'Ability-model routing must keep its control-plane boundary visible in the compact workspace header'
+  runtimeProfilesSource,
+  /<BackofficePrimaryPanel[\s\S]*description=\{copy\('description'/,
+  'Hosted runtime profiles must keep the Cloud runtime boundary visible in the compact workspace header'
 );
 
 const requiredKeys = [

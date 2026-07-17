@@ -44,12 +44,6 @@ const ADMIN_ROUTE_RULES: readonly AdminRouteRule[] = [
   },
   {
     methods: ['GET'],
-    pattern: /^audio-jobs\/(?:recent|[^/]+)$/,
-    namespace: 'admin',
-    requiredCapability: 'can_review_diagnostics',
-  },
-  {
-    methods: ['GET'],
     pattern: /^audit-events(?:\/summary)?$/,
     namespace: 'service',
     requiredCapability: 'can_review_diagnostics',
@@ -128,7 +122,7 @@ const ADMIN_ROUTE_RULES: readonly AdminRouteRule[] = [
   // Cloud runtime configuration reads.
   {
     methods: ['GET'],
-    pattern: /^(?:ai-resources|provider-connections|model-references|site-knowledge-vector-profile|ability-models\/runtime-projection|ability-models\/plugin-routing)$/,
+    pattern: /^(?:ai-resources|provider-connections|model-references|site-knowledge-vector-profile|runtime-profiles)$/,
     namespace: 'admin',
     requiredCapability: 'can_manage_catalog',
   },
@@ -229,13 +223,7 @@ const ADMIN_ROUTE_RULES: readonly AdminRouteRule[] = [
   },
   {
     methods: ['POST'],
-    pattern: /^audio-jobs$/,
-    namespace: 'admin',
-    requiredCapability: 'can_manage_catalog',
-  },
-  {
-    methods: ['POST'],
-    pattern: /^(?:provider-connections|provider-connections\/preview-catalog|model-references\/sync|ability-models\/plugin-routing|ability-models\/runtime-binding)$/,
+    pattern: /^(?:provider-connections|provider-connections\/preview-catalog|model-references\/sync)$/,
     namespace: 'admin',
     requiredCapability: 'can_manage_catalog',
   },
@@ -254,6 +242,12 @@ const ADMIN_ROUTE_RULES: readonly AdminRouteRule[] = [
   {
     methods: ['PUT'],
     pattern: /^site-knowledge-vector-profile(?:\/vector-store)?$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['PUT'],
+    pattern: /^runtime-profiles$/,
     namespace: 'admin',
     requiredCapability: 'can_manage_catalog',
   },

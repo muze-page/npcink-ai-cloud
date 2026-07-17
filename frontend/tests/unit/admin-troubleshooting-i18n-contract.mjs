@@ -31,7 +31,7 @@ const workspaceKeys = [
   'admin.advanced.recent_runtime_evidence_title',
   'admin.advanced.recent_runtime_evidence_desc',
   'admin.advanced.runtime_evidence_boundary',
-  'admin.advanced.action_open_model_binding',
+  'admin.advanced.action_open_runtime_profiles',
 ];
 
 const requiredKeys = [...new Set([...troubleshootingKeys, ...workspaceKeys])].sort();

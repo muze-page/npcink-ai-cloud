@@ -299,9 +299,7 @@ def _extract_portal_principal_id(payload: dict[str, Any]) -> str:
 def _extract_portal_session_version(payload: dict[str, Any]) -> int:
     try:
         raw_session_version = payload.get("session_version")
-        if isinstance(raw_session_version, bool) or not isinstance(
-            raw_session_version, (int, str)
-        ):
+        if isinstance(raw_session_version, bool) or not isinstance(raw_session_version, (int, str)):
             raise ValueError
         session_version = int(raw_session_version)
     except (TypeError, ValueError) as error:
@@ -470,9 +468,7 @@ async def authorize_public_request(
             require_idempotency=require_idempotency,
             required_scope=required_scope,
             max_body_bytes=(
-                max_body_bytes
-                if max_body_bytes is not None
-                else PUBLIC_RUNTIME_MAX_BODY_BYTES
+                max_body_bytes if max_body_bytes is not None else PUBLIC_RUNTIME_MAX_BODY_BYTES
             ),
             body_evidence_loader=body_evidence_loader,
             replay_policy=replay_policy,
@@ -583,7 +579,7 @@ async def _authorize_static_token_request(
     except RequestAuthError as error:
         return _token_error_response(error)
 
-    if request.method.upper() == "POST" and idempotency_key:
+    if request.method.upper() in {"POST", "PUT"} and idempotency_key:
         now = datetime.now(UTC)
         replay_ttl_seconds = _resolve_replay_receipt_ttl_seconds(
             services.settings.auth_timestamp_tolerance_seconds

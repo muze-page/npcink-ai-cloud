@@ -1,6 +1,12 @@
 # Cloud Ability-Model Routing v1
 
-Status: active.
+Status: superseded by
+[Cloud Hosted Runtime Profiles v1](cloud-hosted-runtime-profiles-v1.md) and
+[ADR-018](decisions/018-cloud-hosted-runtime-profile-admin-surface.md).
+
+This document is retained as historical context for the earlier
+`ability-models` surface. It is not an active API, UI, naming, or ownership
+contract.
 Date: 2026-06-29
 
 ## Context

@@ -16,6 +16,7 @@ from app.adapters.providers.base import (
 )
 from app.core.config import Settings
 from app.domain.media_artifacts.input_loading import LoadedArtifactInput
+from app.domain.runtime.errors import RuntimeExecutionContractError
 from app.domain.site_knowledge.contracts import (
     SITE_KNOWLEDGE_CONTRACTS,
     SITE_KNOWLEDGE_SEARCH_ABILITY,
@@ -90,9 +91,7 @@ class WordPressOperationRuntime:
         raw_system_instruction = scene_request.get("system_instruction")
         if task in WP_AI_CONNECTOR_SOURCE_TEXT_TASKS:
             system_instruction = (
-                raw_system_instruction.strip()
-                if isinstance(raw_system_instruction, str)
-                else ""
+                raw_system_instruction.strip() if isinstance(raw_system_instruction, str) else ""
             )
         else:
             system_instruction = str(raw_system_instruction or "").strip()
@@ -291,9 +290,7 @@ class WordPressOperationRuntime:
                 ability_name=SITE_KNOWLEDGE_SEARCH_ABILITY,
                 contract_version=SITE_KNOWLEDGE_CONTRACTS[SITE_KNOWLEDGE_SEARCH_ABILITY],
                 input_payload={
-                    "contract_version": SITE_KNOWLEDGE_CONTRACTS[
-                        SITE_KNOWLEDGE_SEARCH_ABILITY
-                    ],
+                    "contract_version": SITE_KNOWLEDGE_CONTRACTS[SITE_KNOWLEDGE_SEARCH_ABILITY],
                     "query": scene_text,
                     "intent": "writing_context",
                     "max_results": min(20, policy.max_source_posts * 2),
@@ -338,9 +335,9 @@ class WordPressOperationRuntime:
                 prompt=scene_text,
                 results=results,
             )
-            reference_metadata = SiteKnowledgeRepository(
-                session
-            ).reference_metadata_for_post_ids(site_id=site_id, post_ids=post_ids)
+            reference_metadata = SiteKnowledgeRepository(session).reference_metadata_for_post_ids(
+                site_id=site_id, post_ids=post_ids
+            )
             pack = build_generation_context_pack(
                 policy=policy,
                 post_ids=post_ids,
@@ -493,15 +490,19 @@ class WordPressOperationRuntime:
             for item in metadata.get("task_constraints", [])
             if isinstance(item, str) and str(item).strip()
         }
-        if task not in {
-            "alt_text_suggest",
-            "comment_reply_suggest",
-            "content_rewrite",
-            "content_summary",
-            "excerpt_generation",
-            "meta_description",
-            "title_generation",
-        } and "single_value" not in constraints:
+        if (
+            task
+            not in {
+                "alt_text_suggest",
+                "comment_reply_suggest",
+                "content_rewrite",
+                "content_summary",
+                "excerpt_generation",
+                "meta_description",
+                "title_generation",
+            }
+            and "single_value" not in constraints
+        ):
             return False
         output_text = self._extract_provider_output_text(provider_output)
         if output_text == "":
@@ -528,8 +529,21 @@ class WordPressOperationRuntime:
         default_policy: dict[str, object],
         profile_id: str,
     ) -> dict[str, object]:
-        if default_policy.get("managed_surface") != "wordpress_ai_connector":
+        if default_policy.get("managed_surface") != "hosted_runtime_profiles":
             return merged_policy
+        if (
+            default_policy.get("platform_kind") != "wordpress"
+            or default_policy.get("connector_id") != "wordpress_ai_connector"
+            or default_policy.get("connector_contract_version") != "wp_ai_connector_runtime.v1"
+        ):
+            raise RuntimeExecutionContractError(
+                "runtime_profiles.managed_contract_invalid",
+                (
+                    "hosted runtime profile requires platform_kind=wordpress, "
+                    "connector_id=wordpress_ai_connector, and "
+                    "connector_contract_version=wp_ai_connector_runtime.v1"
+                ),
+            )
 
         policy = dict(merged_policy)
         spec = resolve_wordpress_ai_connector_profile_spec(profile_id)
@@ -540,12 +554,18 @@ class WordPressOperationRuntime:
         routing_intent = str(
             default_policy.get("routing_intent") or (spec.routing_intent if spec else "")
         )
+        platform_kind = "wordpress"
+        connector_id = "wordpress_ai_connector"
+        connector_contract_version = "wp_ai_connector_runtime.v1"
         policy["timeout_ms"] = timeout_ms
         policy["timeout_seconds"] = timeout_seconds
         policy["max_retries"] = max_retries
         policy["retry_max"] = max_retries
         policy["allow_fallback"] = bool(default_policy.get("allow_fallback", True))
-        policy["managed_surface"] = "wordpress_ai_connector"
+        policy["managed_surface"] = "hosted_runtime_profiles"
+        policy["platform_kind"] = platform_kind
+        policy["connector_id"] = connector_id
+        policy["connector_contract_version"] = connector_contract_version
         if task_group:
             policy["task_group"] = task_group
         if routing_intent:
@@ -556,7 +576,10 @@ class WordPressOperationRuntime:
             execution_contract = dict(execution_contract)
             execution_contract["timeout_seconds"] = timeout_seconds
             execution_contract["retry_max"] = max_retries
-            execution_contract["managed_surface"] = "wordpress_ai_connector"
+            execution_contract["managed_surface"] = "hosted_runtime_profiles"
+            execution_contract["platform_kind"] = platform_kind
+            execution_contract["connector_id"] = connector_id
+            execution_contract["connector_contract_version"] = connector_contract_version
             if task_group:
                 execution_contract["task_group"] = task_group
             if routing_intent:
@@ -597,9 +620,7 @@ class WordPressOperationRuntime:
     ) -> dict[str, Any]:
         prompt = cast(str, scene_request["prompt"])
         encoded_image = base64.b64encode(source_artifact.content_bytes).decode("ascii")
-        provider_image_url = (
-            f"data:{source_artifact.content_type};base64,{encoded_image}"
-        )
+        provider_image_url = f"data:{source_artifact.content_type};base64,{encoded_image}"
         context = {
             "task": "alt_text_suggest",
             **{

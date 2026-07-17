@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
@@ -43,10 +44,7 @@ from app.domain.provider_connections.service import (
     ProviderConnectionAdminError,
     ProviderConnectionAdminService,
 )
-from app.domain.provider_resources import (
-    build_admin_ability_model_runtime_projection,
-    build_admin_ai_resource_projection,
-)
+from app.domain.provider_resources import build_admin_ai_resource_projection
 from app.domain.runtime.models import (
     RUNTIME_BACKLOG_SCOPE_KIND_PATTERN,
     RUNTIME_DIAGNOSTIC_ISSUE_KIND_PATTERN,
@@ -403,23 +401,25 @@ class ModelReferenceSyncPayload(BaseModel):
     payload: dict[str, Any] | None = None
 
 
-class WordPressAIRoutingProfilePayload(BaseModel):
+class HostedRuntimeProfilePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     profile_id: str = Field(max_length=64)
     candidate_instance_ids: list[str] = Field(default_factory=list)
-    timeout_ms: int = Field(default=30000, ge=1000, le=90000)
+    timeout_ms: int = Field(default=30000, ge=1000, le=120000)
     allow_fallback: bool = True
     max_retries: int = Field(default=0, ge=0, le=1)
     note: str = Field(default="", max_length=512)
 
 
-class WordPressAIRoutingSettingsPayload(BaseModel):
-    profiles: list[WordPressAIRoutingProfilePayload] = Field(default_factory=list)
+class HostedRuntimeProfileSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-
-class AbilityModelRuntimeBindingPayload(BaseModel):
-    ability_id: str = Field(max_length=64)
-    instance_id: str = Field(max_length=191)
-    note: str = Field(default="", max_length=512)
+    contract_version: Literal["cloud-hosted-runtime-profiles.v1"]
+    platform_kind: Literal["wordpress"]
+    connector_id: Literal["wordpress_ai_connector"]
+    connector_contract_version: Literal["wp_ai_connector_runtime.v1"]
+    profiles: list[HostedRuntimeProfilePayload]
 
 
 class OpsSummaryDisclosureReviewPayload(BaseModel):
@@ -820,7 +820,7 @@ def _merge_receipt(data: Any, receipt: dict[str, Any]) -> Any:
     return {"value": data, "receipt": receipt}
 
 
-def _serialize_wordpress_ai_instance(
+def _serialize_hosted_runtime_instance(
     instance: Any,
     model: Any,
     provider: Any | None = None,
@@ -843,7 +843,19 @@ def _serialize_wordpress_ai_instance(
     }
 
 
-def _build_ability_model_plugin_routing_projection(
+def _hosted_runtime_instance_is_routing_eligible(
+    instance: Any,
+    model: Any | None,
+) -> bool:
+    return bool(
+        model is not None
+        and str(model.status or "") == "available"
+        and not bool(model.is_deprecated)
+        and str(instance.health_status or "unknown") != "unhealthy"
+    )
+
+
+def _build_hosted_runtime_profile_projection(
     database_url: str,
     *,
     settings: Any | None = None,
@@ -865,12 +877,12 @@ def _build_ability_model_plugin_routing_projection(
             "vision": [],
             "image_generation": [],
             "audio_generation": [],
-            "embedding": [],
         }
         for instance in instances:
             model = models_by_id.get(instance.model_id)
-            if model is None or model.status != "available":
+            if not _hosted_runtime_instance_is_routing_eligible(instance, model):
                 continue
+            assert model is not None
             if not provider_model_allowlist.allows(
                 provider_id=instance.provider_id,
                 model_id=instance.model_id,
@@ -879,7 +891,7 @@ def _build_ability_model_plugin_routing_projection(
             if model.feature not in available_instances_by_kind:
                 continue
             available_instances_by_kind[model.feature].append(
-                _serialize_wordpress_ai_instance(
+                _serialize_hosted_runtime_instance(
                     instance,
                     model,
                     providers_by_id.get(instance.provider_id),
@@ -896,17 +908,17 @@ def _build_ability_model_plugin_routing_projection(
             selection_policy = binding.selection_policy_json if binding is not None else {}
             if not isinstance(selection_policy, dict):
                 selection_policy = {}
+            note = str(selection_policy.get("operator_note") or policy.get("operator_note") or "")
             candidate_instance_ids = (
-                list(binding.candidate_instance_ids or []) if binding is not None else []
+                list(binding.candidate_instance_ids or [])[:2] if binding is not None else []
             )
-            candidate_items = []
             effective_candidate_instance_ids = []
             for instance_id in candidate_instance_ids:
                 if instance_id not in instances_by_id:
                     continue
                 instance = instances_by_id[instance_id]
                 model = models_by_id.get(instance.model_id)
-                if model is None:
+                if not _hosted_runtime_instance_is_routing_eligible(instance, model):
                     continue
                 if not provider_model_allowlist.allows(
                     provider_id=instance.provider_id,
@@ -914,16 +926,11 @@ def _build_ability_model_plugin_routing_projection(
                 ):
                     continue
                 effective_candidate_instance_ids.append(instance_id)
-                candidate_items.append(
-                    _serialize_wordpress_ai_instance(
-                        instance,
-                        model,
-                        providers_by_id.get(instance.provider_id),
-                    )
-                )
 
             profiles.append(
                 {
+                    "platform_kind": "wordpress",
+                    "connector_id": "wordpress_ai_connector",
                     "profile_id": spec.profile_id,
                     "group_id": spec.group_id,
                     "routing_intent": spec.routing_intent,
@@ -934,18 +941,17 @@ def _build_ability_model_plugin_routing_projection(
                         profile.execution_kind if profile is not None else spec.execution_kind
                     ),
                     "candidate_instance_ids": effective_candidate_instance_ids,
-                    "candidates": candidate_items,
                     "timeout_ms": int(policy.get("timeout_ms") or spec.timeout_ms),
                     "max_timeout_ms": spec.max_timeout_ms,
                     "allow_fallback": bool(policy.get("allow_fallback", spec.allow_fallback)),
                     "max_retries": int(policy.get("max_retries") or spec.max_retries),
+                    "note": note,
                     "revision": str(binding.revision if binding is not None else ""),
                     "updated_at": (
                         binding.updated_at.isoformat()
                         if binding is not None and binding.updated_at is not None
                         else ""
                     ),
-                    "selection_policy": selection_policy,
                     "status": (
                         "configured" if effective_candidate_instance_ids else "needs_candidates"
                     ),
@@ -953,38 +959,41 @@ def _build_ability_model_plugin_routing_projection(
             )
 
     return {
-        "contract_version": "cloud-ability-model-routing.v1",
-        "surface": "wordpress_ai_connector_routing",
-        "projection_kind": "runtime_profile_binding",
+        "contract_version": "cloud-hosted-runtime-profiles.v1",
+        "surface": "admin_hosted_runtime_profiles",
+        "projection_kind": "hosted_runtime_profile_configuration",
         "owner": "cloud_runtime",
-        "local_control_plane": "wordpress_plugin",
-        "customer_model_selection": False,
-        "direct_wordpress_write": False,
-        "prompt_or_preset_editor": False,
-        "available_text_instances": available_instances_by_kind["text"],
-        "available_vision_instances": available_instances_by_kind["vision"],
-        "available_image_instances": available_instances_by_kind["image_generation"],
-        "available_audio_instances": available_instances_by_kind["audio_generation"],
-        "available_embedding_instances": available_instances_by_kind["embedding"],
+        "platform_kind": "wordpress",
+        "connector_id": "wordpress_ai_connector",
+        "connector_contract_version": "wp_ai_connector_runtime.v1",
+        "available_instances": available_instances_by_kind,
         "profiles": profiles,
         "boundary": {
             "public_runtime_accepts_raw_model_instance": False,
             "results_write_posture": "suggestion_only",
             "admin_surface": "platform_admin_only",
-            "cloud_ability_registry": False,
-            "wordpress_ability_truth": "local_plugin",
+            "cloud_owns": ["hosted_candidate_chain"],
+            "local_plugin_owns": [
+                "ability_truth",
+                "workflow_truth",
+                "prompt_truth",
+                "router_truth",
+                "adoption_truth",
+                "final_write_truth",
+            ],
+            "direct_wordpress_write": False,
         },
     }
 
 
-def _validate_ability_model_plugin_routing_payload(
+def _validate_hosted_runtime_profile_payload(
     database_url: str,
-    payload: WordPressAIRoutingSettingsPayload,
+    payload: HostedRuntimeProfileSettingsPayload,
     *,
     settings: Any | None = None,
-) -> tuple[list[WordPressAIRoutingProfilePayload], str]:
+) -> tuple[list[HostedRuntimeProfilePayload], str]:
     if not payload.profiles:
-        return [], "at least one plugin ability-model routing profile is required"
+        return [], "at least one hosted runtime profile is required"
 
     known_profile_ids = set(WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID)
     seen_profile_ids: set[str] = set()
@@ -994,19 +1003,19 @@ def _validate_ability_model_plugin_routing_payload(
         for profile_payload in payload.profiles:
             profile_id = profile_payload.profile_id.strip()
             if profile_id not in known_profile_ids:
-                return [], f"unsupported plugin ability-model routing profile: {profile_id}"
+                return [], f"unsupported hosted runtime profile: {profile_id}"
             if profile_id in seen_profile_ids:
-                return [], f"duplicate plugin ability-model routing profile: {profile_id}"
+                return [], f"duplicate hosted runtime profile: {profile_id}"
             seen_profile_ids.add(profile_id)
             candidate_instance_ids = [
                 str(instance_id or "").strip()
                 for instance_id in profile_payload.candidate_instance_ids
                 if str(instance_id or "").strip()
             ]
-            if not candidate_instance_ids:
-                return [], f"profile {profile_id} requires at least one candidate instance"
             if len(candidate_instance_ids) != len(set(candidate_instance_ids)):
                 return [], f"profile {profile_id} includes duplicate candidate instances"
+            if len(candidate_instance_ids) > 2:
+                return [], f"profile {profile_id} supports at most two candidate instances"
             if (
                 profile_payload.timeout_ms
                 > WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id].max_timeout_ms
@@ -1033,9 +1042,13 @@ def _validate_ability_model_plugin_routing_payload(
                 if model is None:
                     return [], f"profile {profile_id} references an instance without a model"
                 spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id]
-                if model.feature != spec.execution_kind or model.status != "available":
+                if model.feature != spec.execution_kind:
                     return [], (
-                        f"profile {profile_id} may only use available "
+                        f"profile {profile_id} may only use {spec.execution_kind} instances"
+                    )
+                if not _hosted_runtime_instance_is_routing_eligible(instance, model):
+                    return [], (
+                        f"profile {profile_id} may only use routing-eligible "
                         f"{spec.execution_kind} instances"
                     )
                 if not provider_model_allowlist.allows(
@@ -1046,6 +1059,13 @@ def _validate_ability_model_plugin_routing_payload(
                         f"profile {profile_id} may only use models enabled "
                         f"for provider {instance.provider_id}: {instance.model_id}"
                     )
+
+    missing_profile_ids = sorted(known_profile_ids - seen_profile_ids)
+    if missing_profile_ids:
+        return [], (
+            "hosted runtime profiles must replace the complete catalog; missing: "
+            + ", ".join(missing_profile_ids)
+        )
 
     return payload.profiles, ""
 
@@ -4524,64 +4544,16 @@ async def get_admin_ai_resources(request: Request) -> Any:
     )
 
 
-@router.get("/admin/ability-models/runtime-projection")
-async def get_admin_ability_model_runtime_projection(request: Request) -> Any:
+@router.get("/admin/runtime-profiles")
+async def get_admin_hosted_runtime_profiles(request: Request) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
     if auth is not None:
         return auth
     services = get_cloud_services(request)
     return build_envelope(
         status="ok",
-        message="Ability model runtime projection loaded",
-        data=build_admin_ability_model_runtime_projection(
-            services.settings,
-            providers=resolve_live_provider_adapters(
-                services.settings,
-                base_providers=services.providers,
-                include_enabled_connections=True,
-            ),
-            database_url=services.settings.database_url,
-        ),
-        revision="m6",
-    )
-
-
-@router.post("/admin/ability-models/runtime-binding")
-async def update_admin_ability_model_runtime_binding(
-    request: Request,
-    payload: AbilityModelRuntimeBindingPayload,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    return JSONResponse(
-        status_code=409,
-        content=build_envelope(
-            status="error",
-            error_code="ability_model_runtime_binding.profile_managed",
-            message=(
-                "Site Knowledge embedding is managed by the fixed vector profile; "
-                "configure it in Vector Settings."
-            ),
-            data={
-                "ability_id": payload.ability_id.strip(),
-                "settings_href": "/admin/vector-settings",
-            },
-            revision="m6",
-        ),
-    )
-
-
-@router.get("/admin/ability-models/plugin-routing")
-async def get_admin_ability_model_plugin_routing(request: Request) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    return build_envelope(
-        status="ok",
-        message="Plugin ability-model routing loaded",
-        data=_build_ability_model_plugin_routing_projection(
+        message="Hosted runtime profiles loaded",
+        data=_build_hosted_runtime_profile_projection(
             services.settings.database_url,
             settings=services.settings,
         ),
@@ -4589,16 +4561,16 @@ async def get_admin_ability_model_plugin_routing(request: Request) -> Any:
     )
 
 
-@router.post("/admin/ability-models/plugin-routing")
-async def update_admin_ability_model_plugin_routing(
+@router.put("/admin/runtime-profiles")
+async def update_admin_hosted_runtime_profiles(
     request: Request,
-    payload: WordPressAIRoutingSettingsPayload,
+    payload: HostedRuntimeProfileSettingsPayload,
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
         return auth
     services = get_cloud_services(request)
-    profiles, error_message = _validate_ability_model_plugin_routing_payload(
+    profiles, error_message = _validate_hosted_runtime_profile_payload(
         services.settings.database_url,
         payload,
         settings=services.settings,
@@ -4608,13 +4580,13 @@ async def update_admin_ability_model_plugin_routing(
             status_code=400,
             content=build_envelope(
                 status="error",
-                error_code="ability_model_plugin_routing.invalid_profile",
+                error_code="runtime_profiles.invalid_profile",
                 message=error_message,
                 revision="m6",
             ),
         )
 
-    revision = f"ability-model-routing-admin-{int(datetime.now(UTC).timestamp())}"
+    revision = f"runtime-profiles-admin-{uuid4().hex}"
     with get_session(services.settings.database_url) as session:
         repository = CatalogRepository(session)
         for profile_payload in profiles:
@@ -4632,7 +4604,10 @@ async def update_admin_ability_model_plugin_routing(
                     "allow_fallback": profile_payload.allow_fallback,
                     "max_retries": profile_payload.max_retries,
                     "timeout_ms": profile_payload.timeout_ms,
-                    "managed_surface": "wordpress_ai_connector",
+                    "managed_surface": "hosted_runtime_profiles",
+                    "platform_kind": payload.platform_kind,
+                    "connector_id": payload.connector_id,
+                    "connector_contract_version": payload.connector_contract_version,
                     "task_group": spec.group_id,
                     "routing_intent": spec.routing_intent,
                     "tasks": list(spec.tasks),
@@ -4644,7 +4619,10 @@ async def update_admin_ability_model_plugin_routing(
                 candidate_instance_ids=candidate_instance_ids,
                 selection_policy_json={
                     "strategy": "ordered",
-                    "managed_surface": "wordpress_ai_connector",
+                    "managed_surface": "hosted_runtime_profiles",
+                    "platform_kind": payload.platform_kind,
+                    "connector_id": payload.connector_id,
+                    "connector_contract_version": payload.connector_contract_version,
                     "task_group": spec.group_id,
                     "routing_intent": spec.routing_intent,
                     "operator_note": profile_payload.note.strip(),
@@ -4657,11 +4635,15 @@ async def update_admin_ability_model_plugin_routing(
     try:
         audit_event = _get_commercial_service(request).record_service_audit_event(
             audit_context=_build_audit_context(request),
-            event_kind="ability_model_plugin_routing.update",
+            event_kind="runtime_profiles.update",
             outcome="succeeded",
-            scope_kind="runtime_profile",
+            scope_kind="runtime_profile_catalog",
             scope_id="wordpress_ai_connector",
             payload_json={
+                "contract_version": payload.contract_version,
+                "platform_kind": payload.platform_kind,
+                "connector_id": payload.connector_id,
+                "connector_contract_version": payload.connector_contract_version,
                 "profile_ids": [profile.profile_id for profile in profiles],
                 "revision": revision,
             },
@@ -4669,21 +4651,21 @@ async def update_admin_ability_model_plugin_routing(
     except Exception:
         audit_event = None
 
-    result = _build_ability_model_plugin_routing_projection(
+    result = _build_hosted_runtime_profile_projection(
         services.settings.database_url,
         settings=services.settings,
     )
     return build_envelope(
         status="ok",
-        message="Plugin ability-model routing saved",
+        message="Hosted runtime profiles saved",
         data=_merge_receipt(
             result,
             _build_operator_receipt(
-                event_kind="ability_model_plugin_routing.update",
-                scope_kind="runtime_profile",
+                event_kind="runtime_profiles.update",
+                scope_kind="runtime_profile_catalog",
                 scope_id="wordpress_ai_connector",
                 outcome="succeeded",
-                effective_summary="Plugin ability-model routing was updated.",
+                effective_summary="Hosted runtime profiles were updated.",
                 audit_event=audit_event,
             ),
         ),

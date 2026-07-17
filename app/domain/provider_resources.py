@@ -22,53 +22,6 @@ from app.domain.hosted_model_defaults import (
 )
 from app.domain.provider_connections.service import ProviderConnectionAdminService
 
-ABILITY_MODEL_RUNTIME_PROJECTION_VERSION = "admin-ability-model-runtime-projection.v1"
-
-_ABILITY_MODEL_MEDIA_BY_FEATURE_ID = {
-    "content_support": "text",
-    "site_knowledge_embedding": "vector",
-    "evidence_preflight": "text",
-    "generated_image_candidates": "image",
-    "image_source_candidates": "image",
-}
-
-_PLUGIN_ABILITY_ROUTE_FEATURE_IDS = frozenset(
-    {
-        "content_support",
-        "generated_image_candidates",
-        "audio_summary_script",
-        "article_narration",
-        "article_audio_summary",
-    }
-)
-
-_ABILITY_MODEL_DESCRIPTION_BY_FEATURE_ID = {
-    "content_support": (
-        "Cloud runtime support for writing assistance and evidence-backed editor help."
-    ),
-    "site_knowledge_embedding": (
-        "Embedding runtime used by Site Knowledge detail and retrieval support."
-    ),
-    "evidence_preflight": (
-        "External evidence preflight before handing control back to the local WordPress path."
-    ),
-    "generated_image_candidates": (
-        "Reviewable generated image candidates while WordPress keeps final media use."
-    ),
-    "image_source_candidates": (
-        "External image source candidates returned for operator review."
-    ),
-}
-
-_ABILITY_MODEL_KIND_BY_CAPABILITY_ID = {
-    "text_generation": "text_model",
-    "audio_generation": "audio_model",
-    "image_generation": "image_model",
-    "embedding": "embedding_model",
-    "web_search": "search_text_model",
-    "image_source": "image_source_provider",
-}
-
 
 def build_admin_ai_resource_projection(
     settings: Settings,
@@ -169,9 +122,7 @@ def build_admin_ai_resource_projection(
         {
             "capability_id": "web_search",
             "label": "Web search",
-            "status": "ready"
-            if managed_ready_by_capability.get("web_search")
-            else "disabled",
+            "status": "ready" if managed_ready_by_capability.get("web_search") else "disabled",
             "default_profile_id": "web-search.managed",
             "connection_ids": managed_connection_ids_by_capability.get("web_search", []),
             "used_by": ["Evidence preflight"],
@@ -180,9 +131,7 @@ def build_admin_ai_resource_projection(
         {
             "capability_id": "image_source",
             "label": "Image source",
-            "status": "ready"
-            if managed_ready_by_capability.get("image_source")
-            else "disabled",
+            "status": "ready" if managed_ready_by_capability.get("image_source") else "disabled",
             "default_profile_id": "image-source.managed",
             "connection_ids": managed_connection_ids_by_capability.get("image_source", []),
             "used_by": ["Image source candidates"],
@@ -223,9 +172,7 @@ def build_admin_ai_resource_projection(
         f"{text_connection_id or default_summary_script_profile_id} + "
         f"{audio_connection_id or default_summary_playback_profile_id}"
     )
-    audio_summary_provider_label = (
-        f"{text_provider_id or 'text'} + {audio_provider_id or 'audio'}"
-    )
+    audio_summary_provider_label = f"{text_provider_id or 'text'} + {audio_provider_id or 'audio'}"
     runtime_profiles = [
         {
             "profile_id": TEXT_AI_PROFILE_ID,
@@ -301,9 +248,7 @@ def build_admin_ai_resource_projection(
             "capability_id": "audio_generation",
             "selected_connection_id": audio_summary_connection_label,
             "selected_provider_id": audio_summary_provider_label,
-            "selected_model_id": (
-                f"{FREE_GPT55_MODEL_ID} + {AUDIO_NARRATION_MODEL_ID}"
-            ),
+            "selected_model_id": (f"{FREE_GPT55_MODEL_ID} + {AUDIO_NARRATION_MODEL_ID}"),
             "status": "ready"
             if text_configured and audio_status == "ready"
             else "missing_provider",
@@ -396,142 +341,10 @@ def build_admin_ai_resource_projection(
     }
 
 
-def build_admin_ability_model_runtime_projection(
-    settings: Settings,
-    *,
-    providers: dict[str, ProviderAdapter] | None = None,
-    database_url: str | None = None,
-) -> dict[str, Any]:
-    resources = build_admin_ai_resource_projection(
-        settings,
-        providers=providers,
-        database_url=database_url,
-    )
-    feature_model_usage = [
-        item
-        for item in resources.get("feature_model_usage", [])
-        if isinstance(item, dict)
-        and str(item.get("feature_id") or "") not in _PLUGIN_ABILITY_ROUTE_FEATURE_IDS
-    ]
-    rows = [
-        _build_ability_model_runtime_row(item, index=index)
-        for index, item in enumerate(feature_model_usage)
-    ]
-    media_groups: list[dict[str, Any]] = []
-    for media in ("text", "image", "vector", "audio", "video"):
-        media_rows = [row for row in rows if row["media"] == media]
-        media_groups.append(
-            {
-                "media": media,
-                "count": len(media_rows),
-                "connected_count": len(
-                    [row for row in media_rows if row["status"] == "connected"]
-                ),
-            }
-        )
-    return {
-        "surface": "admin_ability_model_runtime_projection",
-        "projection_version": ABILITY_MODEL_RUNTIME_PROJECTION_VERSION,
-        "owner": "cloud_runtime",
-        "source_surface": str(resources.get("surface") or "admin_ai_resources"),
-        "rows": rows,
-        "media_groups": media_groups,
-        "boundary": {
-            "read_only": True,
-            "runtime_binding_only": False,
-            "configurable_runtime_bindings": [],
-            "direct_wordpress_write": False,
-            "not_a_control_plane": True,
-            "does_not_own": [
-                "wordpress_writes",
-                "approval_truth",
-                "ability_registry",
-                "workflow_registry",
-                "prompt_router_preset_truth",
-                "plugin_specific_overrides",
-            ],
-        },
-    }
-
-
-def _build_ability_model_runtime_row(
-    feature_usage: dict[str, Any],
-    *,
-    index: int,
-) -> dict[str, Any]:
-    feature_id = str(feature_usage.get("feature_id") or "")
-    capability_id = str(feature_usage.get("capability_id") or "")
-    profile_id = str(feature_usage.get("profile_id") or "")
-    raw_status = str(feature_usage.get("status") or "")
-    can_configure = False
-    return {
-        "ability_id": feature_id,
-        "feature_id": feature_id,
-        "label": str(feature_usage.get("label") or feature_id),
-        "description": _ABILITY_MODEL_DESCRIPTION_BY_FEATURE_ID.get(feature_id, ""),
-        "media": _ABILITY_MODEL_MEDIA_BY_FEATURE_ID.get(
-            feature_id,
-            _media_from_capability_id(capability_id),
-        ),
-        "status": _ability_model_runtime_status(raw_status),
-        "raw_status": raw_status,
-        "capability_id": capability_id,
-        "model_kind": _ABILITY_MODEL_KIND_BY_CAPABILITY_ID.get(
-            capability_id,
-            "runtime_model",
-        ),
-        "profile_id": profile_id,
-        "provider_id": str(feature_usage.get("provider_id") or ""),
-        "model_id": str(feature_usage.get("model_id") or ""),
-        "surface": str(feature_usage.get("surface") or ""),
-        "connection_ids": _string_list(feature_usage.get("connection_ids")),
-        "selection_owner": str(
-            feature_usage.get("selection_owner") or "cloud_runtime_metadata"
-        ),
-        "write_posture": str(feature_usage.get("write_posture") or ""),
-        "can_configure": can_configure,
-        "action": "configure_runtime_model" if can_configure else "runtime_managed",
-        "display_order": index,
-        "evidence": {
-            "content_exposed": False,
-            "source": "feature_model_usage",
-        },
-        "boundary": {
-            "read_only": not can_configure,
-            "runtime_binding_only": can_configure,
-            "direct_wordpress_write": False,
-            "not_a_control_plane": True,
-        },
-    }
-
-
-def _media_from_capability_id(capability_id: str) -> str:
-    if capability_id == "audio_generation":
-        return "audio"
-    if capability_id in {"image_generation", "image_source"}:
-        return "image"
-    return "text"
-
-
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if str(item)]
-
-
-def _ability_model_runtime_status(raw_status: str) -> str:
-    normalized = raw_status.strip().lower()
-    if normalized in {"ready", "configured", "healthy", "available"}:
-        return "connected"
-    if normalized in {
-        "missing_provider",
-        "missing_secret",
-        "disabled",
-        "needs_candidates",
-        "not_configured",
-    }:
-        return "missing_provider"
-    return "unknown" if normalized else "unknown"
 
 
 def _audio_selected_for(
@@ -690,8 +503,7 @@ def _build_feature_model_usage(
         provider_call = provider_call_evidence.get(str(last_run.get("run_id") or ""), {})
         selected_connection_ids = _feature_connection_ids(capability, profile)
         selected_connections = [
-            _dict(connections_by_id.get(connection_id))
-            for connection_id in selected_connection_ids
+            _dict(connections_by_id.get(connection_id)) for connection_id in selected_connection_ids
         ]
         rows.append(
             {
@@ -722,9 +534,7 @@ def _build_feature_model_usage(
                     }
                 ),
                 "write_posture": str(capability.get("write_posture") or ""),
-                "selection_owner": str(
-                    profile.get("selection_owner") or "cloud_runtime_metadata"
-                ),
+                "selection_owner": str(profile.get("selection_owner") or "cloud_runtime_metadata"),
                 "last_run": last_run,
                 "last_provider_call": provider_call,
                 "evidence": {
@@ -838,9 +648,7 @@ def _build_provider_model_health(
         for spec in window_specs
     ]
     default_window = windows[0] if windows else {}
-    default_rows = [
-        item for item in default_window.get("rows", []) if isinstance(item, dict)
-    ]
+    default_rows = [item for item in default_window.get("rows", []) if isinstance(item, dict)]
     return {
         "source": "provider_call_records",
         "content_exposed": False,
@@ -937,9 +745,7 @@ def _provider_model_health_row(
     success_count = sum(1 for record in records if not record.error_code)
     error_count = call_count - success_count
     latencies = sorted(
-        int(record.latency_ms)
-        for record in records
-        if isinstance(record.latency_ms, int)
+        int(record.latency_ms) for record in records if isinstance(record.latency_ms, int)
     )
     success_rate = (success_count / call_count) if call_count else 0.0
     avg_latency_ms = round(sum(latencies) / len(latencies), 2) if latencies else None

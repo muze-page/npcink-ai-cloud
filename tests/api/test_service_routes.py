@@ -55,7 +55,6 @@ from app.core.models import (
 from app.core.secrets import (
     decrypt_provider_connection_secret,
     decrypt_service_setting_secret,
-    encrypt_provider_connection_secret,
     encrypt_service_setting_secret,
 )
 from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
@@ -107,10 +106,14 @@ def _alipay_test_keys() -> tuple[str, str]:
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode("utf-8")
-    public_pem = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode("utf-8")
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode("utf-8")
+    )
     return private_pem, public_pem
 
 
@@ -490,9 +493,7 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     assert revoked_session_response.status_code == 401
     assert revoked_session_response.json()["error_code"] == "auth.portal_session_revoked"
 
-    revoked_site_response = client.get(
-        f"/portal/v1/sites/{site_id}/summary"
-    )
+    revoked_site_response = client.get(f"/portal/v1/sites/{site_id}/summary")
     assert revoked_site_response.status_code == 401
     assert revoked_site_response.json()["error_code"] == "auth.portal_session_revoked"
 
@@ -522,16 +523,12 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     assert disabled_item["membership_status"] == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
 
     with get_session(database_url) as session:
-        identity = session.scalar(
-            select(Principal).where(Principal.principal_id == principal_id)
-        )
+        identity = session.scalar(select(Principal).where(Principal.principal_id == principal_id))
         assert identity is not None
         assert identity.status == PRINCIPAL_STATUS_DISABLED
         assert int(identity.session_version or 0) > 1
         membership = session.scalar(
-            select(AccountUserMembership).where(
-                AccountUserMembership.principal_id == principal_id
-            )
+            select(AccountUserMembership).where(AccountUserMembership.principal_id == principal_id)
         )
         assert membership is not None
         assert membership.status == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
@@ -604,9 +601,7 @@ def test_admin_portal_users_batch_disable_processes_each_principal(
 
     with get_session(database_url) as session:
         identities = list(
-            session.scalars(
-                select(Principal).where(Principal.principal_id.in_(principal_ids))
-            )
+            session.scalars(select(Principal).where(Principal.principal_id.in_(principal_ids)))
         )
         assert {identity.status for identity in identities} == {PRINCIPAL_STATUS_DISABLED}
         memberships = list(
@@ -690,13 +685,9 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
     )
     assert initial_response.status_code == 200
     assert initial_response.json()["data"]["env_fallback"] == "disabled"
+    assert initial_response.json()["data"]["settings"]["portal_email"]["status"] == "missing_config"
     assert (
-        initial_response.json()["data"]["settings"]["portal_email"]["status"]
-        == "missing_config"
-    )
-    assert (
-        initial_response.json()["data"]["settings"]["alipay_payment"]["status"]
-        == "missing_config"
+        initial_response.json()["data"]["settings"]["alipay_payment"]["status"] == "missing_config"
     )
 
     public_response = client.patch(
@@ -742,9 +733,7 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
         headers=build_internal_headers(idempotency_key="service-settings-email-001"),
     )
     assert email_response.status_code == 200, email_response.text
-    assert email_response.json()["data"]["secrets"]["smtp_password"]["display"] == (
-        "configured"
-    )
+    assert email_response.json()["data"]["secrets"]["smtp_password"]["display"] == ("configured")
     assert "smtp-password" not in json.dumps(email_response.json())
 
     alipay_response = client.patch(
@@ -767,14 +756,8 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
     assert alipay_response.json()["data"]["config"]["gateway_url"] == (
         "https://openapi.alipay.com/gateway.do"
     )
-    assert (
-        alipay_response.json()["data"]["secrets"]["private_key"]["display"]
-        == "configured"
-    )
-    assert (
-        alipay_response.json()["data"]["secrets"]["public_key"]["display"]
-        == "configured"
-    )
+    assert alipay_response.json()["data"]["secrets"]["private_key"]["display"] == "configured"
+    assert alipay_response.json()["data"]["secrets"]["public_key"]["display"] == "configured"
     assert alipay_private_key not in json.dumps(alipay_response.json())
     assert alipay_public_key not in json.dumps(alipay_response.json())
 
@@ -792,22 +775,34 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
         assert qq_row is not None
         assert email_row is not None
         assert alipay_row is not None
-        assert decrypt_service_setting_secret(
-            str((qq_row.secret_ciphertext_json or {})["client_secret"]),
-            settings=_runtime_service_settings(database_url),
-        ) == "qq-client-secret"
-        assert decrypt_service_setting_secret(
-            str((email_row.secret_ciphertext_json or {})["smtp_password"]),
-            settings=_runtime_service_settings(database_url),
-        ) == "smtp-password"
-        assert decrypt_service_setting_secret(
-            str((alipay_row.secret_ciphertext_json or {})["private_key"]),
-            settings=_runtime_service_settings(database_url),
-        ) == alipay_private_key.strip()
-        assert decrypt_service_setting_secret(
-            str((alipay_row.secret_ciphertext_json or {})["public_key"]),
-            settings=_runtime_service_settings(database_url),
-        ) == alipay_public_key.strip()
+        assert (
+            decrypt_service_setting_secret(
+                str((qq_row.secret_ciphertext_json or {})["client_secret"]),
+                settings=_runtime_service_settings(database_url),
+            )
+            == "qq-client-secret"
+        )
+        assert (
+            decrypt_service_setting_secret(
+                str((email_row.secret_ciphertext_json or {})["smtp_password"]),
+                settings=_runtime_service_settings(database_url),
+            )
+            == "smtp-password"
+        )
+        assert (
+            decrypt_service_setting_secret(
+                str((alipay_row.secret_ciphertext_json or {})["private_key"]),
+                settings=_runtime_service_settings(database_url),
+            )
+            == alipay_private_key.strip()
+        )
+        assert (
+            decrypt_service_setting_secret(
+                str((alipay_row.secret_ciphertext_json or {})["public_key"]),
+                settings=_runtime_service_settings(database_url),
+            )
+            == alipay_public_key.strip()
+        )
 
     list_response = client.get(
         "/internal/service/admin/service-settings",
@@ -881,10 +876,13 @@ def test_admin_service_settings_email_replaces_unreadable_existing_password(
     with get_session(database_url) as session:
         row = session.get(ServiceSetting, "portal_email")
         assert row is not None
-        assert decrypt_service_setting_secret(
-            str((row.secret_ciphertext_json or {})["smtp_password"]),
-            settings=_runtime_service_settings(database_url),
-        ) == "new-password"
+        assert (
+            decrypt_service_setting_secret(
+                str((row.secret_ciphertext_json or {})["smtp_password"]),
+                settings=_runtime_service_settings(database_url),
+            )
+            == "new-password"
+        )
 
     dispose_engine(database_url)
 
@@ -1293,132 +1291,46 @@ def test_admin_ai_resources_projects_connections_capabilities_and_profiles(
     assert "group-test-secret" not in serialized
 
 
-def test_admin_ability_model_runtime_projection_is_bounded_and_feature_backed(
+def test_admin_runtime_profiles_requires_auth_and_idempotency_and_retires_old_routes(
     tmp_path: Path,
 ) -> None:
-    _, client = _build_client(
-        tmp_path,
-        settings_overrides={
-            "openai_api_key": "openai-test-secret",
-            "openai_provider_label": "GPT 5.5 hosted",
-            "minimax_provider_enabled": True,
-            "minimax_api_key": "minimax-test-secret",
-            "minimax_group_id": "group-test-secret",
-        },
-    )
-
-    response = client.get(
+    _, client = _build_client(tmp_path)
+    new_path = "/internal/service/admin/runtime-profiles"
+    old_paths = (
         "/internal/service/admin/ability-models/runtime-projection",
-        headers=build_internal_headers(),
+        "/internal/service/admin/ability-models/runtime-binding",
+        "/internal/service/admin/ability-models/plugin-routing",
     )
 
-    assert response.status_code == 200, response.text
-    data = response.json()["data"]
-    assert data["surface"] == "admin_ability_model_runtime_projection"
-    assert data["projection_version"] == "admin-ability-model-runtime-projection.v1"
-    assert data["source_surface"] == "admin_ai_resources"
-    assert data["boundary"]["read_only"] is True
-    assert data["boundary"]["runtime_binding_only"] is False
-    assert data["boundary"]["configurable_runtime_bindings"] == []
-    assert data["boundary"]["direct_wordpress_write"] is False
-    assert data["boundary"]["not_a_control_plane"] is True
-    assert "plugin_specific_overrides" in data["boundary"]["does_not_own"]
-
-    rows = {item["ability_id"]: item for item in data["rows"]}
-    assert {
-        "site_knowledge_embedding",
-        "evidence_preflight",
-        "image_source_candidates",
-    }.issubset(rows)
-    assert {
-        "content_support",
-        "generated_image_candidates",
-        "audio_summary_script",
-        "article_narration",
-        "article_audio_summary",
-    }.isdisjoint(rows)
-    assert rows["site_knowledge_embedding"]["media"] == "vector"
-    assert rows["site_knowledge_embedding"]["model_kind"] == "embedding_model"
-    assert rows["site_knowledge_embedding"]["can_configure"] is False
-    assert rows["site_knowledge_embedding"]["action"] == "runtime_managed"
-    assert rows["site_knowledge_embedding"]["boundary"]["runtime_binding_only"] is False
-    assert rows["evidence_preflight"]["model_kind"] == "search_text_model"
-
-    media_groups = {item["media"]: item for item in data["media_groups"]}
-    assert {"text", "image", "vector", "audio", "video"}.issubset(media_groups)
-    assert media_groups["text"]["count"] >= 1
-    assert media_groups["image"]["count"] >= 1
-    assert media_groups["vector"]["count"] >= 1
-    assert media_groups["audio"]["count"] == 0
-    assert media_groups["video"]["count"] == 0
-
-    serialized = json.dumps(data)
-    assert "openai-test-secret" not in serialized
-    assert "minimax-test-secret" not in serialized
-    assert "group-test-secret" not in serialized
-
-    unauthorized = client.get("/internal/service/admin/ability-models/runtime-projection")
+    unauthorized = client.get(new_path)
     assert unauthorized.status_code == 401
 
-
-def test_admin_ability_model_runtime_binding_is_profile_managed(
-    tmp_path: Path,
-) -> None:
-    database_url, client = _build_client(tmp_path)
-    services = client.app.state.services
-    with get_session(database_url) as session:
-        session.add(
-            ProviderConnection(
-                connection_id="model_siliconflow",
-                provider_type="siliconflow",
-                display_name="SiliconFlow",
-                enabled=True,
-                base_url="https://api.siliconflow.cn/v1",
-                config_json={
-                    "provider_id": "siliconflow",
-                    "kind": "siliconflow",
-                    "capability_ids": ["text_generation", "embedding"],
-                    "runtime_profile_ids": ["text.ai", "embed.default"],
-                    "model_id": "siliconflow/Qwen/Qwen3-8B",
-                },
-                secret_ciphertext=encrypt_provider_connection_secret(
-                    "configured-in-test",
-                    settings=services.settings,
-                ),
-                status="configured",
-                source_role="execution_source",
-                metadata_json={},
-            )
-        )
-        session.commit()
-
-    response = client.post(
-        "/internal/service/admin/ability-models/runtime-binding",
-        headers=build_internal_headers(idempotency_key="ability-binding-save"),
+    missing_idempotency = client.put(
+        new_path,
+        headers=merge_json_headers(build_internal_headers()),
         json={
-            "ability_id": "site_knowledge_embedding",
-            "instance_id": "siliconflow-bge-m3-embed",
+            "contract_version": "cloud-hosted-runtime-profiles.v1",
+            "platform_kind": "wordpress",
+            "connector_id": "wordpress_ai_connector",
+            "connector_contract_version": "wp_ai_connector_runtime.v1",
+            "profiles": [],
         },
     )
+    assert missing_idempotency.status_code == 401
+    assert missing_idempotency.json()["error_code"] == "auth.idempotency_required"
 
-    assert response.status_code == 409, response.text
-    data = response.json()["data"]
-    assert response.json()["error_code"] == "ability_model_runtime_binding.profile_managed"
-    assert data["ability_id"] == "site_knowledge_embedding"
-    assert data["settings_href"] == "/admin/vector-settings"
-
-    with get_session(database_url) as session:
-        connection = session.get(ProviderConnection, "model_siliconflow")
-        assert connection is not None
-        config = connection.config_json or {}
-        assert config["provider_id"] == "siliconflow"
-        assert config["model_id"] == "siliconflow/Qwen/Qwen3-8B"
-        assert "embedding" in config["capability_ids"]
-        assert "embed.default" in config["runtime_profile_ids"]
-        assert "dimensions" not in config
-
-    serialized = json.dumps(data)
-    assert "configured-in-test" not in serialized
+    for old_path in old_paths:
+        assert client.get(old_path, headers=build_internal_headers()).status_code == 404
+        assert (
+            client.post(
+                old_path,
+                headers=merge_json_headers(
+                    build_internal_headers(idempotency_key=f"retired-{old_path.rsplit('/', 1)[-1]}")
+                ),
+                json={},
+            ).status_code
+            == 404
+        )
 
 
 def test_admin_site_knowledge_vector_profile_verifies_before_saving(
@@ -1473,9 +1385,7 @@ def test_admin_site_knowledge_vector_profile_verifies_before_saving(
     assert data["model_id"] == SITE_KNOWLEDGE_VECTOR_MODEL_ID
     assert data["dimensions"] == SITE_KNOWLEDGE_VECTOR_DIMENSIONS
     assert data["provider"]["verified"] is True
-    assert data["receipt"]["event_kind"] == (
-        "site_knowledge_vector_profile.save_and_verify"
-    )
+    assert data["receipt"]["event_kind"] == ("site_knowledge_vector_profile.save_and_verify")
     assert "siliconflow-secret" not in json.dumps(data)
 
     with get_session(database_url) as session:
@@ -1485,8 +1395,7 @@ def test_admin_site_knowledge_vector_profile_verifies_before_saving(
         assert connection.secret_ciphertext != "siliconflow-secret"
         audit = session.scalar(
             select(ServiceAuditEvent).where(
-                ServiceAuditEvent.event_kind
-                == "site_knowledge_vector_profile.save_and_verify"
+                ServiceAuditEvent.event_kind == "site_knowledge_vector_profile.save_and_verify"
             )
         )
         assert audit is not None
@@ -1530,9 +1439,7 @@ def test_admin_site_knowledge_vector_store_verifies_before_saving(
     data = response.json()["data"]
     assert data["vector_store"]["verified"] is True
     assert data["vector_store"]["collection"] == SITE_KNOWLEDGE_VECTOR_STORE_COLLECTION
-    assert data["vector_store"]["endpoint"] == (
-        "https://cluster.example.zillizcloud.com"
-    )
+    assert data["vector_store"]["endpoint"] == ("https://cluster.example.zillizcloud.com")
     assert data["receipt"]["event_kind"] == (
         "site_knowledge_vector_profile.vector_store.save_and_verify"
     )
@@ -1598,14 +1505,11 @@ def test_admin_site_knowledge_vector_rebuild_uses_fixed_server_contract(
     assert response.status_code == 200, response.text
     data = response.json()["data"]
     assert data["validation"]["index"]["status"] == "ready"
-    assert data["receipt"]["event_kind"] == (
-        "site_knowledge_vector_profile.index.rebuild"
-    )
+    assert data["receipt"]["event_kind"] == ("site_knowledge_vector_profile.index.rebuild")
     with get_session(database_url) as session:
         audit = session.scalar(
             select(ServiceAuditEvent).where(
-                ServiceAuditEvent.event_kind
-                == "site_knowledge_vector_profile.index.rebuild"
+                ServiceAuditEvent.event_kind == "site_knowledge_vector_profile.index.rebuild"
             )
         )
         assert audit is not None
@@ -1867,7 +1771,7 @@ def test_admin_provider_connection_test_syncs_catalog_for_openai_compatible_supp
     assert "deepseek-secret-value" not in json.dumps(test_response.json())
 
     routing_response = client.get(
-        "/internal/service/admin/ability-models/plugin-routing",
+        "/internal/service/admin/runtime-profiles",
         headers=build_internal_headers(),
     )
 
@@ -1875,7 +1779,7 @@ def test_admin_provider_connection_test_syncs_catalog_for_openai_compatible_supp
     routing_data = routing_response.json()["data"]
     deepseek_instances = [
         item
-        for item in routing_data["available_text_instances"]
+        for item in routing_data["available_instances"]["text"]
         if item["provider_id"] == "deepseek"
     ]
     assert deepseek_instances
@@ -2049,9 +1953,7 @@ def test_admin_provider_connection_catalog_preview_reports_unreadable_saved_secr
 
     response = client.post(
         "/internal/service/admin/provider-connections/preview-catalog",
-        headers=build_internal_headers(
-            idempotency_key="provider-connection-preview-unreadable"
-        ),
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-unreadable"),
         json={
             "connection_id": "minimax_unreadable",
             "provider_id": "minimax",
@@ -2302,8 +2204,7 @@ def test_admin_ai_resources_lists_only_added_capability_provider_connections(
     )
     assert initial_response.status_code == 200, initial_response.text
     initial_connections = {
-        item["connection_id"]: item
-        for item in initial_response.json()["data"]["connections"]
+        item["connection_id"]: item for item in initial_response.json()["data"]["connections"]
     }
     assert "search_apify" not in initial_connections
     assert "web_search_tavily" not in initial_connections
@@ -2334,9 +2235,7 @@ def test_admin_ai_resources_lists_only_added_capability_provider_connections(
     projection = projection_response.json()["data"]
     connections = {item["connection_id"]: item for item in projection["connections"]}
     web_search_connections = [
-        item
-        for item in projection["connections"]
-        if item.get("kind") == "web_search_provider"
+        item for item in projection["connections"] if item.get("kind") == "web_search_provider"
     ]
 
     assert list(connections.keys()).count("search_apify") == 1
@@ -2888,17 +2787,17 @@ def test_admin_ai_resources_exposes_recent_runtime_evidence_without_content(
     assert windows["last_24h"]["rows"][0]["status"] == "healthy"
     assert windows["last_24h"]["alert_summary"]["alert_count"] == 0
     seven_day_rows = {
-        (item["provider_id"], item["model_id"]): item
-        for item in windows["last_7d"]["rows"]
+        (item["provider_id"], item["model_id"]): item for item in windows["last_7d"]["rows"]
     }
     assert seven_day_rows[("openai", "gpt-5.5")]["status"] == "degraded"
     assert windows["last_7d"]["alert_summary"]["alert_count"] >= 2
-    assert {
-        alert["code"] for alert in windows["last_7d"]["alert_summary"]["alerts"]
-    }.issuperset({"provider_model.degraded", "provider_model.fallback_used"})
-    assert data["provider_model_health"]["alert_summary"]["boundary"][
-        "automatic_routing_change"
-    ] is False
+    assert {alert["code"] for alert in windows["last_7d"]["alert_summary"]["alerts"]}.issuperset(
+        {"provider_model.degraded", "provider_model.fallback_used"}
+    )
+    assert (
+        data["provider_model_health"]["alert_summary"]["boundary"]["automatic_routing_change"]
+        is False
+    )
     serialized = json.dumps(data)
     assert "sensitive draft body" not in serialized
     assert "generated text should not appear" not in serialized
@@ -3006,9 +2905,7 @@ def test_admin_audio_workbench_uses_saved_minimax_execution_connection(
 
     response = client.post(
         "/internal/service/admin/audio-jobs",
-        headers=build_internal_headers(
-            idempotency_key="audio-workbench-saved-minimax-connection"
-        ),
+        headers=build_internal_headers(idempotency_key="audio-workbench-saved-minimax-connection"),
         json={
             "site_id": "site_audio_admin",
             "intent": "article_narration",
@@ -3054,9 +2951,7 @@ def test_admin_audio_workbench_rejects_minimax_route_without_execution_connectio
 
     response = client.post(
         "/internal/service/admin/audio-jobs",
-        headers=build_internal_headers(
-            idempotency_key="audio-workbench-minimax-not-executable"
-        ),
+        headers=build_internal_headers(idempotency_key="audio-workbench-minimax-not-executable"),
         json={
             "site_id": "site_audio_admin",
             "intent": "article_narration",
@@ -3313,9 +3208,7 @@ def test_admin_audio_workbench_builds_summary_script_before_audio_job(
     assert data["script"]["generation"]["mode"] == "hosted_ai_content_support"
     assert data["script"]["generation"]["ability_name"] == "npcink-toolbox/ai-content-support"
     assert data["script"]["generation"]["contract_version"] == "hosted_ai_content_support.v1"
-    assert data["script"]["generation"]["profile_id"] == (
-        WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
-    )
+    assert data["script"]["generation"]["profile_id"] == (WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID)
     assert data["script"]["output_json"]["opening"] == "这是一段适合收听的长文摘要。"
     assert "适合收听的长文摘要" in data["script"]["text"]
     assert data["script"]["characters"] <= 4800
@@ -4159,9 +4052,7 @@ def test_internal_site_diagnostic_advisor_uses_monitoring_actions(
         )
         session.commit()
 
-    unauthenticated = client.get(
-        "/internal/service/advisor/site-diagnostics?site_id=site_diag"
-    )
+    unauthenticated = client.get("/internal/service/advisor/site-diagnostics?site_id=site_diag")
     response = client.get(
         "/internal/service/advisor/site-diagnostics?site_id=site_diag&window_hours=24",
         headers=build_internal_headers(),
@@ -4612,8 +4503,7 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
     assert admin_subscription["budget_headroom"]["base_budget"]["ai_credits"] == 0.0
     assert admin_subscription["budget_headroom"]["base_budget"]["runs"] == 10.0
     assert (
-        admin_subscription["budget_headroom"]["current_period_topup_delta"]["ai_credits"]
-        == 10000.0
+        admin_subscription["budget_headroom"]["current_period_topup_delta"]["ai_credits"] == 10000.0
     )
     assert admin_subscription["budget_headroom"]["current_period_topup_delta"]["runs"] == 10000.0
     assert admin_subscription["budget_headroom"]["effective_budget"]["ai_credits"] == 10000.0
@@ -5153,10 +5043,9 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert tier_template_by_id["pro"]["max_vector_documents"] == 2000
     assert tier_template_by_id["agency"]["max_vector_documents"] == 10000
     assert tier_template_by_id["agency"]["concurrency_template"]["max_active_runs"] == 10
-    assert (
-        tier_template_by_id["free"]["canonical_shell"]["entitlements"]["execution_tiers"]
-        == ["cloud"]
-    )
+    assert tier_template_by_id["free"]["canonical_shell"]["entitlements"]["execution_tiers"] == [
+        "cloud"
+    ]
     assert (
         tier_template_by_id["pro"]["canonical_shell"]["budgets"]["max_ai_credits_per_period"]
         == 10000
@@ -5374,12 +5263,7 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     assert plans["plan_version_tier"]["tier_summary"]["monthly_included_points"] == 150000
     assert plans["plan_version_tier"]["tier_summary"]["max_vector_documents"] == 10000
     assert plans["plan_version_tier"]["tier_summary"]["max_batch_items"] == 100
-    assert (
-        plans["plan_version_tier"]["tier_summary"][
-            "nightly_inspection_runs_per_period"
-        ]
-        == 0
-    )
+    assert plans["plan_version_tier"]["tier_summary"]["nightly_inspection_runs_per_period"] == 0
     assert plans["plan_version_tier"]["tier_summary"]["openclaw_enabled"] is True
     assert plans["agency_ops"]["tier_summary"]["tier_id"] == "agency"
     assert plans["general_ops"]["tier_summary"]["tier_id"] == "pro"
@@ -6178,10 +6062,7 @@ def test_service_routes_expose_ops_cadence_summary(tmp_path: Path) -> None:
     payload = response.json()["data"]
     assert payload["totals"]["tasks_total"] == 10
     assert any(item["task_id"] == "retention_cleanup" for item in payload["items"])
-    assert any(
-        item["task_id"] == "artifact_inventory_reconciliation"
-        for item in payload["items"]
-    )
+    assert any(item["task_id"] == "artifact_inventory_reconciliation" for item in payload["items"])
     assert any(item["task_id"] == "payment_order_expiration" for item in payload["items"])
     assert all(item["task_id"] != "hosted_model_governance" for item in payload["items"])
     retention_item = next(
@@ -6243,8 +6124,7 @@ def test_service_routes_expose_observability_summary(tmp_path: Path) -> None:
         for item in payload["cadence"]["items"]
     )
     assert any(
-        item["task_id"] == "payment_order_expiration"
-        for item in payload["cadence"]["items"]
+        item["task_id"] == "payment_order_expiration" for item in payload["cadence"]["items"]
     )
     assert "status_counts" in payload["providers"]
     assert "summary" in payload["runtime"]
@@ -6296,8 +6176,8 @@ def test_service_routes_runtime_diagnostics_summaries_and_abuse_guard(
             "internal_post_rate_limit_window_seconds": 600,
             "internal_post_max_requests_per_window": 10,
             "internal_post_max_requests_per_ip_window": 10,
-            },
-        )
+        },
+    )
     _seed_openai_text_model_allowlist(database_url)
     seed_site_auth(
         database_url,

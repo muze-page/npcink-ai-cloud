@@ -68,9 +68,9 @@ override this inventory or the current boundary contracts.
 | Customers: accounts, account/site detail, Portal users, support | Cloud identity/commercial/support | keep | These are platform operations. Full stable `principal_id` is allowed for Admin support and audit. |
 | Commercial: coverage, subscriptions, plans, credit packs | Cloud commercial truth | keep | Cloud owns service packages, entitlement and billing operations. |
 | Runtime: provider/model resources, external services, vector settings | Cloud runtime configuration | keep | Provider secrets remain write-only and getters expose configuration status, never secret material. |
-| `/admin/ability-models` | Cloud hosted runtime profile binding mixed with WordPress-oriented copy | replace later in P4 | Rename/reframe as runtime profiles. Retain Cloud execution profile binding; remove local ability/workflow/prompt/preset implications. |
-| `POST /admin/ability-models/runtime-binding` | Constant 409 historical stub | delete later in P4 | It has no behavior and must be removed with the runtime-profile UI cutover. |
-| Audio preview inside ability-model workspace | Provider diagnostic experiment | move or delete later | If retained, place under provider diagnostics; it is not ability truth. |
+| `/admin/runtime-profiles` | Platform-tagged Cloud hosted runtime candidate-chain configuration | keep | Directly replaces the deleted `/admin/ability-models` mixed surface. It does not own local ability/workflow/prompt/preset/adoption truth. |
+| Retired `/admin/ability-models/*` API and page routes | Mixed projection plus constant 409 historical stub | delete in P4-F | No aliases or redirects. Site Knowledge embedding stays in Vector Settings. |
+| Audio preview formerly inside ability-model workspace | Provider diagnostic experiment | delete in P4-F | Audio runtime remains; a future diagnostic UI requires its own bounded contract. |
 | Diagnostics: troubleshooting, plugin/media/vector observability, agent feedback | Cloud runtime evidence | keep | Read/diagnostic ownership is correct. |
 | Operations advisor | Cloud diagnostic summaries | keep advanced, simplify later | It cannot mutate provider, package, routing, WordPress, or approval state. |
 | Service settings | Cloud Portal/email/payment configuration | keep | Platform-admin-only Cloud configuration. Secrets remain write-only. |
@@ -132,8 +132,9 @@ Required proof:
    and idempotency contract.
 5. **P4-E Portal performance and identity projection:** remove home N+1,
    dormant client methods, aliases, and multi-account first-item fallbacks.
-6. **P4-F Admin runtime-profile and page-client contraction:** reframe the
-   ability-model surface and migrate Admin page batches to the shared client.
+6. **P4-F Admin runtime-profile and page-client contraction:** replace the
+   mixed ability-model surface with one platform-tagged hosted runtime-profile
+   workspace, then migrate other Admin page batches to the shared client.
 
 ## Gates
 
@@ -289,12 +290,45 @@ Final gates on this batch:
 - migration `0067` completed a real PostgreSQL upgrade/downgrade/upgrade
   round trip with the expected encrypted-response column and constraints.
 
+## P4-F Hosted Runtime Profile Boundary — 2026-07-17
+
+The Admin runtime configuration surface now uses a direct, no-compatibility
+cutover:
+
+- `/admin/runtime-profiles` is the only hosted profile workspace;
+- `GET|PUT /internal/service/admin/runtime-profiles` is the only service
+  contract, explicitly tagged for `wordpress` and
+  `wordpress_ai_connector`;
+- the old ability-model page, projection, plugin-routing endpoints, and
+  constant-conflict runtime-binding endpoint are deleted rather than aliased;
+- Site Knowledge embedding remains under Vector Settings;
+- audio generation remains a runtime execution kind, while the unrelated page
+  preview experiment is deleted;
+- the page uses the shared strict API client and returns an auditable receipt
+  for the complete profile update;
+- local abilities, workflows, prompts, profile adoption, approvals, and final
+  WordPress writes remain outside Cloud ownership.
+
+ADR-018 and `docs/cloud-hosted-runtime-profiles-v1.md` are the active decision
+and boundary contracts.
+
+Final integrated evidence:
+
+- `pnpm run check:fast`: contract 146 passed / 1 skipped; domain 602 passed /
+  3 skipped;
+- `pnpm run check:seam`: API 746 passed; perimeter 9 passed;
+- `pnpm run check:anti-drift`: Cloud anti-drift and provider-env retirement
+  passed;
+- `pnpm run lint`: Ruff passed and mypy found no issues in 229 source files;
+- frontend static contracts, TypeScript, targeted ESLint, and the combined
+  Admin Runtime Profiles/operator Playwright suite passed (15 tests);
+- two independent review rounds closed the initial 3 P1 / 2 P2 findings and
+  the follow-up readiness P2; the final review reported no P0-P2 findings.
+
 Still required before declaring P4 complete:
 
 - migrate the remaining raw Admin page fetches to the shared client in bounded
   page batches;
-- replace `/admin/ability-models` with the Cloud-owned runtime-profile surface,
-  delete the constant-409 binding stub, and move or delete audio preview;
 - simplify the Admin overview and operations advisor hot paths;
 - complete `P4-E03` read-only retained-surface screenshot evidence after those
   remaining UI contracts land.

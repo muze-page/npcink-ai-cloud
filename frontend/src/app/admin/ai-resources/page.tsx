@@ -1523,24 +1523,24 @@ function AiResourcesContent() {
     [filteredConnections]
   );
 
-  const abilityModelFeatureLabel = useCallback((feature: string): string => {
+  const modelFeatureLabel = useCallback((feature: string): string => {
     const normalized = feature.trim();
     if (normalized === 'image_generation' || normalized === 'image_generations' || normalized === 'image') {
-      return aiText('ability_model_feature_image_generation', 'Image generation');
+      return aiText('model_feature_image_generation', 'Image generation');
     }
     if (normalized === 'text_generation' || normalized === 'text_generations' || normalized === 'text') {
-      return aiText('ability_model_feature_text_generation', 'Text generation');
+      return aiText('model_feature_text_generation', 'Text generation');
     }
     if (normalized === 'audio_generation' || normalized === 'audio_generations' || normalized === 'audio') {
-      return aiText('ability_model_feature_audio_generation', 'Audio generation');
+      return aiText('model_feature_audio_generation', 'Audio generation');
     }
     if (normalized === 'video_generation' || normalized === 'video_generations' || normalized === 'video') {
-      return aiText('ability_model_feature_video_generation', 'Video generation');
+      return aiText('model_feature_video_generation', 'Video generation');
     }
     if (normalized === 'embedding' || normalized === 'embeddings') {
-      return aiText('ability_model_feature_embedding', 'Embedding');
+      return aiText('model_feature_embedding', 'Embedding');
     }
-    return normalized || aiText('ability_model_feature_unknown', 'Unknown');
+    return normalized || aiText('model_feature_unknown', 'Unknown');
   }, [aiText]);
 
   const modelReferenceCapabilityLabel = useCallback((tag: string): string => {
@@ -1838,8 +1838,8 @@ function AiResourcesContent() {
         descriptionDisplay="hint"
         aside={(
           <div className="flex flex-col gap-2 sm:flex-row">
-            <Link href="/admin/ability-models" className="btn btn-secondary justify-center">
-              {aiText('action_open_model_binding', 'Open model binding')}
+            <Link href="/admin/runtime-profiles" className="btn btn-secondary justify-center">
+              {aiText('action_open_runtime_profiles', 'Open runtime profiles')}
             </Link>
             <Link href="/admin/troubleshooting" className="btn btn-secondary justify-center">
               {aiText('action_view_diagnostics', 'View diagnostics')}
@@ -1995,7 +1995,7 @@ function AiResourcesContent() {
                       <div className="min-w-0">
                         <h3 className="text-sm font-semibold text-slate-950 dark:text-white">{aiText('model_visibility_title', 'Model visibility')}</h3>
                         <p className="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">
-                          {aiText('model_visibility_allowlist_desc', 'Only enabled models in this list can appear in ability-model routing or be used by Cloud runtime.')}
+                          {aiText('model_visibility_allowlist_desc', 'Only enabled models in this list can enter hosted runtime profile candidate chains or be used by Cloud runtime.')}
                         </p>
                         <p className="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">
                           {aiText('model_visibility_compact_summary', 'Enabled {{enabled}} / available {{available}} · {{status}}', {
@@ -2186,11 +2186,11 @@ function AiResourcesContent() {
                                     aria-label={aiText('field_feature_filter', 'Feature')}
                                   >
                                     <option value="all">{aiText('filter_all', 'All')}</option>
-                                    <option value="text">{aiText('ability_model_feature_text_generation', 'Text generation')}</option>
-                                    <option value="image">{aiText('ability_model_feature_image_generation', 'Image generation')}</option>
-                                    <option value="audio">{aiText('ability_model_feature_audio_generation', 'Audio generation')}</option>
-                                    <option value="video">{aiText('ability_model_feature_video_generation', 'Video generation')}</option>
-                                    <option value="embedding">{aiText('ability_model_feature_embedding', 'Embedding')}</option>
+                                    <option value="text">{aiText('model_feature_text_generation', 'Text generation')}</option>
+                                    <option value="image">{aiText('model_feature_image_generation', 'Image generation')}</option>
+                                    <option value="audio">{aiText('model_feature_audio_generation', 'Audio generation')}</option>
+                                    <option value="video">{aiText('model_feature_video_generation', 'Video generation')}</option>
+                                    <option value="embedding">{aiText('model_feature_embedding', 'Embedding')}</option>
                                   </select>
                                 </th>
                                 <th className="px-3 py-2 font-semibold">{aiText('column_context_output', 'Context / output')}</th>
@@ -2260,7 +2260,7 @@ function AiResourcesContent() {
                                       </div>
                                       {row.deprecated && row.selected ? (
                                         <div className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-                                          {aiText('deprecated_selected_model_hint', 'Deprecated model is kept only because it is already saved. Remove it before saving new routing choices.')}
+                                          {aiText('deprecated_selected_model_hint', 'Deprecated model is kept only because it is already saved. Remove it before saving new model visibility choices.')}
                                         </div>
                                       ) : null}
                                       {canRemoveManualModel ? (
@@ -2274,7 +2274,7 @@ function AiResourcesContent() {
                                       ) : null}
                                     </td>
                                     <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
-                                      {abilityModelFeatureLabel(row.feature)}
+                                      {modelFeatureLabel(row.feature)}
                                       {tagLabels.length ? (
                                         <div
                                           className="mt-1 max-w-[16rem] truncate text-slate-500 dark:text-slate-400"
