@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from urllib.parse import urlsplit
 
@@ -101,6 +102,8 @@ class Settings(BaseSettings):
     admin_bootstrap_token: str | None = Field(default=None)
     admin_session_secret: str | None = Field(default=None)
     service_settings_secret: str | None = Field(default=None)
+    runtime_data_encryption_secret: str | None = Field(default=None)
+    runtime_data_encryption_key_id: str | None = Field(default=None)
     debug_local_origin_allowlist: str = Field(default="")
     browser_origin_allowlist: str = Field(default="")
     trusted_host_allowlist: str = Field(default="")
@@ -344,6 +347,7 @@ class Settings(BaseSettings):
             "admin_bootstrap_token": self.admin_bootstrap_token,
             "admin_session_secret": self.admin_session_secret,
             "service_settings_secret": self.service_settings_secret,
+            "runtime_data_encryption_secret": self.runtime_data_encryption_secret,
             "portal_jwt_secret": self.portal_jwt_secret,
         }
         for field_name, raw_value in secret_fields.items():
@@ -363,6 +367,19 @@ class Settings(BaseSettings):
         if production_like and not str(self.service_settings_secret or "").strip():
             raise ValueError(
                 "service_settings_secret is required outside development/test environments"
+            )
+        if production_like and not str(self.runtime_data_encryption_secret or "").strip():
+            raise ValueError(
+                "runtime_data_encryption_secret is required outside development/test environments"
+            )
+        runtime_data_key_id = str(self.runtime_data_encryption_key_id or "").strip()
+        if runtime_data_key_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", runtime_data_key_id):
+            raise ValueError(
+                "runtime_data_encryption_key_id must contain only letters, numbers, '_' or '-'"
+            )
+        if production_like and not runtime_data_key_id:
+            raise ValueError(
+                "runtime_data_encryption_key_id is required outside development/test environments"
             )
         if production_like and not str(self.internal_auth_token or "").strip():
             raise ValueError(
@@ -384,6 +401,31 @@ class Settings(BaseSettings):
             )
         if production_like and not str(self.portal_jwt_secret or "").strip():
             raise ValueError("portal_jwt_secret is required outside development/test environments")
+        if production_like:
+            configured_secret_domains = {
+                field_name: str(raw_value or "").strip()
+                for field_name, raw_value in secret_fields.items()
+                if str(raw_value or "").strip()
+            }
+            duplicate_domains = sorted(
+                (
+                    first_name,
+                    second_name,
+                )
+                for first_index, (first_name, first_value) in enumerate(
+                    configured_secret_domains.items()
+                )
+                for second_name, second_value in list(configured_secret_domains.items())[
+                    first_index + 1 :
+                ]
+                if first_value == second_value
+            )
+            if duplicate_domains:
+                first_name, second_name = duplicate_domains[0]
+                raise ValueError(
+                    f"{first_name} must differ from {second_name} outside "
+                    "development/test environments"
+                )
         if production_like and not self.explicit_browser_origins():
             raise ValueError(
                 "browser_origin_allowlist is required outside development/test environments"
@@ -394,10 +436,7 @@ class Settings(BaseSettings):
             )
         if self.portal_oauth_state_ttl_seconds < 60:
             raise ValueError("portal_oauth_state_ttl_seconds must be at least 60")
-        if (
-            self.portal_idempotency_ttl_seconds
-            <= self.portal_idempotency_processing_lease_seconds
-        ):
+        if self.portal_idempotency_ttl_seconds <= self.portal_idempotency_processing_lease_seconds:
             raise ValueError(
                 "portal_idempotency_ttl_seconds must exceed "
                 "portal_idempotency_processing_lease_seconds"

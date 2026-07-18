@@ -51,12 +51,14 @@ and other CMS adapters are post-P5 validation work.
 - [docs/p4-portal-admin-surface-inventory-2026-07-16.md](docs/p4-portal-admin-surface-inventory-2026-07-16.md)
 - [docs/decisions/016-fail-closed-portal-admin-service-boundaries.md](docs/decisions/016-fail-closed-portal-admin-service-boundaries.md)
 - [docs/decisions/018-cloud-hosted-runtime-profile-admin-surface.md](docs/decisions/018-cloud-hosted-runtime-profile-admin-surface.md)
+- [docs/decisions/019-dedicated-runtime-data-encryption-domain.md](docs/decisions/019-dedicated-runtime-data-encryption-domain.md)
 
 Evidence records (not target-contract completion proof):
 
 - [docs/refactor-baseline-2026-07-14.md](docs/refactor-baseline-2026-07-14.md)
 - [docs/p5-hardening-release-audit-2026-07-17.md](docs/p5-hardening-release-audit-2026-07-17.md)
 - [docs/p5-b1-hosted-profile-contract-cutover-2026-07-17.md](docs/p5-b1-hosted-profile-contract-cutover-2026-07-17.md)
+- [docs/p5-b2-security-hardening-2026-07-17.md](docs/p5-b2-security-hardening-2026-07-17.md)
 
 Operational references:
 
@@ -450,6 +452,13 @@ docker compose -f docker-compose.prod.yml config >/dev/null
 docker build -t npcink-cloud-prod-check -f Dockerfile .
 ```
 
+For Python dependency changes, also run the blocking locked default and Zilliz
+audit:
+
+```bash
+pnpm run check:python-dependency-audit
+```
+
 ## Approved Feature Base
 
 The next Cloud feature branch should start from the verified standalone Cloud
@@ -496,6 +505,13 @@ pnpm run dev
 
 `pnpm run dev` starts the local core stack only: `postgres`, `redis`, `api`,
 `frontend`, and `proxy`.
+
+The development Compose wrapper loads `.env` and then `.env.local` for variable
+interpolation, so local values win. Backend services still receive their
+declared env files. The frontend receives only its explicit allowlist, including
+the internal token required by the server-side Admin BFF; Admin, Portal,
+database, provider, service-setting, and runtime-data encryption secrets are
+not injected into it.
 
 Use the worker profiles only when the current task needs them:
 
@@ -631,6 +647,8 @@ config now fails fast when these are missing:
 - `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is recommended for new production
   deploys so service-setting credentials are not tied to the admin session
   secret.
+- `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET`
+- `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID`
 - `NPCINK_CLOUD_PORTAL_JWT_SECRET`
 - `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST`
 - `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST`
@@ -643,6 +661,12 @@ Secret values saved through `/admin/service-settings` are encrypted with
 before this setting are still readable through the previous runtime secret
 chain, and re-saving the email configuration migrates the SMTP password onto
 the dedicated service-settings secret.
+
+The runtime-data secret and key ID are not ordinary configuration-only rotation
+values. Changing them requires the stopped-writer inventory, backup,
+re-encryption, verification, and matched rollback procedure in
+[`deploy/OPS_PLAYBOOK.md`](deploy/OPS_PLAYBOOK.md). Normal runtime has no old-key
+or raw-ciphertext fallback.
 
 If a development deploy still has Portal public URL, QQ login, or SMTP values
 in `.env`, import the current `NPCINK_CLOUD_*` values once before removing

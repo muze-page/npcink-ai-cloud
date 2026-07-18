@@ -249,3 +249,25 @@ concurrency, duration, environment, revision, and complete warnings.
 
 P5 remains incomplete until every blocker is closed or an explicit accepted
 exception names its owner, scope, evidence, and rollback.
+
+## Subsequent Batch Status
+
+The phase table and findings above remain the authoritative snapshot of input
+revision `22eff1e0f455`; they are not rewritten after the fact. The following
+later engineering batches changed the current branch status:
+
+| Batch | Current result | Evidence |
+| --- | --- | --- |
+| P5-B1 connector cutover | engineering complete | [P5-B1 Hosted Profile Contract Cutover](p5-b1-hosted-profile-contract-cutover-2026-07-17.md) |
+| P5-B2 security blockers | engineering complete | [P5-B2 Security Hardening Closeout](p5-b2-security-hardening-2026-07-17.md) and [ADR-019](decisions/019-dedicated-runtime-data-encryption-domain.md) |
+| P5-B3 WordPress text acceptance | pending | current exact-package title, summary, and selected-text review/apply evidence remains required |
+| P5-B4 load/soak | pending | deterministic concurrent runtime, queue burst, query, worker, memory, and soak evidence remains required |
+| P5-B5 release closure | pending | exact bundle, media/text replay, restore, complete security follow-ups, central matrix, release-policy proof, and final audit remain required |
+
+P5-B2 removes the two release blockers recorded in **Security And Dependency
+Audit**: Pillow is at the fixed floor with blocking default/Zilliz dependency
+audits, and the five persisted runtime-data types use a dedicated fail-closed
+encryption domain with an offline transactional cutover. This is engineering
+evidence only. No production cutover, production approval, penetration test,
+complete image CVE scan, or live-credential validation has occurred, and global
+P5 remains incomplete.

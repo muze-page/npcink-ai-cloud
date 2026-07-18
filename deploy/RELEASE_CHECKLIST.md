@@ -71,6 +71,9 @@ All items in this section are `Required`.
 - [x] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
 - [x] `NPCINK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
 - [x] `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is set to a stable, dedicated production value and is preserved across deploys and admin-session key rotation
+- [ ] `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` is set to a stable, dedicated production value and is not reused by admin sessions, Portal JWT, internal auth, bootstrap, or service-settings encryption
+- [ ] `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` identifies that deployed key without containing secret material
+- [ ] the runtime-data encryption secret and key ID are present for `api`, `worker`, `callback-worker`, and `ops-worker`, and are absent from `frontend`
 - [ ] Provider Connection credentials have been re-imported or re-saved with the dedicated service-settings key before runtime traffic is restored; ciphertext created by the retired admin/Portal/internal key selection is intentionally unreadable after this cutover
 - [x] retired `OPS_*` and runtime `OPENAI_COMPATIBLE_*` names are absent from `.env.deploy`
 - [x] QQ Open Platform uses only `/open/auth/qq/callback`
@@ -129,6 +132,8 @@ All items in this section are `Required`.
 All items in this section are `Required`.
 
 - [x] target database backup exists and restore path is known
+- [ ] the pre-cutover custom-format backup has a recorded checksum, restrictive permissions, and a successful restore verification against a separate database
+- [ ] the pre-cutover code revision and old runtime-data decryption key material are recoverable together with that backup
 - [x] migration state is confirmed on the release target
 - [ ] schema drift has been checked on the target host
 - [x] rollback plan for the database has been written down
@@ -248,6 +253,15 @@ All items in this section are `Required`.
 - [x] bootstrap token rotation procedure is defined
 - [x] internal service token rotation procedure is defined
 - [x] session invalidation procedure is defined
+- [ ] runtime-data encryption cutover evidence records successful `inventory`, `dry-run`, `apply`, and new-key-only `verify` runs from `python -m app.dev.reencrypt_runtime_data`
+- [ ] all four phases ran with `docker compose ... run --rm --no-deps --env-from-file` from the bundle-backed staged release API image, without requiring host application source or Python
+- [ ] before the first staged Compose command, `.env.deploy` was copied from the protected shared/current source, installed mode `0600`, and verified without invoking a general deploy helper that switches `current` or starts services
+- [ ] the untracked maintenance env was mode `0600` and contained the target encryption secret/key ID plus an explicit old-root environment value
+- [ ] the first raw-ciphertext cutover omitted `--old-key-id`; any later `rde.v1` rotation supplies old key IDs to `inventory` and positionally pairs each ID/root in `dry-run` and `apply`
+- [ ] `dry-run`/`apply` used only `--old-root-env` variable names, and `apply` recorded the explicit `--confirm-maintenance-window` acknowledgement without logging key values
+- [ ] all four writers were stopped during re-encryption and were restarted only after verification
+- [ ] temporary old-key material and the maintenance env were removed after the verification and rollback-evidence window; normal runtime has no legacy/dual-read path, while the migration-only tool remains available for controlled rekey
+- [ ] the operator understands that normal deploy/secret rotation must not directly rotate `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` or its key ID
 - [x] operator has checked `GET /internal/service/ops/cadence` and all required cadence tasks are fresh
 - [x] operator has checked `GET /internal/service/observability/summary` and worker heartbeats are fresh
 - [x] operator has checked provider health freshness and degraded-provider list

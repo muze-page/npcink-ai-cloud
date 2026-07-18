@@ -11,6 +11,10 @@ os.environ["NPCINK_CLOUD_INTERNAL_AUTH_TOKEN"] = "npcink-cloud-internal-test-tok
 os.environ["NPCINK_CLOUD_ADMIN_SESSION_SECRET"] = "npcink-cloud-ops-session-secret-32b"
 os.environ["NPCINK_CLOUD_PORTAL_JWT_SECRET"] = "npcink-cloud-portal-jwt-secret-32b"
 os.environ["NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"] = "npcink-cloud-service-settings-secret-32b"
+os.environ["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"] = (
+    "npcink-cloud-runtime-data-encryption-secret-32b"
+)
+os.environ["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"] = "test-runtime-data-key"
 for _provider_env_name in (
     "NPCINK_CLOUD_OPENAI_API_KEY",
     "NPCINK_CLOUD_ANTHROPIC_API_KEY",

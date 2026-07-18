@@ -178,12 +178,10 @@ services:
     image: npcink-ai-cloud-frontend:dev
     restart: unless-stopped
     command: sh -lc "node node_modules/next/dist/bin/next dev --webpack -H 0.0.0.0"
-    env_file:
-      - ./.env
-      - ./.env.local
     environment:
       CLOUD_API_BASE_URL: http://api:8000
       CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:8010}
+      NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       NODE_OPTIONS: --max-old-space-size=1536
       NEXT_TELEMETRY_DISABLED: "1"

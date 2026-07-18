@@ -125,7 +125,8 @@ def test_p5_b1_evidence_closes_only_the_connector_identity_batch() -> None:
     evidence = _read(P5_B1_EVIDENCE)
 
     for marker in (
-        "engineering batch complete; global P5 release closure and production\napproval remain incomplete",
+        "engineering batch complete; global P5 release closure and production\n"
+        "approval remain incomplete",
         "operation_contract_version",
         "wordpress_operation.v1",
         "cloud_connector_runtime.v1",

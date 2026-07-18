@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -28,6 +30,127 @@ def _documented_https_host(text: str, key: str) -> str:
 
 def _nginx_location_block(text: str, location: str) -> str:
     return text.split(f"location {location} {{", 1)[1].split("\n    }", 1)[0]
+
+
+def _compose_service_block(text: str, service: str) -> str:
+    lines = text.splitlines()
+    marker = f"  {service}:"
+    start = lines.index(marker)
+    block = [lines[start]]
+    for line in lines[start + 1 :]:
+        if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
+            break
+        block.append(line)
+    return "\n".join(block)
+
+
+def _compose_environment_keys(service_block: str) -> set[str]:
+    lines = service_block.splitlines()
+    environment_index = lines.index("    environment:")
+    keys: set[str] = set()
+    for line in lines[environment_index + 1 :]:
+        if not line.startswith("      "):
+            break
+        keys.add(line.strip().split(":", 1)[0])
+    return keys
+
+
+def test_dev_compose_wrapper_layers_local_env_for_frontend_token(
+    tmp_path: Path,
+) -> None:
+    cloud_root = _cloud_root()
+    wrapper_text = (cloud_root / "scripts" / "dev-compose.sh").read_text()
+    dev_compose = (cloud_root / "docker-compose.dev.yml").read_text()
+    package_scripts = json.loads((cloud_root / "package.json").read_text())["scripts"]
+    makefile = (cloud_root / "Makefile").read_text()
+    recover_script = (cloud_root / "scripts" / "dev-frontend-recover.sh").read_text()
+
+    expected_dev_scripts = {
+        "dev": "bash scripts/dev-compose.sh up --build",
+        "dev:runtime": "bash scripts/dev-compose.sh --profile runtime up --build",
+        "dev:callback": (
+            "bash scripts/dev-compose.sh --profile runtime --profile callback up --build"
+        ),
+        "dev:ops": (
+            "bash scripts/dev-compose.sh --profile runtime --profile callback "
+            "--profile ops up --build"
+        ),
+    }
+    assert {name: package_scripts[name] for name in expected_dev_scripts} == expected_dev_scripts
+    assert "dev:\n\tbash scripts/dev-compose.sh up --build" in makefile
+    assert "docker compose" not in recover_script
+    assert recover_script.count('"${COMPOSE_CMD[@]}"') == 4
+
+    fixture_root = tmp_path / "cloud"
+    fixture_scripts = fixture_root / "scripts"
+    fixture_scripts.mkdir(parents=True)
+    fixture_wrapper = fixture_scripts / "dev-compose.sh"
+    fixture_wrapper.write_text(wrapper_text)
+    (fixture_root / "docker-compose.dev.yml").write_text("services: {}\n")
+    (fixture_root / ".env").write_text(
+        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=base-token\n"
+        "NPCINK_CLOUD_ADMIN_SESSION_SECRET=base-admin-secret\n"
+    )
+    (fixture_root / ".env.local").write_text(
+        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=local-token\n"
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+    fake_docker.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    environment.pop("NPCINK_CLOUD_DEV_COMPOSE_FILE", None)
+
+    result = subprocess.run(
+        ["bash", str(fixture_wrapper), "config", "--quiet"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    arguments = result.stdout.splitlines()
+    env_files = [
+        Path(arguments[index + 1])
+        for index, argument in enumerate(arguments)
+        if argument == "--env-file"
+    ]
+    assert env_files == [fixture_root / ".env", fixture_root / ".env.local"]
+
+    resolved: dict[str, str] = {}
+    for env_file in env_files:
+        for line in env_file.read_text().splitlines():
+            key, value = line.split("=", 1)
+            resolved[key] = value
+    assert resolved["NPCINK_CLOUD_INTERNAL_AUTH_TOKEN"] == "local-token"
+
+    frontend_block = _compose_service_block(dev_compose, "frontend")
+    assert (
+        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
+        in frontend_block
+    )
+    for forbidden_secret in (
+        "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
+        "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+        "NPCINK_CLOUD_PORTAL_JWT_SECRET",
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
+    ):
+        assert forbidden_secret not in frontend_block
+
+    for env_file in env_files:
+        env_file.unlink()
+    missing_env_result = subprocess.run(
+        ["bash", str(fixture_wrapper), "config", "--quiet"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert "--env-file" not in missing_env_result.stdout.splitlines()
 
 
 def test_media_upload_proxy_overrides_are_exact_and_bounded() -> None:
@@ -191,6 +314,172 @@ def test_production_api_trusts_the_same_pinned_network_used_by_compose() -> None
     ).read_text()
 
 
+def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
+    cloud_root = _cloud_root()
+    env_example = (cloud_root / ".env.example").read_text()
+    dev_compose = (cloud_root / "docker-compose.dev.yml").read_text()
+    prod_compose = (cloud_root / "docker-compose.prod.yml").read_text()
+    runtime_compose = (cloud_root / "docker-compose.runtime.yml").read_text()
+    deploy_smoke = (cloud_root / "scripts" / "cloud-deploy-bundle-smoke-flow.sh").read_text()
+    checklist = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
+    playbook = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
+    deploy_guide = (cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md").read_text()
+    release_policy = (
+        cloud_root / "docs" / "cloud-production-release-policy-v1.md"
+    ).read_text()
+
+    encryption_secret = "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
+    encryption_key_id = "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"
+    backend_services = ("api", "worker", "callback-worker", "ops-worker")
+
+    assert env_example.count(f"{encryption_secret}=") == 1
+    assert env_example.count(f"{encryption_key_id}=") == 1
+    assert deploy_smoke.count(encryption_secret) >= 2
+    assert deploy_smoke.count(encryption_key_id) >= 2
+
+    for service in backend_services:
+        prod_block = _compose_service_block(prod_compose, service)
+        assert encryption_secret in prod_block
+        assert encryption_key_id in prod_block
+
+        runtime_block = _compose_service_block(runtime_compose, service)
+        assert "env_file:" in runtime_block
+        assert "- .env.deploy" in runtime_block
+
+        dev_block = _compose_service_block(dev_compose, service)
+        assert "env_file:" in dev_block
+        assert "- ./.env" in dev_block
+        assert "- ./.env.local" in dev_block
+
+    expected_frontend_env = {
+        "docker-compose.dev.yml": {
+            "CLOUD_API_BASE_URL",
+            "CLOUD_PUBLIC_BASE_URL",
+            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
+            "NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "NODE_OPTIONS",
+            "NEXT_TELEMETRY_DISABLED",
+            "DISABLE_DEPENDENCY_CHECK",
+        },
+        "docker-compose.prod.yml": {
+            "CLOUD_API_BASE_URL",
+            "CLOUD_PUBLIC_BASE_URL",
+            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
+            "NODE_ENV",
+        },
+        "docker-compose.runtime.yml": {
+            "CLOUD_API_BASE_URL",
+            "CLOUD_PUBLIC_BASE_URL",
+            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
+            "NODE_ENV",
+        },
+    }
+    compose_by_name = {
+        "docker-compose.dev.yml": dev_compose,
+        "docker-compose.prod.yml": prod_compose,
+        "docker-compose.runtime.yml": runtime_compose,
+    }
+    forbidden_frontend_secrets = (
+        encryption_secret,
+        encryption_key_id,
+        "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
+        "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+        "NPCINK_CLOUD_PORTAL_JWT_SECRET",
+        "NPCINK_CLOUD_DATABASE_URL",
+    )
+    for compose_name, compose_text in compose_by_name.items():
+        frontend_block = _compose_service_block(compose_text, "frontend")
+        assert "env_file:" not in frontend_block
+        assert _compose_environment_keys(frontend_block) == expected_frontend_env[compose_name]
+        for forbidden_secret in forbidden_frontend_secrets:
+            assert forbidden_secret not in frontend_block
+
+    assert '127.0.0.1:${NPCINK_CLOUD_PORT:-8010}:8080' in prod_compose
+    assert '- "${NPCINK_CLOUD_PORT:-8010}:8080"' not in prod_compose
+
+    for phase in ("inventory", "dry-run", "apply", "verify"):
+        command = f"python -m app.dev.reencrypt_runtime_data {phase}"
+        assert command in playbook
+        assert command in deploy_guide
+    maintenance_sections = (
+        playbook.split("### Runtime-data encryption key cutover", 1)[1].split(
+            "## Worker Operations", 1
+        )[0],
+        deploy_guide.split("## One-Time Runtime-Data Encryption Maintenance", 1)[1],
+    )
+    for maintenance in maintenance_sections:
+        assert maintenance.count("run --rm --no-deps --env-from-file") == 7
+        assert "--confirm-maintenance-window" in maintenance
+        assert (
+            maintenance.count(
+                "--old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
+            )
+            == 4
+        )
+        assert "--old-root-env NPCINK_CLOUD_ADMIN_SESSION_SECRET" not in maintenance
+        assert "--old-root-env NPCINK_CLOUD_PORTAL_JWT_SECRET" not in maintenance
+        assert "--old-root-env NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" not in maintenance
+        assert "first raw-ciphertext cutover" in maintenance.lower()
+        assert "omits `--old-key-id`" in maintenance
+        assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root-secret>" in maintenance
+        assert "staged release" in maintenance
+        assert "postgres" in maintenance
+        assert "redis" in maintenance
+
+        assert "ENV_SOURCE=/opt/npcink-ai-cloud/.env.deploy" in maintenance
+        assert "ENV_SOURCE=/opt/npcink-ai-cloud/current/.env.deploy" in maintenance
+        assert 'install -m 600 "${ENV_SOURCE}" ./.env.deploy' in maintenance
+        assert 'stat -c \'%a\' ./.env.deploy' in maintenance
+        assert maintenance.index("install -m 600") < maintenance.index("docker compose")
+        assert "deploy/deploy-to-ssh-host.sh" in maintenance
+        assert "deploy/remote-load-and-up.sh" in maintenance
+        assert "general deploy helper" in maintenance
+
+        raw_commands = maintenance.split("From the staged release directory", 1)[1].split(
+            "The first raw-ciphertext cutover", 1
+        )[0]
+        assert raw_commands.count("run --rm --no-deps --env-from-file") == 4
+        assert "--old-key-id" not in raw_commands
+
+        future_commands = maintenance.split("export OLD_RUNTIME_DATA_KEY_ID", 1)[1].split(
+            "```", 1
+        )[0]
+        assert future_commands.count("run --rm --no-deps --env-from-file") == 3
+        assert (
+            'inventory --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"' in future_commands
+        )
+        assert (
+            future_commands.count('--old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"') == 3
+        )
+        assert (
+            future_commands.count(
+                "--old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
+            )
+            == 2
+        )
+        assert "positionally" in maintenance
+        assert "Normal runtime has no legacy or dual-read path" in maintenance
+        assert "migration-only" in maintenance
+    assert "api`, `worker`, `callback-worker`, and `ops-worker" in playbook
+    assert "old database backup" in playbook
+    assert "normal deploy/secret rotation must not directly rotate" in checklist
+    assert "bundle-backed staged release API image" in checklist
+    assert "without requiring host application source or Python" in checklist
+    assert "before the first staged Compose command" in checklist
+    assert "supplies old key IDs to `inventory`" in checklist
+    assert "normal runtime has no legacy/dual-read path" in checklist
+    assert "migration-only tool remains available" in checklist
+    assert encryption_secret in release_policy
+    assert "old application revision" in release_policy
+    assert "run --rm --no-deps --env-from-file" in release_policy
+    assert "future `rde.v1` rotations" in release_policy
+    assert "bundle excludes `.env.deploy`" in release_policy
+    assert "before any Compose command" in release_policy
+    assert "pass each old key ID to `inventory`" in release_policy
+    assert "Normal runtime has no legacy or dual-read path" in release_policy
+
+
 def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_env() -> None:
     cloud_root = _cloud_root()
     compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
@@ -296,6 +585,12 @@ def test_env_example_production_payload_validates_with_canonical_names(
         "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=": (
             "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=" + ("s" * 32)
         ),
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=": (
+            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=" + ("r" * 32)
+        ),
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=": (
+            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=runtime-data-v1"
+        ),
         "NPCINK_CLOUD_PORTAL_JWT_SECRET=": "NPCINK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
         "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=": (
             "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.example.com"
@@ -315,6 +610,8 @@ def test_env_example_production_payload_validates_with_canonical_names(
     assert settings.environment == "production"
     assert settings.admin_bootstrap_token == "b" * 32
     assert settings.admin_session_secret == "a" * 32
+    assert settings.runtime_data_encryption_secret == "r" * 32
+    assert settings.runtime_data_encryption_key_id == "runtime-data-v1"
     assert settings.ops_cadence_poll_seconds == 30
     assert settings.worker_heartbeat_interval_seconds == 60
     assert settings.provider_health_scan_interval_seconds == 900
@@ -347,6 +644,8 @@ def test_settings_ignore_retired_admin_and_openai_aliases(monkeypatch) -> None:
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", "s" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", "r" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", "runtime-data-v1")
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
     monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")
@@ -372,6 +671,8 @@ def test_retired_ops_secret_does_not_satisfy_production_config(monkeypatch) -> N
     monkeypatch.delenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", raising=False)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", "s" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", "r" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", "runtime-data-v1")
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
     monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")
@@ -647,7 +948,8 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "jaeger.tar.gz" in remote_load_script
     assert "static_terms_only" in ci_workflow
     assert "site/terms/*" in ci_workflow
-    assert "needs: [classify, backend, frontend, static-terms]" in ci_workflow
+    assert "needs: [secret-scan, classify, backend, frontend, static-terms]" in ci_workflow
+    assert "needs['secret-scan'].result == 'success'" in ci_workflow
     assert "backend-scope:" in ci_workflow
     assert "backend-targeted:" in ci_workflow
     assert "backend-static:" in ci_workflow

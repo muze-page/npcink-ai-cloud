@@ -2,7 +2,7 @@
 
 > Status: active
 >
-> Updated: 2026-06-29
+> Updated: 2026-07-17
 >
 > Scope: standalone `npcink-ai-cloud` production operations, cadence recovery, signed runtime smoke, release-time troubleshooting
 
@@ -43,6 +43,9 @@ Configuration ownership:
 - production must set
   `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.npc.ink` and
   `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.npc.ink`.
+- production must keep `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` and
+  `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` stable across ordinary deploys.
+  They belong only to the four backend writers; the frontend receives neither.
 - `/admin/service-settings` owns Portal public URL, QQ login, and SMTP sender
   settings. Do not move those service settings back into `.env`.
 
@@ -101,6 +104,147 @@ Manual refresh guidance:
 3. Restart `api` and `frontend`.
 4. Verify stale cookies no longer access `/admin/session` or `/portal/v1/session`.
 
+### Runtime-data encryption key cutover
+
+`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` is not an ordinary rotatable
+configuration value. Never update it or
+`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` through the normal secret-rotation
+or deploy-and-restart path. A direct change can strand persisted ciphertext.
+
+Use a planned maintenance window and a bundle-backed staged release. Extract
+and load the release bundle first, then work from its staged release directory;
+do not switch `current` yet. The staged `docker-compose.runtime.yml` must resolve
+`api` to the newly loaded release image. The maintenance command runs inside
+that image and does not require Python or application source on the host.
+
+1. Record the current release revision, current key ID, database target, staged
+   release path, and rollback owner. Keep the old code and old decryption key
+   material available from the protected operator secret store; do not place a
+   key value in shell history, command arguments, logs, or Git.
+2. A pure bundle does not contain `.env.deploy`. Before any Compose command,
+   copy it from the protected shared source, falling back to the protected
+   current release copy, and verify mode `0600`. Do not call
+   `deploy/deploy-to-ssh-host.sh`, `deploy/remote-load-and-up.sh`, or another
+   general deploy helper for this staging step: those paths switch `current`
+   and/or start services before re-encryption verification.
+
+   ```bash
+   cd /opt/npcink-ai-cloud/releases/STAGED_RELEASE
+   umask 077
+   ENV_SOURCE=/opt/npcink-ai-cloud/.env.deploy
+   if [ ! -f "${ENV_SOURCE}" ]; then
+     ENV_SOURCE=/opt/npcink-ai-cloud/current/.env.deploy
+   fi
+   test -f "${ENV_SOURCE}"
+   install -m 600 "${ENV_SOURCE}" ./.env.deploy
+   test "$(stat -c '%a' ./.env.deploy)" = "600"
+   ```
+
+3. Use the production `COMPOSE_PROJECT_NAME`. Keep `postgres` and `redis`
+   running, but stop and fence all four writers: `api`, `worker`,
+   `callback-worker`, and `ops-worker`. Keep public traffic in
+   maintenance/fail-closed mode until the cutover is verified:
+
+   ```bash
+   cd /opt/npcink-ai-cloud/releases/STAGED_RELEASE
+   export COMPOSE_PROJECT_NAME="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-npcink-ai-cloud}"
+   docker compose --env-file .env.deploy -f docker-compose.runtime.yml up -d postgres redis
+   docker compose --env-file .env.deploy -f docker-compose.runtime.yml \
+     stop api worker callback-worker ops-worker
+   ```
+
+4. Create a custom-format PostgreSQL backup with restrictive permissions,
+   record its SHA-256 checksum, restore it into a separate verification
+   database, and prove that the restored inventory is readable with the old
+   code and old key. A database dump without its matching key is not a usable
+   encrypted-data recovery point.
+5. Create an untracked maintenance env file outside the release directory and
+   set it to mode `0600`. It must contain the target envelope and one explicit
+   old root, while normal production settings continue to come from the staged
+   `.env.deploy`:
+
+   ```text
+   NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=<target-secret>
+   NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=<target-key-id>
+   NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root-secret>
+   ```
+
+   ```bash
+   export MAINTENANCE_ENV=/run/npcink-ai-cloud/runtime-data-reencrypt.env
+   test "$(stat -c '%a' "${MAINTENANCE_ENV}")" = "600"
+   ```
+
+6. From the staged release directory, run all phases through a one-off `api`
+   container from the new image. `--no-deps` prevents these commands from
+   starting any stopped writer or replacing the already-running database/cache:
+
+   ```bash
+   docker compose --env-file .env.deploy -f docker-compose.runtime.yml \
+     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" api \
+     python -m app.dev.reencrypt_runtime_data inventory
+   docker compose --env-file .env.deploy -f docker-compose.runtime.yml \
+     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" api \
+     python -m app.dev.reencrypt_runtime_data dry-run \
+       --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+   docker compose --env-file .env.deploy -f docker-compose.runtime.yml \
+     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" api \
+     python -m app.dev.reencrypt_runtime_data apply \
+       --confirm-maintenance-window \
+       --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+   docker compose --env-file .env.deploy -f docker-compose.runtime.yml \
+     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" api \
+     python -m app.dev.reencrypt_runtime_data verify
+   ```
+
+   The first raw-ciphertext cutover intentionally omits `--old-key-id`.
+
+   For a future `rde.v1` to `rde.v1` rotation, inventory must declare the old
+   envelope key ID even though it does not need the old root. Then `dry-run` and
+   `apply` must pair that same key ID positionally with its old root:
+
+   ```bash
+   export OLD_RUNTIME_DATA_KEY_ID=rde-previous-key-id
+   docker compose --env-file .env.deploy -f docker-compose.runtime.yml \
+     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" api \
+     python -m app.dev.reencrypt_runtime_data inventory --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
+   docker compose --env-file .env.deploy -f docker-compose.runtime.yml \
+     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" api \
+     python -m app.dev.reencrypt_runtime_data dry-run \
+       --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET \
+       --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
+   docker compose --env-file .env.deploy -f docker-compose.runtime.yml \
+     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" api \
+     python -m app.dev.reencrypt_runtime_data apply \
+       --confirm-maintenance-window \
+       --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET \
+       --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
+   ```
+
+   Add further `--old-root-env`/`--old-key-id` pairs only when preflight evidence
+   proves multiple historical envelopes. Stop immediately on an unreadable row,
+   count mismatch, partial-apply error, or verification failure. Do not start
+   any writer after a failed phase.
+7. After new-key-only verification succeeds, update both the staged/current and
+   shared `.env.deploy` copies with the same target secret/key ID and keep them
+   mode `0600`. Promote the verified staged release; do not rerun the ordinary
+   deploy sequence for the key change.
+8. Start `api` from that same release image and verify `/health/ready`; then
+   start `worker`, `callback-worker`, and `ops-worker`; finally restore
+   `frontend`, `proxy`, and `caddy` traffic. Verify
+   `/health/operational-ready`, fresh heartbeats and cadence, signed runtime
+   execution/result retrieval, terminal callback delivery, Addon connection
+   consumption, and idempotent Portal replay.
+9. After the rollback-evidence window, securely delete the maintenance env and
+   temporary old-key copies. Normal runtime has no legacy or dual-read path;
+   retain the migration-only re-encryption tool for future controlled rekeys.
+
+If rollback is required, fence the same four writers and restore the matching
+old database backup (the pre-cutover snapshot), old application revision, and
+old key together.
+After new-key writes have begun, rolling back only code or only the environment
+is invalid; use a verified reverse re-encryption or accept the explicitly
+approved loss of post-cutover writes when restoring the full old recovery point.
+
 ## Worker Operations
 
 ### Restart workers
@@ -110,7 +254,7 @@ Run on the release host:
 ```bash
 cd /opt/npcink-ai-cloud
 COMPOSE_PROJECT_NAME="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-npcink-ai-cloud}" \
-  docker compose -f docker-compose.prod.yml restart worker callback-worker ops-worker
+  docker compose -f docker-compose.runtime.yml restart worker callback-worker ops-worker
 ```
 
 Then verify:
@@ -207,6 +351,10 @@ Then verify:
 3. Restore the known-good database snapshot using the host-specific restore procedure.
 4. Restart `api`, `worker`, `callback-worker`, and `ops-worker`.
 5. Verify `/health/ready` and `/internal/service/observability/summary`.
+
+For a runtime-data encryption cutover, this general database-only procedure is
+insufficient. Restore the matched old backup, old application revision, and old
+key together as specified in **Runtime-data encryption key cutover**.
 
 ## Provider Failover
 

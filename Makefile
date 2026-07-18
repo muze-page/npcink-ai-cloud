@@ -29,7 +29,7 @@ bootstrap-dev:
 	pnpm --dir frontend install --frozen-lockfile
 
 dev:
-	docker compose -f docker-compose.dev.yml up --build
+	bash scripts/dev-compose.sh up --build
 
 test:
 	docker compose -f docker-compose.dev.yml run --rm $(DOCKER_TEST_PROVIDER_ENV) api python -m pytest
