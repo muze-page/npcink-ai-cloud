@@ -147,6 +147,15 @@ DIAGNOSTIC_ERROR_BUCKETS = (
     "runtime.site_not_active",
     "runtime.site_not_provisioned",
     "transport.timeout",
+    "transport.connect_error",
+    "transport.read_error",
+    "transport.write_error",
+    "transport.close_error",
+    "transport.protocol_error",
+    "transport.proxy_error",
+    "transport.unsupported_protocol",
+    "transport.too_many_redirects",
+    "transport.network_error",
     "transport.request_error",
     "other",
 )
@@ -235,7 +244,7 @@ def _fixed_counts(keys: tuple[str, ...]) -> dict[str, int]:
 
 
 def _diagnostic_http_bucket(item: Observation) -> str:
-    if item.error_code in {"transport.timeout", "transport.request_error"}:
+    if item.error_code.startswith("transport."):
         return "transport"
     if 500 <= item.http_status <= 599:
         return "5xx"
@@ -607,6 +616,38 @@ def _proof_request_hash(request_ref: str) -> str:
     return request_hash
 
 
+def _proof_concurrency_target(metadata: dict[str, object]) -> int:
+    value = metadata.get("proof_concurrency_target", 0)
+    if isinstance(value, bool):
+        raise ProofFailure("provider.concurrency_target_invalid")
+    if isinstance(value, int):
+        target = value
+    elif isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]*", value):
+        target = int(value)
+    else:
+        raise ProofFailure("provider.concurrency_target_invalid")
+    if target < 0 or target > FORMAL_CONCURRENCY:
+        raise ProofFailure("provider.concurrency_target_invalid")
+    return target
+
+
+def _wait_for_provider_concurrency(
+    client: Redis,
+    target: int,
+    *,
+    timeout_seconds: float = 5.0,
+) -> bool:
+    if target <= 1:
+        return True
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    active_key = f"{REDIS_PREFIX}:provider_active"
+    while int(client.get(active_key) or 0) < target:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.005)
+    return True
+
+
 class _ProviderHandler(BaseHTTPRequestHandler):
     server_version = "P5B4ProofProvider/2"
 
@@ -662,6 +703,7 @@ class _ProviderHandler(BaseHTTPRequestHandler):
                 raise ValueError
             request_ref = str(metadata.get("proof_request_ref") or "")
             request_hash = _proof_request_hash(request_ref)
+            concurrency_target = _proof_concurrency_target(metadata)
         except (TypeError, ValueError, json.JSONDecodeError, ProofFailure):
             self._json(400, {"error": {"code": "proof.metadata_invalid"}})
             return
@@ -681,6 +723,8 @@ class _ProviderHandler(BaseHTTPRequestHandler):
                 f"{REDIS_PREFIX}:provider_max_active",
             )
             active_incremented = True
+            if not _wait_for_provider_concurrency(client, concurrency_target):
+                client.incr(f"{REDIS_PREFIX}:provider_barrier_timeouts")
             time.sleep(max(1, delay_ms) / 1_000)
             duration_us = max(1, (time.perf_counter_ns() - started) // 1_000)
             client.hset(f"{REDIS_PREFIX}:provider_duration_us", request_hash, duration_us)
@@ -923,9 +967,21 @@ def _auth_headers(
     return headers
 
 
-def _payload(site_id: str, label: str, *, queued: bool) -> tuple[bytes, str]:
+def _payload(
+    site_id: str,
+    label: str,
+    *,
+    queued: bool,
+    provider_concurrency_target: int = 0,
+) -> tuple[bytes, str]:
     request_hash = _request_hash(label)
     idempotency_key = f"idem-{request_hash[:48]}"
+    proof_metadata: dict[str, object] = {
+        "proof_request_ref": _proof_request_ref(request_hash)
+    }
+    if provider_concurrency_target:
+        proof_metadata["proof_concurrency_target"] = str(provider_concurrency_target)
+    _proof_concurrency_target(proof_metadata)
     data: dict[str, object] = {
         "site_id": site_id,
         "ability_name": "workflow/media_nightly_image_optimize"
@@ -948,7 +1004,7 @@ def _payload(site_id: str, label: str, *, queued: bool) -> tuple[bytes, str]:
         "trace_id": hashlib.sha256(f"payload:{label}".encode()).hexdigest()[:32],
         "input": {
             "messages": [{"role": "user", "content": "bounded proof input"}],
-            "metadata": {"proof_request_ref": _proof_request_ref(request_hash)},
+            "metadata": proof_metadata,
         },
         "policy": {"allow_fallback": False},
     }
@@ -962,6 +1018,24 @@ def _payload(site_id: str, label: str, *, queued: bool) -> tuple[bytes, str]:
     return json.dumps(data, sort_keys=True, separators=(",", ":")).encode(), idempotency_key
 
 
+def _transport_error_code(error: httpx.RequestError) -> str:
+    classifications: tuple[tuple[type[httpx.RequestError], str], ...] = (
+        (httpx.ConnectError, "transport.connect_error"),
+        (httpx.ReadError, "transport.read_error"),
+        (httpx.WriteError, "transport.write_error"),
+        (httpx.CloseError, "transport.close_error"),
+        (httpx.ProtocolError, "transport.protocol_error"),
+        (httpx.ProxyError, "transport.proxy_error"),
+        (httpx.UnsupportedProtocol, "transport.unsupported_protocol"),
+        (httpx.TooManyRedirects, "transport.too_many_redirects"),
+        (httpx.NetworkError, "transport.network_error"),
+    )
+    for error_type, code in classifications:
+        if isinstance(error, error_type):
+            return code
+    return "transport.request_error"
+
+
 async def _execute(
     client: httpx.AsyncClient,
     *,
@@ -970,8 +1044,14 @@ async def _execute(
     phase: str,
     queued: bool = False,
     payload_site: str | None = None,
+    provider_concurrency_target: int = 0,
 ) -> Observation:
-    body, idem = _payload(payload_site or credential[0], label, queued=queued)
+    body, idem = _payload(
+        payload_site or credential[0],
+        label,
+        queued=queued,
+        provider_concurrency_target=provider_concurrency_target,
+    )
     started = time.perf_counter_ns()
     try:
         response = await client.post(
@@ -996,13 +1076,13 @@ async def _execute(
             elapsed_ms=(time.perf_counter_ns() - started) / 1_000_000,
             phase=phase,
         )
-    except httpx.RequestError:
+    except httpx.RequestError as error:
         return Observation(
             request_hash=_request_hash(label),
             run_id="",
             http_status=0,
             runtime_status="",
-            error_code="transport.request_error",
+            error_code=_transport_error_code(error),
             elapsed_ms=(time.perf_counter_ns() - started) / 1_000_000,
             phase=phase,
         )
@@ -1139,6 +1219,7 @@ async def _concurrency_probe(
                 credential=credentials[index % SITE_COUNT],
                 label=f"baseline-{baseline_index}-concurrency-{index}",
                 phase="concurrency_probe",
+                provider_concurrency_target=concurrency,
             )
         finally:
             current -= 1
@@ -1317,6 +1398,9 @@ def _integrity(
         queue_residue = int(provider_client.llen(settings.runtime_queue_key))
         provider_active = int(provider_client.get(f"{REDIS_PREFIX}:provider_active") or 0)
         provider_max_active = int(provider_client.get(f"{REDIS_PREFIX}:provider_max_active") or 0)
+        provider_barrier_timeouts = int(
+            provider_client.get(f"{REDIS_PREFIX}:provider_barrier_timeouts") or 0
+        )
     finally:
         provider_client.close()
     hash_by_run = {item.run_id: item.request_hash for item in observations if item.run_id}
@@ -1400,6 +1484,7 @@ def _integrity(
         "redis_queue_residue": queue_residue,
         "provider_active_residue": provider_active,
         "provider_max_concurrency": provider_max_active,
+        "provider_barrier_timeouts": provider_barrier_timeouts,
         "artifact_records": artifact_count,
         "queue_wait_p95_seconds": round(_percentile(queue_waits, 0.95), 4),
     }
@@ -1621,12 +1706,13 @@ def _latency_summary(
     invocations: dict[str, int],
     durations: dict[str, float],
 ) -> dict[str, object]:
+    accepted_observations = [
+        item for item in observations if item.accepted and bool(item.run_id)
+    ]
     excluded: list[float] = []
     provider_wall: list[float] = []
     db_call: list[float] = []
-    for item in observations:
-        if not item.accepted or not item.run_id:
-            continue
+    for item in accepted_observations:
         wall_ms = durations.get(item.request_hash, 0.0)
         db_ms = durations.get(f"db:{item.run_id}", 0.0)
         if invocations.get(item.request_hash) != 1 or wall_ms <= 0 or db_ms <= 0:
@@ -1635,7 +1721,10 @@ def _latency_summary(
         db_call.append(db_ms)
         excluded.append(max(0.0, item.elapsed_ms - max(wall_ms, db_ms)))
     return {
+        "attempted_sample_count": len(observations),
+        "accepted_sample_count": len(accepted_observations),
         "sample_count": len(excluded),
+        "missing_persistent_evidence_count": len(accepted_observations) - len(excluded),
         "provider_excluded_p95_ms": round(_percentile(excluded, 0.95), 3),
         "provider_excluded_p99_ms": round(_percentile(excluded, 0.99), 3),
         "proof_provider_wall_p95_ms": round(_percentile(provider_wall, 0.95), 3),
@@ -1643,7 +1732,8 @@ def _latency_summary(
         "exclusion_method": (
             "client_elapsed_minus_max_persistent_provider_wall_and_database_provider_call"
         ),
-        "all_samples_have_persistent_provider_evidence": len(excluded) == len(observations),
+        "all_accepted_samples_have_persistent_provider_evidence": len(excluded)
+        == len(accepted_observations),
     }
 
 
@@ -1842,7 +1932,7 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
         "provider_excluded_p95": float(latency["provider_excluded_p95_ms"]) <= 500,
         "provider_excluded_p99": float(latency["provider_excluded_p99_ms"]) <= 1_000,
         "persistent_provider_latency_complete": bool(
-            latency["all_samples_have_persistent_provider_evidence"]
+            latency["all_accepted_samples_have_persistent_provider_evidence"]
         ),
         "queue_requested_accepted_completed_exact": queue_exact,
         "queue_wait": float(integrity["queue_wait_p95_seconds"]) <= DEFAULT_WORKER_POLL_SECONDS * 2,
@@ -1875,6 +1965,7 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
         "real_concurrency_observed": (
             probe_client_max >= concurrency_target
             and int(integrity["provider_max_concurrency"]) >= concurrency_target
+            and int(integrity["provider_barrier_timeouts"]) == 0
         ),
     }
     passed = all(checks.values())

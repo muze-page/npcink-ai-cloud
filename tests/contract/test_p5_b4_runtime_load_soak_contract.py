@@ -358,6 +358,48 @@ def test_provider_reference_is_reversible_and_never_looks_like_pii(
         harness._proof_request_hash("not-a-fixed-proof-reference")
 
 
+def test_concurrency_probe_metadata_and_provider_barrier_are_fail_closed(
+    harness: ModuleType,
+) -> None:
+    from app.domain.runtime.data_guard import find_runtime_data_guard_finding
+
+    normal_body, _ = harness._payload("site", "normal", queued=False)
+    normal_metadata = json.loads(normal_body)["input"]["metadata"]
+    assert "proof_concurrency_target" not in normal_metadata
+
+    probe_body, _ = harness._payload(
+        "site",
+        "probe",
+        queued=False,
+        provider_concurrency_target=harness.FORMAL_CONCURRENCY,
+    )
+    probe_metadata = json.loads(probe_body)["input"]["metadata"]
+    assert probe_metadata["proof_concurrency_target"] == str(harness.FORMAL_CONCURRENCY)
+    assert harness._proof_concurrency_target(probe_metadata) == harness.FORMAL_CONCURRENCY
+    assert find_runtime_data_guard_finding({"metadata": probe_metadata}) is None
+
+    for invalid in (True, "08", "-1", str(harness.FORMAL_CONCURRENCY + 1)):
+        with pytest.raises(harness.ProofFailure, match="provider.concurrency_target_invalid"):
+            harness._proof_concurrency_target({"proof_concurrency_target": invalid})
+
+    class ActiveRedis:
+        def __init__(self, values: list[int]) -> None:
+            self.values = values
+
+        def get(self, _key: str) -> int:
+            if len(self.values) > 1:
+                return self.values.pop(0)
+            return self.values[0]
+
+    assert harness._wait_for_provider_concurrency(
+        ActiveRedis([7, 8]), 8, timeout_seconds=0.1
+    ) is True
+    assert harness._wait_for_provider_concurrency(
+        ActiveRedis([7]), 8, timeout_seconds=0
+    ) is False
+    assert "provider_concurrency_target=concurrency" in _source(HARNESS)
+
+
 def test_failed_response_shape_is_persisted_but_not_accepted(harness: ModuleType) -> None:
     failed = harness.Observation(
         request_hash="e" * 64,
@@ -415,6 +457,51 @@ def test_transport_timeout_is_safely_classified_without_exception_text(
     assert summary["negative_control_included"] is False
     assert summary["complete"] is False
     assert "secret transport detail" not in serialized
+
+
+def test_transport_subtype_and_accepted_latency_denominator_are_precise(
+    harness: ModuleType,
+) -> None:
+    accepted = harness.Observation(
+        request_hash="a" * 64,
+        run_id="run-a",
+        http_status=200,
+        runtime_status="succeeded",
+        error_code="",
+        elapsed_ms=200.0,
+        phase="soak",
+    )
+    transport = harness.Observation(
+        request_hash="b" * 64,
+        run_id="",
+        http_status=0,
+        runtime_status="",
+        error_code="transport.read_error",
+        elapsed_ms=1.0,
+        phase="soak",
+    )
+    summary = harness._latency_summary(
+        [accepted, transport],
+        {accepted.request_hash: 1},
+        {accepted.request_hash: 150.0, "db:run-a": 155.0},
+    )
+    assert summary["attempted_sample_count"] == 2
+    assert summary["accepted_sample_count"] == 1
+    assert summary["sample_count"] == 1
+    assert summary["missing_persistent_evidence_count"] == 0
+    assert summary["all_accepted_samples_have_persistent_provider_evidence"] is True
+
+    missing = harness._latency_summary([accepted], {}, {})
+    assert missing["accepted_sample_count"] == 1
+    assert missing["missing_persistent_evidence_count"] == 1
+    assert missing["all_accepted_samples_have_persistent_provider_evidence"] is False
+
+    error = httpx.ReadError("sensitive transport detail")
+    assert harness._transport_error_code(error) == "transport.read_error"
+    diagnostic = harness._diagnostic_summary([transport])
+    assert diagnostic["by_http_status"]["transport"] == 1
+    assert diagnostic["by_error_code"]["transport.read_error"] == 1
+    assert "sensitive transport detail" not in json.dumps(diagnostic, sort_keys=True)
 
 
 def test_usage_meter_closed_set_enforces_structural_references(harness: ModuleType) -> None:
