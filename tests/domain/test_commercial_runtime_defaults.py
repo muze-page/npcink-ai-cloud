@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
@@ -15,11 +16,42 @@ from app.core.models import (
     PaidCreditGrant,
 )
 from app.domain.commercial.service import CommercialService
+from app.domain.runtime.errors import RuntimeQuotaExceededError
 from tests.conftest import seed_site_auth
 
 
 def _sqlite_url(tmp_path: Path) -> str:
     return f"sqlite+pysqlite:///{tmp_path / 'commercial-runtime-defaults.sqlite3'}"
+
+
+def _record_existing_credit_usage(
+    database_url: str,
+    *,
+    site_id: str,
+    credits: float,
+) -> None:
+    with get_session(database_url) as session:
+        repository = CommercialRepository(session)
+        subscription = session.scalar(select(AccountSubscription))
+        assert subscription is not None
+        repository.record_credit_ledger_entry(
+            account_id=subscription.account_id,
+            site_id=site_id,
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id=f"run_{site_id}_existing_usage",
+            provider_call_id=None,
+            source_type="runs",
+            source_id=f"{site_id}_existing_usage",
+            credit_delta=-credits,
+            quantity=credits,
+            unit="credit",
+            rate=1,
+            rate_unit="credit",
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key=f"{site_id}-existing-usage",
+        )
+        session.commit()
 
 
 def test_authorize_runtime_request_uses_free_ai_credit_package_defaults(
@@ -227,6 +259,179 @@ def test_authorize_runtime_request_adds_active_paid_grants_to_package_headroom(
     assert grant.remaining_credits == 9999.0
     assert paid_consume is not None
     assert paid_consume.metadata_json["paid_credit_consumed"] == 1.0
+    dispose_engine(database_url)
+
+
+def test_authorize_runtime_request_keeps_zero_credit_limit_unlimited_after_usage(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_unlimited_credits",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        budgets={"max_ai_credits_per_period": 0},
+    )
+    _record_existing_credit_usage(
+        database_url,
+        site_id="site_unlimited_credits",
+        credits=5,
+    )
+
+    service = CommercialService(database_url)
+    with get_session(database_url) as session:
+        decision = service.authorize_runtime_request(
+            session=session,
+            site_id="site_unlimited_credits",
+            ability_family="text",
+            channel="openapi",
+            execution_kind="text",
+            execution_tier="cloud",
+            data_classification="internal",
+            trace_id="trace-unlimited-credits-001",
+            idempotency_key="idem-unlimited-credits-001",
+            request_kind="execute",
+            estimated_ai_credits=1,
+        )
+        session.commit()
+
+    assert decision["decision_code"] == "commercial.allowed"
+    assert decision["ai_credit_budget"] == {
+        "used": 5.0,
+        "estimated_request": 1.0,
+        "limit": 0.0,
+        "package_limit": 0.0,
+        "package_remaining": 0.0,
+        "paid_remaining": 0.0,
+        "paid_grant_count": 0,
+        "remaining_before_request": 0.0,
+    }
+    dispose_engine(database_url)
+
+
+def test_zero_credit_limit_does_not_consume_paid_grants_after_acceptance(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_unlimited_with_paid_grant",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        budgets={"max_ai_credits_per_period": 0},
+    )
+    with get_session(database_url) as session:
+        repository = CommercialRepository(session)
+        subscription = session.scalar(select(AccountSubscription))
+        assert subscription is not None
+        period_start = subscription.current_period_start_at or datetime.now(UTC)
+        if period_start.tzinfo is None:
+            period_start = period_start.replace(tzinfo=UTC)
+        now = period_start + timedelta(hours=1)
+        repository.create_payment_order(
+            order_id="pay_unlimited_runtime_grant",
+            account_id=subscription.account_id,
+            site_id="site_unlimited_with_paid_grant",
+            subscription_id=subscription.subscription_id,
+            plan_id=subscription.plan_id,
+            plan_version_id=subscription.plan_version_id,
+            provider="manual",
+            external_order_no="pay_unlimited_runtime_grant",
+            status="paid",
+            amount=10.0,
+            currency="CNY",
+            subject="Unlimited runtime paid-credit fixture",
+            checkout_url=None,
+            refund_window_end_at=None,
+            idempotency_key="pay-unlimited-runtime-grant",
+            metadata_json={"purchase_kind": "credit_pack"},
+        )
+        repository.upsert_paid_credit_grant(
+            account_id=subscription.account_id,
+            payment_order_id="pay_unlimited_runtime_grant",
+            original_credits=10,
+            expires_at=now + timedelta(days=365),
+        )
+        run = RuntimeRepository(session).create_run(
+            run_id="run_unlimited_paid_credit_allocation",
+            site_id="site_unlimited_with_paid_grant",
+            account_id=subscription.account_id,
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            ability_name="test/unlimited-paid-credit",
+            ability_family="workflow",
+            skill_id="",
+            workflow_id="",
+            contract_version="v1",
+            channel="openapi",
+            execution_kind="text",
+            execution_tier="cloud",
+            execution_pattern="inline",
+            data_classification="internal",
+            profile_id="text.balanced",
+            canonical_run_id=None,
+            status="running",
+            idempotency_key="run-unlimited-paid-credit-allocation",
+            request_fingerprint="fingerprint-unlimited-paid-credit-allocation",
+            trace_id="trace-unlimited-paid-credit-allocation",
+            input_json={},
+            execution_input_ciphertext=None,
+            policy_json={},
+        )
+        service = CommercialService(database_url, now_factory=lambda: now)
+        service.record_run_acceptance(session=session, run=run)
+        grant = session.scalar(select(PaidCreditGrant))
+        consume = session.scalar(
+            select(CreditLedgerEntry).where(
+                CreditLedgerEntry.run_id == "run_unlimited_paid_credit_allocation"
+            )
+        )
+        session.commit()
+
+    assert grant is not None
+    assert grant.remaining_credits == 10.0
+    assert consume is not None
+    assert consume.metadata_json["paid_credit_consumed"] == 0.0
+    assert consume.metadata_json["package_credit_consumed"] == 1.0
+    dispose_engine(database_url)
+
+
+def test_authorize_runtime_request_still_rejects_exhausted_finite_credit_limit(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_finite_credits",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        budgets={"max_ai_credits_per_period": 5},
+    )
+    _record_existing_credit_usage(
+        database_url,
+        site_id="site_finite_credits",
+        credits=5,
+    )
+
+    service = CommercialService(database_url)
+    with get_session(database_url) as session:
+        with pytest.raises(RuntimeQuotaExceededError) as exc_info:
+            service.authorize_runtime_request(
+                session=session,
+                site_id="site_finite_credits",
+                ability_family="text",
+                channel="openapi",
+                execution_kind="text",
+                execution_tier="cloud",
+                data_classification="internal",
+                trace_id="trace-finite-credits-001",
+                idempotency_key="idem-finite-credits-001",
+                request_kind="execute",
+                estimated_ai_credits=1,
+            )
+
+    assert exc_info.value.error_code == "commercial.quota_exceeded"
     dispose_engine(database_url)
 
 

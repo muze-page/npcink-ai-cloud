@@ -493,9 +493,14 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         )
         package_credit_remaining = max(0.0, package_credit_limit - used_ai_credits)
         paid_credit_remaining = self._coerce_float(paid_credit.get("remaining"))
-        effective_ai_credit_limit = round(
-            used_ai_credits + package_credit_remaining + paid_credit_remaining,
-            6,
+        # Zero is the unlimited sentinel; prior usage must not turn it into a finite limit.
+        effective_ai_credit_limit = (
+            0.0
+            if package_credit_limit <= 0
+            else round(
+                used_ai_credits + package_credit_remaining + paid_credit_remaining,
+                6,
+            )
         )
         projected_ai_credits = (
             max(0.0, service._coerce_float(estimated_ai_credits))
@@ -844,6 +849,11 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             0.0,
             -self._coerce_float(getattr(entry, "credit_delta", 0.0)),
         )
+        if package_limit <= 0:
+            entry_metadata["paid_credit_consumed"] = 0.0
+            entry_metadata["package_credit_consumed"] = round(current_credits, 6)
+            entry.metadata_json = entry_metadata
+            return
         period_entries = repository.list_credit_ledger_entries(
             account_ids=[str(entry.account_id)],
             subscription_id=subscription.subscription_id,
