@@ -325,6 +325,37 @@ class WordPressAIConnectorTextProvider:
                 "**这个插件非常实用，能够帮助站长高效完成大量内容相关工作。**\n\n"
                 "如果你愿意，我还可以继续帮你调整风格。"
             )
+        elif task == "content_rewrite" and "rewrite alternatives" in source_text:
+            output_text = (
+                "The selected whole paragraph block is identified clearly. OR "
+                "This is the chosen whole paragraph block. Both rephrasings preserve "
+                "the original meaning while explaining the alternatives."
+            )
+        elif task == "content_rewrite" and "rewrite legitimate multi sentence" in source_text:
+            output_text = (
+                "The API supports v1 and v2. Both versions remain available during the "
+                "documented migration window."
+            )
+        elif task == "content_rewrite" and "rewrite legitimate this rewrite" in source_text:
+            output_text = (
+                "The editor keeps the reviewed paragraph intact. This rewrite also "
+                "preserves the second operational requirement."
+            )
+        elif task == "content_rewrite" and "rewrite legitimate bullet list" in source_text:
+            output_text = (
+                "- Keep the first editorial requirement intact.\n"
+                "- Keep the second editorial requirement intact."
+            )
+        elif task == "content_rewrite" and "rewrite legitimate numbered list" in source_text:
+            output_text = (
+                "1. Keep the first migration step intact.\n"
+                "2. Keep the second migration step intact."
+            )
+        elif task == "content_rewrite" and "rewrite legitimate inline bold" in source_text:
+            output_text = (
+                "Keep the local review step and preserve the **canonical audit trail**. "
+                "Apply only after explicit approval."
+            )
         elif task == "content_rewrite" and "long rewrite output" in source_text:
             output_text = LONG_REWRITE_OUTPUT_TEXT
         elif task == "content_summary":
@@ -2759,6 +2790,89 @@ def test_wordpress_ai_connector_runtime_normalizes_rewrite_variant_bundle(
     result_text = response.json()["data"]["result"]["output"]["output_text"]
     assert result_text == "这个插件非常实用，能够帮助站长高效完成大量内容相关工作。"
     assert "如果你愿意" not in result_text
+
+
+def test_wordpress_ai_connector_runtime_extracts_one_rewrite_from_alternative_explanation(
+    tmp_path: Path,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "task": "content_rewrite",
+            "request": {
+                "source_text": (
+                    "<block-content>rewrite alternatives response paragraph.</block-content>"
+                ),
+            },
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="wp-ai-connector-rewrite-alternative-explanation",
+    )
+
+    assert response.status_code == 200
+    result_text = response.json()["data"]["result"]["output"]["output_text"]
+    assert result_text == "The selected whole paragraph block is identified clearly."
+    assert " OR " not in result_text
+    assert "Both rephrasings" not in result_text
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected"),
+    [
+        (
+            "rewrite legitimate multi sentence",
+            "The API supports v1 and v2. Both versions remain available during the "
+            "documented migration window.",
+        ),
+        (
+            "rewrite legitimate this rewrite",
+            "The editor keeps the reviewed paragraph intact. This rewrite also "
+            "preserves the second operational requirement.",
+        ),
+        (
+            "rewrite legitimate bullet list",
+            "- Keep the first editorial requirement intact. "
+            "- Keep the second editorial requirement intact.",
+        ),
+        (
+            "rewrite legitimate numbered list",
+            "1. Keep the first migration step intact. "
+            "2. Keep the second migration step intact.",
+        ),
+        (
+            "rewrite legitimate inline bold",
+            "Keep the local review step and preserve the canonical audit trail. "
+            "Apply only after explicit approval.",
+        ),
+    ],
+)
+def test_wordpress_ai_connector_runtime_preserves_legitimate_rewrite_structure(
+    tmp_path: Path,
+    marker: str,
+    expected: str,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "task": "content_rewrite",
+            "request": {
+                "source_text": f"<block-content>{marker}.</block-content>",
+            },
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key=f"wp-ai-connector-{marker.replace(' ', '-')}",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["result"]["output"]["output_text"] == expected
 
 
 def test_wordpress_ai_connector_runtime_preserves_long_rewrite_result_contract(

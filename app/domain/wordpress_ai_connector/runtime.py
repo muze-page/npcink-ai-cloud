@@ -845,9 +845,22 @@ class WordPressOperationRuntime:
 
     def _extract_task_candidate(self, output_text: str, *, task: str, limit: int) -> str:
         if task == "content_rewrite":
-            bold_candidate = self._extract_bold_candidate(output_text)
-            if bold_candidate:
-                return self._truncate_text(bold_candidate, limit=limit)
+            if self._is_boilerplate_output(output_text):
+                bold_candidate = self._extract_bold_candidate(output_text)
+                if bold_candidate:
+                    return self._truncate_text(bold_candidate, limit=limit)
+            alternative_candidate = self._extract_rewrite_alternative_candidate(output_text)
+            if alternative_candidate:
+                return self._truncate_text(alternative_candidate, limit=limit)
+            text = self._strip_markdown(output_text)
+            text = re.sub(
+                r"^(?:rewrite|rewritten|rephrased|改写(?:结果|版本)?)\s*[:：]\s*",
+                "",
+                text,
+                flags=re.I,
+            )
+            if text and not self._is_boilerplate_output(text):
+                return self._truncate_text(text, limit=limit)
         if task == "title_generation":
             heading_candidate = self._extract_title_heading(output_text)
             if heading_candidate:
@@ -879,13 +892,33 @@ class WordPressOperationRuntime:
         return ""
 
     def _extract_bold_candidate(self, output_text: str) -> str:
-        for match in re.finditer(r"\*\*(.{4,260}?)\*\*", output_text, flags=re.S):
+        for match in re.finditer(
+            r"(?m)^\s*\*\*(.{4,260}?)\*\*\s*$",
+            output_text,
+        ):
             candidate = self._strip_markdown(match.group(1))
             if re.search(r"(?:版|version|option)\s*[:：]?$", candidate, flags=re.I):
                 continue
             if len(candidate) >= 8:
                 return candidate
         return ""
+
+    def _extract_rewrite_alternative_candidate(self, output_text: str) -> str:
+        """Extract one candidate only from a complete, high-confidence bundle."""
+        text = self._strip_markdown(output_text)
+        match = re.fullmatch(
+            r"(?P<first>.+?[.!?])\s+OR\s+"
+            r"(?P<second>.+?[.!?])\s+"
+            r"Both\s+rephrasings\b.+",
+            text,
+            flags=re.I | re.S,
+        )
+        if match is None:
+            return ""
+        candidate = match.group("first").strip()
+        if len(candidate) < 8 or self._is_boilerplate_output(candidate):
+            return ""
+        return candidate
 
     def _extract_first_list_item(self, output_text: str) -> str:
         for line in output_text.splitlines():
