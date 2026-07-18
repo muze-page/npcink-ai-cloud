@@ -8,8 +8,8 @@ COMPOSE_FILE="${ROOT_DIR}/docker-compose.p5-b4-runtime-proof.yml"
 HARNESS_FILE="${ROOT_DIR}/scripts/p5_b4_runtime_load_soak.py"
 MIGRATIONS_DIR="${ROOT_DIR}/migrations"
 DISPOSABLE_CONFIRMATION="I_UNDERSTAND_THIS_DESTROYS_PROOF_DATA"
-DATASET_ID="p5_b4_runtime_8_sites_v3"
-DATASET_CONFIG='{"commercial":{"max_ai_credits_per_site_period":10000.0},"contract":"p5_b4_runtime_dataset.v3","formal":{"baselines":3,"concurrency":8,"queue_burst":64,"request_rate":8,"resource_idle_minimum_sample_count":12,"resource_idle_minimum_span_seconds":55,"resource_idle_recovery_seconds":60,"resource_process_scope":"pid1_service_tree_stable_snapshot_v1","soak_seconds":600,"warmup_seconds":30},"provider_delay_ms":150,"quick":{"baselines":1,"concurrency":2,"queue_burst":8,"request_rate":2,"soak_seconds":5,"warmup_seconds":3},"sites":8,"worker":{"batch_size":8,"poll_seconds":5}}'
+DATASET_ID="p5_b4_runtime_8_sites_v4"
+DATASET_CONFIG='{"commercial":{"max_ai_credits_per_site_period":10000.0},"contract":"p5_b4_runtime_dataset.v4","formal":{"baselines":3,"concurrency":8,"queue_burst":64,"request_rate":8,"resource_idle_minimum_sample_count":12,"resource_idle_minimum_span_seconds":55,"resource_idle_recovery_seconds":60,"resource_process_scope":"pid1_service_tree_stable_cohort_v2","rss_endpoint_window_min_span_seconds":55,"rss_endpoint_window_sample_count":12,"rss_growth_method":"steady_endpoint_window_median_v1","rss_growth_percent_max":10,"rss_idle_method":"four_block_budget_confirmation_v1","soak_seconds":600,"warmup_seconds":30},"provider_delay_ms":150,"quick":{"baselines":1,"concurrency":2,"queue_burst":8,"request_rate":2,"soak_seconds":5,"warmup_seconds":3},"sites":8,"worker":{"batch_size":8,"poll_seconds":5}}'
 
 MODE=""
 OUTPUT_ARGUMENT=""
@@ -378,6 +378,7 @@ container_process_metrics() {
 	local expected_min_processes="$2"
 	docker exec --user 0 "${container_id}" python -c '
 import glob
+import hashlib
 import os
 import sys
 import time
@@ -472,7 +473,13 @@ def capture(expected_min_processes):
         raise SnapshotRace("service process metrics incomplete")
     if rss_bytes <= 0 or fd_count <= 0:
         raise SnapshotRace("service process metrics invalid")
-    return rss_bytes, fd_count
+    process_count = len(metrics)
+    cohort = "".join(
+        f"{pid}\t{parent_pid}\t{starttime}\n"
+        for pid, (parent_pid, starttime) in sorted(before.items())
+    ).encode("ascii")
+    cohort_sha256 = hashlib.sha256(cohort).hexdigest()
+    return rss_bytes, fd_count, process_count, cohort_sha256
 
 
 try:
@@ -485,8 +492,10 @@ if expected_min_processes < 1:
 last_error = None
 for attempt in range(MAX_ATTEMPTS):
     try:
-        rss_bytes, fd_count = capture(expected_min_processes)
-        print(f"{rss_bytes}\t{fd_count}")
+        rss_bytes, fd_count, process_count, cohort_sha256 = capture(
+            expected_min_processes
+        )
+        print(f"{rss_bytes}\t{fd_count}\t{process_count}\t{cohort_sha256}")
         break
     except SnapshotRace as error:
         last_error = error
@@ -522,9 +531,14 @@ resource_sampler() {
 	local worker_metrics=""
 	local api_rss=""
 	local api_fds=""
+	local api_process_count=""
+	local api_process_identity_sha256=""
 	local worker_rss=""
 	local worker_fds=""
+	local worker_process_count=""
+	local worker_process_identity_sha256=""
 	local postgres_connections=""
+	local numeric_metric=""
 	local api_state=""
 	local worker_state=""
 	local provider_state=""
@@ -543,7 +557,7 @@ resource_sampler() {
 		-f "${COMPOSE_FILE}" ps --quiet proof-provider)"
 	[ -n "${api_container}" ] && [ -n "${worker_container}" ] && [ -n "${provider_container}" ]
 
-	printf 'elapsed_seconds\tapi_rss_bytes\tapi_fd_count\tworker_rss_bytes\tworker_fd_count\tpostgres_connections\tapi_restart_count\tworker_restart_count\tapi_running\tworker_running\n' >"${resource_file}"
+	printf 'elapsed_seconds\tapi_rss_bytes\tapi_fd_count\tworker_rss_bytes\tworker_fd_count\tpostgres_connections\tapi_restart_count\tworker_restart_count\tapi_running\tworker_running\tapi_process_count\tworker_process_count\tapi_process_identity_sha256\tworker_process_identity_sha256\n' >"${resource_file}"
 	started_at="$(date +%s)"
 	while [ ! -e "${stop_file}" ]; do
 		api_state="$(container_state "${api_container}")"
@@ -558,24 +572,32 @@ EOF
 		[ "${provider_state}" = "1 0" ]
 		api_metrics="$(container_process_metrics "${api_container}" 3)"
 		worker_metrics="$(container_process_metrics "${worker_container}" 1)"
-		IFS=$'\t' read -r api_rss api_fds <<EOF
+		IFS=$'\t' read -r api_rss api_fds api_process_count api_process_identity_sha256 <<EOF
 ${api_metrics}
 EOF
-		IFS=$'\t' read -r worker_rss worker_fds <<EOF
+		IFS=$'\t' read -r worker_rss worker_fds worker_process_count worker_process_identity_sha256 <<EOF
 ${worker_metrics}
 EOF
 		postgres_connections="$(COMPOSE_PROJECT_NAME="${project}" docker compose \
 			-f "${COMPOSE_FILE}" exec -T proof-postgres \
 			psql -U npcink_p5_b4 -d npcink_p5_b4_proof -Atqc \
 			"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()")"
-		case "${api_rss}:${api_fds}:${worker_rss}:${worker_fds}:${postgres_connections}:${api_restarts}:${worker_restarts}:${api_running}:${worker_running}" in
-			*[!0-9:]*|'') return 1 ;;
-		esac
+		for numeric_metric in \
+			"${api_rss}" "${api_fds}" "${worker_rss}" "${worker_fds}" \
+			"${postgres_connections}" "${api_restarts}" "${worker_restarts}" \
+			"${api_running}" "${worker_running}" \
+			"${api_process_count}" "${worker_process_count}"; do
+			[[ "${numeric_metric}" =~ ^[0-9]+$ ]] || return 1
+		done
+		[[ "${api_process_identity_sha256}" =~ ^[0-9a-f]{64}$ ]] || return 1
+		[[ "${worker_process_identity_sha256}" =~ ^[0-9a-f]{64}$ ]] || return 1
 		elapsed="$(( $(date +%s) - started_at ))"
-		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 			"${elapsed}" "${api_rss}" "${api_fds}" \
 			"${worker_rss}" "${worker_fds}" "${postgres_connections}" \
 			"${api_restarts}" "${worker_restarts}" "${api_running}" "${worker_running}" \
+			"${api_process_count}" "${worker_process_count}" \
+			"${api_process_identity_sha256}" "${worker_process_identity_sha256}" \
 			>>"${resource_file}"
 		if [ -e "${sync_request_file}" ] && [ ! -e "${sync_response_file}" ]; then
 			printf '%s\n' "${elapsed}" >"${sync_response_file}"

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from statistics import median_low
+from statistics import median, median_low
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -55,12 +55,12 @@ from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService
 from app.domain.provider_connections.service import ProviderConnectionAdminService
 
-CONTRACT_ID = "p5_b4_external_runtime_load_soak_proof.v3"
+CONTRACT_ID = "p5_b4_external_runtime_load_soak_proof.v4"
 DISPOSABLE_CONFIRMATION = "I_UNDERSTAND_THIS_DESTROYS_PROOF_DATA"
 DATABASE_HOST = "proof-postgres"
 DATABASE_NAME = "npcink_p5_b4_proof"
 DATABASE_USER = "npcink_p5_b4"
-DATABASE_COMMENT = "p5_b4_external_runtime_load_soak_proof_v3"
+DATABASE_COMMENT = "p5_b4_external_runtime_load_soak_proof_v4"
 REDIS_HOST = "proof-redis"
 REDIS_DATABASE = 15
 REDIS_PREFIX = "p5_b4:external_runtime_proof"
@@ -77,13 +77,51 @@ FORMAL_PROVIDER_DELAY_MS = 150
 FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS = 60
 FORMAL_RESOURCE_IDLE_MIN_SAMPLES = 12
 FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS = 55.0
+FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES = 12
+FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS = 55.0
+FORMAL_RSS_IDLE_BLOCK_COUNT = 4
 PROOF_PLAN_ID = "plan_p5_b4_disposable"
 PROOF_PLAN_VERSION_ID = "plan_version_p5_b4_disposable_v1"
 PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD = 10_000.0
+EXPECTED_DATASET_ID = "p5_b4_runtime_8_sites_v4"
+EXPECTED_DATASET_CONFIG: dict[str, object] = {
+    "commercial": {"max_ai_credits_per_site_period": 10_000.0},
+    "contract": "p5_b4_runtime_dataset.v4",
+    "formal": {
+        "baselines": 3,
+        "concurrency": 8,
+        "queue_burst": 64,
+        "request_rate": 8,
+        "resource_idle_minimum_sample_count": 12,
+        "resource_idle_minimum_span_seconds": 55,
+        "resource_idle_recovery_seconds": 60,
+        "resource_process_scope": "pid1_service_tree_stable_cohort_v2",
+        "rss_endpoint_window_min_span_seconds": 55,
+        "rss_endpoint_window_sample_count": 12,
+        "rss_growth_method": "steady_endpoint_window_median_v1",
+        "rss_growth_percent_max": 10,
+        "rss_idle_method": "four_block_budget_confirmation_v1",
+        "soak_seconds": 600,
+        "warmup_seconds": 30,
+    },
+    "provider_delay_ms": 150,
+    "quick": {
+        "baselines": 1,
+        "concurrency": 2,
+        "queue_burst": 8,
+        "request_rate": 2,
+        "soak_seconds": 5,
+        "warmup_seconds": 3,
+    },
+    "sites": 8,
+    "worker": {"batch_size": 8, "poll_seconds": 5},
+}
 RESOURCE_HEADER = (
     "elapsed_seconds\tapi_rss_bytes\tapi_fd_count\tworker_rss_bytes\t"
     "worker_fd_count\tpostgres_connections\tapi_restart_count\t"
-    "worker_restart_count\tapi_running\tworker_running"
+    "worker_restart_count\tapi_running\tworker_running\tapi_process_count\t"
+    "worker_process_count\tapi_process_identity_sha256\t"
+    "worker_process_identity_sha256"
 )
 THRESHOLDS = {
     "unexpected_5xx_max": 0,
@@ -92,7 +130,7 @@ THRESHOLDS = {
     "api_p95_ms_max": 500.0,
     "api_p99_ms_max": 1_000.0,
     "queue_wait_poll_multiple_max": 2.0,
-    "warmup_to_final_rss_growth_percent_max": 10.0,
+    "rss_growth_percent_max": 10.0,
     "achieved_rate_ratio_min": 0.95,
     "scheduler_drift_ms_max": 1_000.0,
     "duplicate_count_max": 0,
@@ -240,6 +278,24 @@ class Observation:
     @property
     def accepted(self) -> bool:
         return self.success_envelope and bool(self.run_id) and not self.error_code
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceSample:
+    elapsed_seconds: float
+    api_rss_bytes: int
+    api_fd_count: int
+    worker_rss_bytes: int
+    worker_fd_count: int
+    postgres_connections: int
+    api_restart_count: int
+    worker_restart_count: int
+    api_running: int
+    worker_running: int
+    api_process_count: int
+    worker_process_count: int
+    api_process_identity_sha256: str
+    worker_process_identity_sha256: str
 
 
 def _fixed_counts(keys: tuple[str, ...]) -> dict[str, int]:
@@ -450,14 +506,16 @@ def _dataset_attribution() -> tuple[dict[str, object], str]:
 
     if sensitive(parsed):
         raise ProofFailure("configuration.dataset_config_sensitive")
-    commercial = parsed.get("commercial")
-    if (
-        parsed.get("contract") != "p5_b4_runtime_dataset.v3"
-        or not isinstance(commercial, dict)
-        or commercial.get("max_ai_credits_per_site_period") != PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD
-    ):
-        raise ProofFailure("configuration.dataset_contract_invalid")
+    if _env("P5_B4_DATASET_ID") != EXPECTED_DATASET_ID:
+        raise ProofFailure("configuration.dataset_id_invalid")
     canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+    expected_canonical = json.dumps(
+        EXPECTED_DATASET_CONFIG,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if canonical != expected_canonical:
+        raise ProofFailure("configuration.dataset_contract_invalid")
     digest = hashlib.sha256(canonical.encode()).hexdigest()
     if digest != _sha_env("P5_B4_DATASET_SHA256"):
         raise ProofFailure("configuration.dataset_sha256_mismatch")
@@ -1650,6 +1708,273 @@ def _resource_time_origin(path: Path, *, timeout_seconds: float = 30.0) -> float
         response.unlink(missing_ok=True)
 
 
+def _parse_resource_sample(fields: list[str]) -> ResourceSample:
+    if len(fields) != 14:
+        raise ProofFailure("resources.row_invalid")
+    try:
+        elapsed_seconds = float(fields[0])
+        integer_values = [int(value) for value in fields[1:12]]
+    except ValueError as error:
+        raise ProofFailure("resources.row_invalid") from error
+    if (
+        not math.isfinite(elapsed_seconds)
+        or elapsed_seconds < 0
+        or any(value < 0 for value in integer_values)
+        or integer_values[7] not in {0, 1}
+        or integer_values[8] not in {0, 1}
+        or not HASH_PATTERN.fullmatch(fields[12])
+        or not HASH_PATTERN.fullmatch(fields[13])
+    ):
+        raise ProofFailure("resources.row_invalid")
+    return ResourceSample(
+        elapsed_seconds=elapsed_seconds,
+        api_rss_bytes=integer_values[0],
+        api_fd_count=integer_values[1],
+        worker_rss_bytes=integer_values[2],
+        worker_fd_count=integer_values[3],
+        postgres_connections=integer_values[4],
+        api_restart_count=integer_values[5],
+        worker_restart_count=integer_values[6],
+        api_running=integer_values[7],
+        worker_running=integer_values[8],
+        api_process_count=integer_values[9],
+        worker_process_count=integer_values[10],
+        api_process_identity_sha256=fields[12],
+        worker_process_identity_sha256=fields[13],
+    )
+
+
+def _process_cohort_evidence(samples: list[ResourceSample]) -> dict[str, object]:
+    def service_evidence(
+        *,
+        process_counts: list[int],
+        identities: list[str],
+        minimum_process_count: int,
+    ) -> dict[str, object]:
+        distinct_counts = sorted(set(process_counts))
+        distinct_identities = sorted(set(identities))
+        count_stable = len(distinct_counts) == 1
+        identity_unique = len(distinct_identities) == 1
+        minimum_met = bool(process_counts) and all(
+            count >= minimum_process_count for count in process_counts
+        )
+        passed = bool(process_counts) and count_stable and identity_unique and minimum_met
+        return {
+            "sample_count": len(process_counts),
+            "minimum_process_count": minimum_process_count,
+            "process_counts": distinct_counts,
+            "process_count_stable": count_stable,
+            "minimum_process_count_met": minimum_met,
+            "identity_sha256_values": distinct_identities,
+            "identity_sha256_unique": identity_unique,
+            "passed": passed,
+        }
+
+    api = service_evidence(
+        process_counts=[sample.api_process_count for sample in samples],
+        identities=[sample.api_process_identity_sha256 for sample in samples],
+        minimum_process_count=3,
+    )
+    worker = service_evidence(
+        process_counts=[sample.worker_process_count for sample in samples],
+        identities=[sample.worker_process_identity_sha256 for sample in samples],
+        minimum_process_count=1,
+    )
+    return {
+        "scope": "measured_and_idle_samples",
+        "evaluated": bool(samples),
+        "sample_count": len(samples),
+        "api": api,
+        "worker": worker,
+        "all_valid": bool(api["passed"] and worker["passed"]),
+    }
+
+
+def _rss_growth_evidence(
+    measured_samples: list[ResourceSample],
+    idle_samples: list[ResourceSample],
+    *,
+    formal: bool,
+    rss_attribute: str,
+) -> dict[str, object]:
+    threshold_percent = float(THRESHOLDS["rss_growth_percent_max"])
+
+    def empty_window() -> dict[str, object]:
+        return {
+            "sample_count": 0,
+            "sample_span_seconds": None,
+            "minimum_sample_count": FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES,
+            "minimum_span_seconds": FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS,
+            "median_rss_bytes": None,
+            "complete": False,
+        }
+
+    def window_evidence(samples: list[ResourceSample]) -> tuple[dict[str, object], float | None]:
+        span_seconds = (
+            samples[-1].elapsed_seconds - samples[0].elapsed_seconds if len(samples) >= 2 else 0.0
+        )
+        rss_values = [float(getattr(sample, rss_attribute)) for sample in samples]
+        median_rss = float(median(rss_values)) if rss_values else None
+        complete = (
+            len(samples) == FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES
+            and span_seconds >= FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS
+            and median_rss is not None
+            and median_rss > 0
+        )
+        return (
+            {
+                "sample_count": len(samples),
+                "sample_span_seconds": round(span_seconds, 3),
+                "minimum_sample_count": FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES,
+                "minimum_span_seconds": FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS,
+                "median_rss_bytes": median_rss,
+                "complete": complete,
+            },
+            median_rss,
+        )
+
+    idle_span_seconds = (
+        idle_samples[-1].elapsed_seconds - idle_samples[0].elapsed_seconds
+        if len(idle_samples) >= 2
+        else 0.0
+    )
+    if not formal:
+        return {
+            "evaluated": False,
+            "method": "steady_endpoint_window_median_v1",
+            "threshold_percent": threshold_percent,
+            "observed_measured_sample_count": len(measured_samples),
+            "baseline_window": empty_window(),
+            "terminal_window": empty_window(),
+            "windows_non_overlapping": False,
+            "growth_percent": None,
+            "growth_percent_rounded": None,
+            "active_within_budget": None,
+            "idle_confirmation": {
+                "required": False,
+                "evaluated": False,
+                "method": "four_block_budget_confirmation_v1",
+                "sample_count": len(idle_samples),
+                "sample_span_seconds": round(idle_span_seconds, 3),
+                "minimum_sample_count": FORMAL_RESOURCE_IDLE_MIN_SAMPLES,
+                "minimum_span_seconds": FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS,
+                "block_sample_counts": [],
+                "block_median_rss_bytes": [],
+                "baseline_median_rss_bytes": None,
+                "budget_ceiling_rss_bytes": None,
+                "last_two_block_median_rss_bytes": [],
+                "status": "not_evaluated",
+                "within_budget": None,
+            },
+            "within_budget": None,
+        }
+
+    baseline_samples = measured_samples[:FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES]
+    terminal_samples = measured_samples[-FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES:]
+    baseline_window, baseline_median = window_evidence(baseline_samples)
+    terminal_window, terminal_median = window_evidence(terminal_samples)
+    windows_non_overlapping = bool(
+        baseline_samples
+        and terminal_samples
+        and baseline_samples[-1].elapsed_seconds < terminal_samples[0].elapsed_seconds
+    )
+    endpoint_evaluated = bool(
+        baseline_window["complete"]
+        and terminal_window["complete"]
+        and windows_non_overlapping
+        and baseline_median is not None
+        and terminal_median is not None
+    )
+    growth_percent_unrounded = (
+        (terminal_median - baseline_median) / baseline_median * 100.0
+        if endpoint_evaluated and baseline_median is not None and terminal_median is not None
+        else None
+    )
+    active_within_budget = bool(
+        endpoint_evaluated
+        and baseline_median is not None
+        and terminal_median is not None
+        and terminal_median * 100.0 <= baseline_median * (100.0 + threshold_percent)
+    )
+
+    idle_complete = (
+        len(idle_samples) >= FORMAL_RESOURCE_IDLE_MIN_SAMPLES
+        and idle_span_seconds >= FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS
+        and baseline_median is not None
+        and baseline_median > 0
+    )
+    idle_blocks = (
+        [
+            idle_samples[
+                index * len(idle_samples) // FORMAL_RSS_IDLE_BLOCK_COUNT : (index + 1)
+                * len(idle_samples)
+                // FORMAL_RSS_IDLE_BLOCK_COUNT
+            ]
+            for index in range(FORMAL_RSS_IDLE_BLOCK_COUNT)
+        ]
+        if idle_complete
+        else []
+    )
+    idle_levels = (
+        [
+            float(median([float(getattr(sample, rss_attribute)) for sample in block]))
+            for block in idle_blocks
+        ]
+        if idle_blocks and all(idle_blocks)
+        else []
+    )
+    budget_ceiling = baseline_median * (1.0 + threshold_percent / 100.0) if idle_levels else None
+    last_two_idle_levels = idle_levels[-2:] if idle_levels else []
+    if budget_ceiling is None or len(last_two_idle_levels) != 2:
+        idle_status = "insufficient_samples"
+    elif all(
+        level * 100.0 <= baseline_median * (100.0 + threshold_percent)
+        for level in last_two_idle_levels
+    ):
+        idle_status = "within_budget"
+    elif all(
+        level * 100.0 > baseline_median * (100.0 + threshold_percent)
+        for level in last_two_idle_levels
+    ):
+        idle_status = "retained_over_budget"
+    else:
+        idle_status = "inconclusive"
+    idle_within_budget = idle_status == "within_budget"
+    within_budget = endpoint_evaluated and active_within_budget and idle_within_budget
+    growth_percent_rounded = (
+        round(growth_percent_unrounded, 3) if growth_percent_unrounded is not None else None
+    )
+    return {
+        "evaluated": endpoint_evaluated,
+        "method": "steady_endpoint_window_median_v1",
+        "threshold_percent": threshold_percent,
+        "observed_measured_sample_count": len(measured_samples),
+        "baseline_window": baseline_window,
+        "terminal_window": terminal_window,
+        "windows_non_overlapping": windows_non_overlapping,
+        "growth_percent": growth_percent_unrounded,
+        "growth_percent_rounded": growth_percent_rounded,
+        "active_within_budget": active_within_budget if endpoint_evaluated else False,
+        "idle_confirmation": {
+            "required": True,
+            "evaluated": bool(idle_levels),
+            "method": "four_block_budget_confirmation_v1",
+            "sample_count": len(idle_samples),
+            "sample_span_seconds": round(idle_span_seconds, 3),
+            "minimum_sample_count": FORMAL_RESOURCE_IDLE_MIN_SAMPLES,
+            "minimum_span_seconds": FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS,
+            "block_sample_counts": [len(block) for block in idle_blocks],
+            "block_median_rss_bytes": idle_levels,
+            "baseline_median_rss_bytes": baseline_median,
+            "budget_ceiling_rss_bytes": budget_ceiling,
+            "last_two_block_median_rss_bytes": last_two_idle_levels,
+            "status": idle_status,
+            "within_budget": idle_within_budget,
+        },
+        "within_budget": within_budget,
+    }
+
+
 def _resource_evidence(
     path: Path,
     shape: Shape,
@@ -1661,40 +1986,39 @@ def _resource_evidence(
     lines = path.read_text(encoding="utf-8").splitlines()
     if not lines or lines[0] != RESOURCE_HEADER:
         raise ProofFailure("resources.header_invalid")
-    rows: list[list[float]] = []
+    rows: list[ResourceSample] = []
     for line in lines[1:]:
-        fields = line.split("\t")
-        if len(fields) != 10:
-            raise ProofFailure("resources.row_invalid")
-        try:
-            rows.append([float(value) for value in fields])
-        except ValueError as error:
-            raise ProofFailure("resources.row_invalid") from error
+        rows.append(_parse_resource_sample(line.split("\t")))
     if not rows:
         raise ProofFailure("resources.samples_missing")
-    if any(current[0] <= previous[0] for previous, current in zip(rows, rows[1:], strict=False)):
+    if any(
+        current.elapsed_seconds <= previous.elapsed_seconds
+        for previous, current in zip(rows, rows[1:], strict=False)
+    ):
         raise ProofFailure("resources.elapsed_not_increasing")
     if load_finished_seconds < warmup_finished_seconds:
         raise ProofFailure("resources.load_boundary_invalid")
     if idle_finished_seconds < load_finished_seconds:
         raise ProofFailure("resources.idle_boundary_invalid")
     measured_rows = [
-        row for row in rows if warmup_finished_seconds <= row[0] <= load_finished_seconds
+        row
+        for row in rows
+        if warmup_finished_seconds <= row.elapsed_seconds <= load_finished_seconds
     ]
-    idle_rows = [row for row in rows if load_finished_seconds < row[0] <= idle_finished_seconds]
+    idle_rows = [
+        row for row in rows if load_finished_seconds < row.elapsed_seconds <= idle_finished_seconds
+    ]
     if shape.formal and not measured_rows:
         raise ProofFailure("resources.measured_samples_missing")
     selected = measured_rows or rows
-    first, final = selected[0], selected[-1]
     minimum_samples = max(1, math.floor(shape.duration_seconds / 5 * 0.9)) if shape.formal else 1
-    idle_span_seconds = idle_rows[-1][0] - idle_rows[0][0] if len(idle_rows) >= 2 else 0.0
+    idle_span_seconds = (
+        idle_rows[-1].elapsed_seconds - idle_rows[0].elapsed_seconds if len(idle_rows) >= 2 else 0.0
+    )
     idle_samples_complete = not shape.formal or (
         len(idle_rows) >= FORMAL_RESOURCE_IDLE_MIN_SAMPLES
         and idle_span_seconds >= FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS
     )
-
-    def growth(start: float, end: float) -> float:
-        return ((end - start) / start * 100.0) if start > 0 else 100.0
 
     def resource_trend(
         samples: list[tuple[float, float]],
@@ -1881,22 +2205,34 @@ def _resource_evidence(
             "sustained_growth": sustained,
         }
 
-    api_growth = growth(first[1], final[1])
-    worker_growth = growth(first[3], final[3])
+    api_rss_growth = _rss_growth_evidence(
+        selected,
+        idle_rows,
+        formal=shape.formal,
+        rss_attribute="api_rss_bytes",
+    )
+    worker_rss_growth = _rss_growth_evidence(
+        selected,
+        idle_rows,
+        formal=shape.formal,
+        rss_attribute="worker_rss_bytes",
+    )
     api_fd_trend = resource_trend(
-        [(row[0], row[2]) for row in selected],
-        [(row[0], row[2]) for row in idle_rows],
+        [(row.elapsed_seconds, row.api_fd_count) for row in selected],
+        [(row.elapsed_seconds, row.api_fd_count) for row in idle_rows],
     )
     worker_fd_trend = resource_trend(
-        [(row[0], row[4]) for row in selected],
-        [(row[0], row[4]) for row in idle_rows],
+        [(row.elapsed_seconds, row.worker_fd_count) for row in selected],
+        [(row.elapsed_seconds, row.worker_fd_count) for row in idle_rows],
     )
     postgres_connection_trend = resource_trend(
-        [(row[0], row[5]) for row in selected],
-        [(row[0], row[5]) for row in idle_rows],
+        [(row.elapsed_seconds, row.postgres_connections) for row in selected],
+        [(row.elapsed_seconds, row.postgres_connections) for row in idle_rows],
     )
-    survival = all(row[8] == 1 and row[9] == 1 for row in rows)
-    restart_free = all(row[6] == 0 and row[7] == 0 for row in rows)
+    cohort_samples = [*selected, *idle_rows]
+    process_cohort_evidence = _process_cohort_evidence(cohort_samples)
+    survival = all(row.api_running == 1 and row.worker_running == 1 for row in rows)
+    restart_free = all(row.api_restart_count == 0 and row.worker_restart_count == 0 for row in rows)
     return {
         "sample_count": len(rows),
         "measured_sample_count": len(selected),
@@ -1912,10 +2248,11 @@ def _resource_evidence(
         "warmup_boundary_elapsed_seconds": round(warmup_finished_seconds, 3),
         "load_end_boundary_elapsed_seconds": round(load_finished_seconds, 3),
         "idle_end_boundary_elapsed_seconds": round(idle_finished_seconds, 3),
-        "api_peak_rss_bytes": int(max(row[1] for row in rows)),
-        "worker_peak_rss_bytes": int(max(row[3] for row in rows)),
-        "api_warmup_to_final_rss_growth_percent": round(api_growth, 3),
-        "worker_warmup_to_final_rss_growth_percent": round(worker_growth, 3),
+        "api_peak_rss_bytes": max(row.api_rss_bytes for row in rows),
+        "worker_peak_rss_bytes": max(row.worker_rss_bytes for row in rows),
+        "api_rss_growth": api_rss_growth,
+        "worker_rss_growth": worker_rss_growth,
+        "process_cohort_evidence": process_cohort_evidence,
         "api_fd_sustained_growth": bool(api_fd_trend["sustained_growth"]),
         "worker_fd_sustained_growth": bool(worker_fd_trend["sustained_growth"]),
         "postgres_connection_sustained_growth": bool(postgres_connection_trend["sustained_growth"]),
@@ -2152,10 +2489,12 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
             "provider_active_residue",
         )
     )
-    rss_growth = max(
-        float(resources["api_warmup_to_final_rss_growth_percent"]),
-        float(resources["worker_warmup_to_final_rss_growth_percent"]),
+    api_rss_growth = cast(dict[str, object], resources["api_rss_growth"])
+    worker_rss_growth = cast(dict[str, object], resources["worker_rss_growth"])
+    rss_growth_passed = not shape.formal or (
+        api_rss_growth["within_budget"] is True and worker_rss_growth["within_budget"] is True
     )
+    process_cohort_evidence = cast(dict[str, object], resources["process_cohort_evidence"])
     concurrency_target = shape.concurrency if shape.formal else 1
     queue_exact = _queue_gate(
         shape.queue_burst,
@@ -2189,7 +2528,8 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
         "runtime_queue_residue_zero": residue == 0,
         "artifacts_returned_to_manifest_baseline": int(integrity["artifact_records"])
         == int(manifest["artifact_baseline"]),
-        "rss_growth": rss_growth <= THRESHOLDS["warmup_to_final_rss_growth_percent_max"],
+        "rss_growth": rss_growth_passed,
+        "process_cohort_stable": process_cohort_evidence["all_valid"] is True,
         "api_fd_not_sustained_growth": not bool(resources["api_fd_sustained_growth"]),
         "worker_fd_not_sustained_growth": not bool(resources["worker_fd_sustained_growth"]),
         "db_connections_not_sustained_growth": not bool(
@@ -2242,6 +2582,19 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
             ),
             "resource_idle_minimum_span_seconds": (
                 FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS if shape.formal else 0
+            ),
+            "rss_endpoint_window_sample_count": (
+                FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES if shape.formal else 0
+            ),
+            "rss_endpoint_window_min_span_seconds": (
+                FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS if shape.formal else 0
+            ),
+            "rss_growth_method": (
+                "steady_endpoint_window_median_v1" if shape.formal else "unevaluated"
+            ),
+            "rss_growth_percent_max": (THRESHOLDS["rss_growth_percent_max"] if shape.formal else 0),
+            "rss_idle_method": (
+                "four_block_budget_confirmation_v1" if shape.formal else "unevaluated"
             ),
         },
         "scheduler": {

@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 HARNESS = ROOT / "scripts" / "p5_b4_runtime_load_soak.py"
 COMPOSE = ROOT / "docker-compose.p5-b4-runtime-proof.yml"
 WRAPPER = ROOT / "scripts" / "check-p5-b4-runtime-load-soak.sh"
+API_PROCESS_IDENTITY_SHA256 = "c" * 64
+WORKER_PROCESS_IDENTITY_SHA256 = "d" * 64
 
 
 def _source(path: Path) -> str:
@@ -63,6 +65,44 @@ def _valid_diagnostics(harness: ModuleType) -> dict[str, object]:
     return harness._diagnostic_summary(observations)
 
 
+def _resource_row(
+    elapsed_seconds: int | float,
+    api_rss_bytes: int,
+    api_fd_count: int,
+    worker_rss_bytes: int,
+    worker_fd_count: int,
+    postgres_connections: int,
+    api_restart_count: int = 0,
+    worker_restart_count: int = 0,
+    api_running: int = 1,
+    worker_running: int = 1,
+    api_process_count: int = 3,
+    worker_process_count: int = 1,
+    api_process_identity_sha256: str = API_PROCESS_IDENTITY_SHA256,
+    worker_process_identity_sha256: str = WORKER_PROCESS_IDENTITY_SHA256,
+) -> str:
+    """Build one v4 sampler row while preserving the first ten v3 columns."""
+    return "\t".join(
+        str(value)
+        for value in (
+            elapsed_seconds,
+            api_rss_bytes,
+            api_fd_count,
+            worker_rss_bytes,
+            worker_fd_count,
+            postgres_connections,
+            api_restart_count,
+            worker_restart_count,
+            api_running,
+            worker_running,
+            api_process_count,
+            worker_process_count,
+            api_process_identity_sha256,
+            worker_process_identity_sha256,
+        )
+    )
+
+
 def _record(
     harness: ModuleType,
     index: int,
@@ -72,7 +112,7 @@ def _record(
     p99: float = 150,
 ) -> dict:
     return {
-        "contract": "p5_b4_external_runtime_load_soak_proof.v3",
+        "contract": "p5_b4_external_runtime_load_soak_proof.v4",
         "mode": mode,
         "baseline_index": index,
         "baseline_environment_receipt_sha256": f"{index:064x}",
@@ -106,6 +146,79 @@ def _write_records(path: Path, records: list[dict]) -> None:
         )
 
 
+def _write_resource_rows(path: Path, harness: ModuleType, rows: list[str]) -> None:
+    path.write_text(
+        "\n".join([harness.RESOURCE_HEADER, *rows]) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _formal_rss_evidence(
+    harness: ModuleType,
+    path: Path,
+    *,
+    active_api_rss: list[int],
+    active_worker_rss: list[int],
+    idle_api_rss: list[int],
+    idle_worker_rss: list[int],
+    api_process_counts: list[int] | None = None,
+    worker_process_counts: list[int] | None = None,
+    api_process_identities: list[str] | None = None,
+    worker_process_identities: list[str] | None = None,
+) -> dict[str, object]:
+    active_count = len(active_api_rss)
+    idle_count = len(idle_api_rss)
+    assert active_count == len(active_worker_rss) == 120
+    assert idle_count == len(idle_worker_rss) == 12
+    sample_count = active_count + idle_count
+    api_process_counts = api_process_counts or [3] * sample_count
+    worker_process_counts = worker_process_counts or [1] * sample_count
+    api_process_identities = api_process_identities or [API_PROCESS_IDENTITY_SHA256] * sample_count
+    worker_process_identities = (
+        worker_process_identities or [WORKER_PROCESS_IDENTITY_SHA256] * sample_count
+    )
+    assert all(
+        len(values) == sample_count
+        for values in (
+            api_process_counts,
+            worker_process_counts,
+            api_process_identities,
+            worker_process_identities,
+        )
+    )
+
+    rows: list[str] = []
+    for index, (api_rss, worker_rss) in enumerate(
+        zip(
+            [*active_api_rss, *idle_api_rss],
+            [*active_worker_rss, *idle_worker_rss],
+            strict=True,
+        )
+    ):
+        rows.append(
+            _resource_row(
+                index * 5,
+                api_rss,
+                10,
+                worker_rss,
+                20,
+                3,
+                api_process_count=api_process_counts[index],
+                worker_process_count=worker_process_counts[index],
+                api_process_identity_sha256=api_process_identities[index],
+                worker_process_identity_sha256=worker_process_identities[index],
+            )
+        )
+    _write_resource_rows(path, harness, rows)
+    return harness._resource_evidence(
+        path,
+        harness.Shape("formal", 600, 0, 8, 8.0, 64),
+        warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
+    )
+
+
 def test_external_topology_replaces_all_old_in_process_seams() -> None:
     source = _source(HARNESS)
     compose = _source(COMPOSE)
@@ -135,7 +248,7 @@ def test_external_topology_replaces_all_old_in_process_seams() -> None:
 
 
 def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) -> None:
-    assert harness.CONTRACT_ID == "p5_b4_external_runtime_load_soak_proof.v3"
+    assert harness.CONTRACT_ID == "p5_b4_external_runtime_load_soak_proof.v4"
     assert harness.FORMAL_RECORDS == 3
     assert harness.FORMAL_DURATION_SECONDS == 600
     assert harness.FORMAL_WARMUP_SECONDS == 30
@@ -147,6 +260,9 @@ def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) ->
     assert harness.FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS == 60
     assert harness.FORMAL_RESOURCE_IDLE_MIN_SAMPLES == 12
     assert harness.FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS == 55.0
+    assert harness.FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES == 12
+    assert harness.FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS == 55.0
+    assert harness.FORMAL_RSS_IDLE_BLOCK_COUNT == 4
     assert harness.SITE_COUNT == 8
     assert harness.PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD == 10_000.0
     parser = harness._parser()
@@ -160,13 +276,11 @@ def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) ->
     )
 
 
-def test_dataset_attribution_requires_v3(
+def test_dataset_attribution_requires_v4(
     harness: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dataset = {
-        "commercial": {"max_ai_credits_per_site_period": 10_000.0},
-        "contract": "p5_b4_runtime_dataset.v3",
-    }
+    dataset = json.loads(json.dumps(harness.EXPECTED_DATASET_CONFIG))
+    monkeypatch.setenv("P5_B4_DATASET_ID", harness.EXPECTED_DATASET_ID)
 
     def set_dataset(value: dict[str, object]) -> None:
         raw = json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -183,7 +297,42 @@ def test_dataset_attribution_requires_v3(
         ).hexdigest()
     )
 
-    set_dataset({**dataset, "contract": "p5_b4_runtime_dataset.v2"})
+    set_dataset({**dataset, "contract": "p5_b4_runtime_dataset.v3"})
+    with pytest.raises(harness.ProofFailure, match="configuration.dataset_contract_invalid"):
+        harness._dataset_attribution()
+
+    set_dataset(dataset)
+    monkeypatch.setenv("P5_B4_DATASET_ID", "p5_b4_runtime_8_sites_v3")
+    with pytest.raises(harness.ProofFailure, match="configuration.dataset_id_invalid"):
+        harness._dataset_attribution()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing_threshold", "changed_window", "float_window", "boolean_baselines"],
+)
+def test_dataset_attribution_rejects_incomplete_or_mutated_v4_identity(
+    harness: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    dataset = json.loads(json.dumps(harness.EXPECTED_DATASET_CONFIG))
+    formal = dataset["formal"]
+    assert isinstance(formal, dict)
+    if mutation == "missing_threshold":
+        del formal["rss_growth_percent_max"]
+    elif mutation == "changed_window":
+        formal["rss_endpoint_window_sample_count"] = 11
+    elif mutation == "float_window":
+        formal["rss_endpoint_window_sample_count"] = 12.0
+    else:
+        quick = dataset["quick"]
+        assert isinstance(quick, dict)
+        quick["baselines"] = True
+    raw = json.dumps(dataset, sort_keys=True, separators=(",", ":"))
+    monkeypatch.setenv("P5_B4_DATASET_ID", harness.EXPECTED_DATASET_ID)
+    monkeypatch.setenv("P5_B4_DATASET_CONFIG", raw)
+    monkeypatch.setenv("P5_B4_DATASET_SHA256", hashlib.sha256(raw.encode()).hexdigest())
     with pytest.raises(harness.ProofFailure, match="configuration.dataset_contract_invalid"):
         harness._dataset_attribution()
 
@@ -254,12 +403,12 @@ def test_formal_aggregate_locks_first_record_and_keeps_receipts(
         harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
 
 
-def test_formal_aggregate_rejects_legacy_v2_record(
+def test_formal_aggregate_rejects_legacy_v3_record(
     harness: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
     records = [_record(harness, index) for index in range(1, 4)]
-    records[1]["contract"] = "p5_b4_external_runtime_load_soak_proof.v2"
+    records[1]["contract"] = "p5_b4_external_runtime_load_soak_proof.v3"
     _write_records(tmp_path, records)
 
     report, ok = harness._aggregate(
@@ -676,23 +825,370 @@ def test_usage_meter_closed_set_enforces_structural_references(harness: ModuleTy
     ) == {"provider_calls": 1.0, "cost": 0.25}
 
 
+def test_resource_sampler_v4_schema_is_exact_and_fail_closed(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    assert harness.RESOURCE_HEADER.split("\t") == [
+        "elapsed_seconds",
+        "api_rss_bytes",
+        "api_fd_count",
+        "worker_rss_bytes",
+        "worker_fd_count",
+        "postgres_connections",
+        "api_restart_count",
+        "worker_restart_count",
+        "api_running",
+        "worker_running",
+        "api_process_count",
+        "worker_process_count",
+        "api_process_identity_sha256",
+        "worker_process_identity_sha256",
+    ]
+    resource = tmp_path / "resources-invalid-v4.tsv"
+    old_v3_row = "0\t100\t10\t100\t20\t3\t0\t0\t1\t1"
+    _write_resource_rows(resource, harness, [old_v3_row])
+    with pytest.raises(harness.ProofFailure, match="resources.row_invalid"):
+        harness._resource_evidence(
+            resource,
+            harness.Shape("quick", 5, 1, 2, 2.0, 8),
+            warmup_finished_seconds=0,
+            load_finished_seconds=0,
+            idle_finished_seconds=0,
+        )
+
+    valid = _resource_row(0, 100, 10, 100, 20, 3).split("\t")
+    for column, invalid in ((10, "3.0"), (12, "not-a-sha256")):
+        invalid_row = valid.copy()
+        invalid_row[column] = invalid
+        _write_resource_rows(resource, harness, ["\t".join(invalid_row)])
+        with pytest.raises(harness.ProofFailure, match="resources.row_invalid"):
+            harness._resource_evidence(
+                resource,
+                harness.Shape("quick", 5, 1, 2, 2.0, 8),
+                warmup_finished_seconds=0,
+                load_finished_seconds=0,
+                idle_finished_seconds=0,
+            )
+
+
+def test_rss_endpoint_windows_ignore_single_first_and_last_outliers(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    active = [9_000_000, *([1_000_000] * 107), *([1_100_000] * 11), 9_000_000]
+    assert len(active) == 120
+    evidence = _formal_rss_evidence(
+        harness,
+        tmp_path / "rss-endpoint-outliers.tsv",
+        active_api_rss=active,
+        active_worker_rss=active,
+        idle_api_rss=[1_100_000] * 12,
+        idle_worker_rss=[1_100_000] * 12,
+    )
+
+    for service in ("api", "worker"):
+        growth = evidence[f"{service}_rss_growth"]
+        assert growth["evaluated"] is True
+        assert growth["method"] == "steady_endpoint_window_median_v1"
+        assert growth["baseline_window"]["sample_count"] == 12
+        assert growth["baseline_window"]["sample_span_seconds"] == 55.0
+        assert growth["baseline_window"]["minimum_sample_count"] == 12
+        assert growth["baseline_window"]["minimum_span_seconds"] == 55.0
+        assert growth["baseline_window"]["median_rss_bytes"] == 1_000_000
+        assert growth["baseline_window"]["complete"] is True
+        assert growth["terminal_window"]["median_rss_bytes"] == 1_100_000
+        assert growth["terminal_window"]["sample_count"] == 12
+        assert growth["terminal_window"]["sample_span_seconds"] == 55.0
+        assert growth["windows_non_overlapping"] is True
+        assert growth["active_within_budget"] is True
+        assert growth["idle_confirmation"]["status"] == "within_budget"
+        assert growth["within_budget"] is True
+
+
+def test_rss_exact_ten_percent_passes_but_one_byte_over_fails_without_rounding(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    baseline = 1_000_000
+    exact_ceiling = 1_100_000
+    exact = _formal_rss_evidence(
+        harness,
+        tmp_path / "rss-exact-threshold.tsv",
+        active_api_rss=[baseline] * 108 + [exact_ceiling] * 12,
+        active_worker_rss=[baseline] * 108 + [exact_ceiling] * 12,
+        idle_api_rss=[exact_ceiling] * 12,
+        idle_worker_rss=[exact_ceiling] * 12,
+    )
+    assert exact["api_rss_growth"]["growth_percent"] == 10.0
+    assert exact["api_rss_growth"]["active_within_budget"] is True
+    assert exact["api_rss_growth"]["within_budget"] is True
+
+    one_byte_over = _formal_rss_evidence(
+        harness,
+        tmp_path / "rss-one-byte-over.tsv",
+        active_api_rss=[baseline] * 108 + [exact_ceiling + 1] * 12,
+        active_worker_rss=[baseline] * 108 + [exact_ceiling] * 12,
+        idle_api_rss=[baseline] * 12,
+        idle_worker_rss=[exact_ceiling] * 12,
+    )
+    api_growth = one_byte_over["api_rss_growth"]
+    assert api_growth["growth_percent"] > 10.0
+    assert api_growth["growth_percent_rounded"] == 10.0
+    assert api_growth["active_within_budget"] is False
+    assert api_growth["idle_confirmation"]["status"] == "within_budget"
+    assert api_growth["within_budget"] is False
+
+
+def test_rss_gate_requires_both_api_and_worker_to_pass(harness: ModuleType, tmp_path: Path) -> None:
+    evidence = _formal_rss_evidence(
+        harness,
+        tmp_path / "rss-worker-over-budget.tsv",
+        active_api_rss=[1_000_000] * 108 + [1_100_000] * 12,
+        active_worker_rss=[2_000_000] * 108 + [2_200_001] * 12,
+        idle_api_rss=[1_100_000] * 12,
+        idle_worker_rss=[2_000_000] * 12,
+    )
+    assert evidence["api_rss_growth"]["within_budget"] is True
+    assert evidence["worker_rss_growth"]["within_budget"] is False
+    source = _source(HARNESS)
+    rss_check = re.search(
+        r"rss_growth_passed\s*=\s*not shape\.formal or \((.*?)\)", source, re.DOTALL
+    )
+    assert rss_check is not None
+    assert 'api_rss_growth["within_budget"] is True' in rss_check.group(1)
+    assert 'worker_rss_growth["within_budget"] is True' in rss_check.group(1)
+    assert 'resources["api_rss_growth"]' in source
+    assert 'resources["worker_rss_growth"]' in source
+    assert '"rss_growth": rss_growth_passed' in source
+
+
+def test_rss_active_over_budget_cannot_be_rehabilitated_by_idle_recovery(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    evidence = _formal_rss_evidence(
+        harness,
+        tmp_path / "rss-active-over-idle-recovered.tsv",
+        active_api_rss=[1_000_000] * 108 + [1_100_001] * 12,
+        active_worker_rss=[1_000_000] * 120,
+        idle_api_rss=[1_000_000] * 12,
+        idle_worker_rss=[1_000_000] * 12,
+    )
+    growth = evidence["api_rss_growth"]
+    assert growth["active_within_budget"] is False
+    assert growth["idle_confirmation"]["within_budget"] is True
+    assert growth["within_budget"] is False
+
+
+def test_rss_idle_last_two_blocks_retained_over_budget_fail(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    evidence = _formal_rss_evidence(
+        harness,
+        tmp_path / "rss-idle-retained.tsv",
+        active_api_rss=[1_000_000] * 108 + [1_100_000] * 12,
+        active_worker_rss=[1_000_000] * 120,
+        idle_api_rss=[1_100_000] * 6 + [1_100_001] * 6,
+        idle_worker_rss=[1_000_000] * 12,
+    )
+    growth = evidence["api_rss_growth"]
+    assert growth["active_within_budget"] is True
+    assert growth["idle_confirmation"]["last_two_block_median_rss_bytes"] == [
+        1_100_001,
+        1_100_001,
+    ]
+    assert growth["idle_confirmation"]["within_budget"] is False
+    assert growth["idle_confirmation"]["status"] != "within_budget"
+    assert growth["within_budget"] is False
+
+
+def test_rss_idle_mixed_last_blocks_fail_closed(harness: ModuleType, tmp_path: Path) -> None:
+    evidence = _formal_rss_evidence(
+        harness,
+        tmp_path / "rss-idle-mixed.tsv",
+        active_api_rss=[1_000_000] * 108 + [1_100_000] * 12,
+        active_worker_rss=[1_000_000] * 120,
+        idle_api_rss=[1_100_000] * 9 + [1_100_001] * 3,
+        idle_worker_rss=[1_000_000] * 12,
+    )
+    idle = evidence["api_rss_growth"]["idle_confirmation"]
+    assert idle["last_two_block_median_rss_bytes"] == [1_100_000, 1_100_001]
+    assert idle["status"] != "within_budget"
+    assert idle["within_budget"] is False
+    assert evidence["api_rss_growth"]["within_budget"] is False
+
+
+def test_rss_idle_missing_samples_fail_closed(harness: ModuleType, tmp_path: Path) -> None:
+    rows = [
+        _resource_row(index * 5, 1_000_000 if index < 108 else 1_100_000, 10, 1_000_000, 20, 3)
+        for index in range(120)
+    ]
+    rows.extend(
+        _resource_row(600 + index * 5, 1_100_000, 10, 1_000_000, 20, 3) for index in range(11)
+    )
+    resource = tmp_path / "rss-idle-missing.tsv"
+    _write_resource_rows(resource, harness, rows)
+    evidence = harness._resource_evidence(
+        resource,
+        harness.Shape("formal", 600, 0, 8, 8.0, 64),
+        warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
+    )
+    growth = evidence["api_rss_growth"]
+    assert growth["idle_confirmation"]["sample_count"] == 11
+    assert growth["idle_confirmation"]["evaluated"] is False
+    assert growth["idle_confirmation"]["within_budget"] is False
+    assert growth["within_budget"] is False
+
+
+def test_rss_endpoint_windows_fail_closed_on_short_span_or_overlap(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    short_span_times = [*range(12), *range(12, 108), *range(540, 600, 5)]
+    assert len(short_span_times) == 120
+    short_span_rows = [
+        _resource_row(
+            elapsed,
+            1_000_000 if index < 108 else 1_100_000,
+            10,
+            1_000_000,
+            20,
+            3,
+        )
+        for index, elapsed in enumerate(short_span_times)
+    ]
+    short_span_rows.extend(
+        _resource_row(elapsed, 1_100_000, 10, 1_000_000, 20, 3) for elapsed in range(600, 656, 5)
+    )
+    short_span_path = tmp_path / "rss-endpoint-short-span.tsv"
+    _write_resource_rows(short_span_path, harness, short_span_rows)
+    short_span = harness._resource_evidence(
+        short_span_path,
+        harness.Shape("formal", 600, 0, 8, 8.0, 64),
+        warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
+    )["api_rss_growth"]
+    assert short_span["baseline_window"]["sample_count"] == 12
+    assert short_span["baseline_window"]["sample_span_seconds"] == 11.0
+    assert short_span["evaluated"] is False
+    assert short_span["within_budget"] is False
+
+    overlap_rows = [
+        _resource_row(
+            index * 5,
+            1_000_000 if index < 9 else 1_100_000,
+            10,
+            1_000_000,
+            20,
+            3,
+        )
+        for index in range(21)
+    ]
+    overlap_rows.extend(
+        _resource_row(105 + index * 5, 1_100_000, 10, 1_000_000, 20, 3) for index in range(12)
+    )
+    overlap_path = tmp_path / "rss-endpoint-overlap.tsv"
+    _write_resource_rows(overlap_path, harness, overlap_rows)
+    overlap = harness._resource_evidence(
+        overlap_path,
+        harness.Shape("formal", 100, 0, 8, 8.0, 64),
+        warmup_finished_seconds=0,
+        load_finished_seconds=100,
+        idle_finished_seconds=160,
+    )["api_rss_growth"]
+    assert overlap["baseline_window"]["sample_span_seconds"] == 55.0
+    assert overlap["terminal_window"]["sample_span_seconds"] == 55.0
+    assert overlap["windows_non_overlapping"] is False
+    assert overlap["evaluated"] is False
+    assert overlap["within_budget"] is False
+
+
+def test_rss_samples_outside_explicit_boundaries_do_not_affect_growth(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    rows = [_resource_row(0, 99_000_000, 10, 99_000_000, 20, 3)]
+    rows.extend(
+        _resource_row(
+            5 + index * 5,
+            1_000_000 if index < 108 else 1_100_000,
+            10,
+            1_000_000 if index < 108 else 1_100_000,
+            20,
+            3,
+        )
+        for index in range(120)
+    )
+    rows.extend(
+        _resource_row(605 + index * 5, 1_100_000, 10, 1_100_000, 20, 3) for index in range(12)
+    )
+    rows.append(_resource_row(665, 99_000_000, 10, 99_000_000, 20, 3))
+    resource = tmp_path / "rss-boundary-isolation.tsv"
+    _write_resource_rows(resource, harness, rows)
+    evidence = harness._resource_evidence(
+        resource,
+        harness.Shape("formal", 600, 0, 8, 8.0, 64),
+        warmup_finished_seconds=5,
+        load_finished_seconds=600,
+        idle_finished_seconds=660,
+    )
+    assert evidence["api_rss_growth"]["growth_percent"] == 10.0
+    assert evidence["api_rss_growth"]["within_budget"] is True
+    assert evidence["worker_rss_growth"]["within_budget"] is True
+
+
+@pytest.mark.parametrize("mutation", ["process_count", "identity_sha256"])
+def test_resource_process_cohort_changes_fail_closed(
+    harness: ModuleType, tmp_path: Path, mutation: str
+) -> None:
+    sample_count = 132
+    api_counts = [3] * sample_count
+    api_identities = [API_PROCESS_IDENTITY_SHA256] * sample_count
+    if mutation == "process_count":
+        api_counts[60] = 4
+    else:
+        api_identities[60] = "e" * 64
+    evidence = _formal_rss_evidence(
+        harness,
+        tmp_path / f"rss-cohort-{mutation}.tsv",
+        active_api_rss=[1_000_000] * 120,
+        active_worker_rss=[1_000_000] * 120,
+        idle_api_rss=[1_000_000] * 12,
+        idle_worker_rss=[1_000_000] * 12,
+        api_process_counts=api_counts,
+        api_process_identities=api_identities,
+    )
+    cohort = evidence["process_cohort_evidence"]
+    assert cohort["evaluated"] is True
+    assert cohort["all_valid"] is False
+    assert cohort["api"]["passed"] is False
+    if mutation == "process_count":
+        assert cohort["api"]["process_count_stable"] is False
+    else:
+        assert cohort["api"]["identity_sha256_unique"] is False
+    assert cohort["worker"]["passed"] is True
+    source = _source(HARNESS)
+    assert '"process_cohort_stable": process_cohort_evidence["all_valid"] is True' in source
+
+
 def test_resource_gate_detects_restart_downtime_and_per_service_growth(
     harness: ModuleType, tmp_path: Path
 ) -> None:
     resource = tmp_path / "resources.tsv"
     rows = [
         harness.RESOURCE_HEADER,
-        "0\t100\t10\t100\t20\t3\t0\t0\t1\t1",
-        "5\t101\t10\t101\t20\t3\t0\t0\t1\t1",
-        "10\t102\t10\t102\t20\t3\t0\t0\t1\t1",
-        "15\t103\t11\t103\t21\t4\t0\t0\t1\t1",
-        "20\t104\t11\t104\t21\t4\t0\t0\t1\t1",
-        "25\t105\t11\t105\t21\t4\t0\t0\t1\t1",
-        "30\t106\t12\t106\t22\t5\t0\t0\t1\t1",
-        "35\t107\t12\t107\t22\t5\t0\t0\t1\t1",
-        "40\t108\t12\t108\t22\t5\t1\t0\t0\t1",
+        _resource_row(0, 100, 10, 100, 20, 3),
+        _resource_row(5, 101, 10, 101, 20, 3),
+        _resource_row(10, 102, 10, 102, 20, 3),
+        _resource_row(15, 103, 11, 103, 21, 4),
+        _resource_row(20, 104, 11, 104, 21, 4),
+        _resource_row(25, 105, 11, 105, 21, 4),
+        _resource_row(30, 106, 12, 106, 22, 5),
+        _resource_row(35, 107, 12, 107, 22, 5),
+        _resource_row(40, 108, 12, 108, 22, 5, api_restart_count=1, api_running=0),
     ]
-    rows.extend(f"{elapsed}\t108\t12\t108\t22\t5\t1\t0\t1\t1" for elapsed in range(45, 101, 5))
+    rows.extend(
+        _resource_row(elapsed, 108, 12, 108, 22, 5, api_restart_count=1)
+        for elapsed in range(45, 101, 5)
+    )
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
     quick = harness._resource_evidence(
         resource,
@@ -740,8 +1236,8 @@ def test_resource_gate_does_not_call_initial_step_or_stable_jitter_a_leak(
     for index, (api_fd, worker_fd, connections) in enumerate(
         zip(api_fds, worker_fds, postgres_connections, strict=True)
     ):
-        rows.append(f"{index * 5}\t100\t{api_fd}\t100\t{worker_fd}\t{connections}\t0\t0\t1\t1")
-    rows.extend(f"{elapsed}\t100\t12\t100\t20\t4\t0\t0\t1\t1" for elapsed in range(45, 101, 5))
+        rows.append(_resource_row(index * 5, 100, api_fd, 100, worker_fd, connections))
+    rows.extend(_resource_row(elapsed, 100, 12, 100, 20, 4) for elapsed in range(45, 101, 5))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
     evidence = harness._resource_evidence(
         resource,
@@ -763,9 +1259,9 @@ def test_resource_gate_does_not_call_one_permanent_step_sustained_growth(
     values = [20] * 60 + [20 + step] * 60
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate(values):
-        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+        rows.append(_resource_row(index * 5, 100, value, 100, value, value))
     rows.extend(
-        f"{elapsed}\t100\t{values[-1]}\t100\t{values[-1]}\t{values[-1]}\t0\t0\t1\t1"
+        _resource_row(elapsed, 100, values[-1], 100, values[-1], values[-1])
         for elapsed in range(600, 656, 5)
     )
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -797,9 +1293,9 @@ def test_resource_gate_detects_repeated_or_late_growth(
     resource = tmp_path / f"resources-{name}.tsv"
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate(values):
-        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+        rows.append(_resource_row(index * 5, 100, value, 100, value, value))
     rows.extend(
-        f"{elapsed}\t100\t{values[-1]}\t100\t{values[-1]}\t{values[-1]}\t0\t0\t1\t1"
+        _resource_row(elapsed, 100, values[-1], 100, values[-1], values[-1])
         for elapsed in range(600, 656, 5)
     )
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -829,7 +1325,7 @@ def test_resource_gate_transient_active_growth_recovers_during_idle(
     values = [*measured, *idle]
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate(values):
-        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+        rows.append(_resource_row(index * 5, 100, value, 100, value, value))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
@@ -858,7 +1354,7 @@ def test_resource_gate_excludes_samples_after_idle_end_boundary(
     after_idle = [30, 31, 32, 33, 34, 35]
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate([*measured, *idle, *after_idle]):
-        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+        rows.append(_resource_row(index * 5, 100, value, 100, value, value))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
@@ -882,7 +1378,7 @@ def test_resource_gate_rejects_idle_end_before_load_end(
 ) -> None:
     resource = tmp_path / "resources-invalid-idle-boundary.tsv"
     resource.write_text(
-        f"{harness.RESOURCE_HEADER}\n0\t100\t10\t100\t20\t3\t0\t0\t1\t1\n",
+        f"{harness.RESOURCE_HEADER}\n{_resource_row(0, 100, 10, 100, 20, 3)}\n",
         encoding="utf-8",
     )
 
@@ -904,7 +1400,7 @@ def test_resource_gate_fails_closed_when_idle_samples_are_insufficient(
     idle = [22] * 11
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate([*measured, *idle]):
-        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+        rows.append(_resource_row(index * 5, 100, value, 100, value, value))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
@@ -933,7 +1429,7 @@ def test_resource_gate_treats_mixed_idle_floor_as_inconclusive(
     idle = [22] * 6 + [21] * 3 + [22] * 3
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate([*measured, *idle]):
-        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+        rows.append(_resource_row(index * 5, 100, value, 100, value, value))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
@@ -957,7 +1453,7 @@ def test_resource_gate_fails_when_idle_itself_keeps_growing(
     idle = [20] * 3 + [21] * 3 + [22] * 3 + [23] * 3
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate([*measured, *idle]):
-        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+        rows.append(_resource_row(index * 5, 100, value, 100, value, value))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
@@ -981,8 +1477,8 @@ def test_resource_gate_detects_growth_confined_to_terminal_window(
     values = [20] * 100 + [20] * 2 + [21] * 3 + [22] * 5 + [23] * 5 + [24] * 5
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate(values):
-        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
-    rows.extend(f"{elapsed}\t100\t24\t100\t24\t24\t0\t0\t1\t1" for elapsed in range(600, 656, 5))
+        rows.append(_resource_row(index * 5, 100, value, 100, value, value))
+    rows.extend(_resource_row(elapsed, 100, 24, 100, 24, 24) for elapsed in range(600, 656, 5))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
@@ -1007,8 +1503,8 @@ def test_resource_gate_does_not_call_one_late_step_terminal_growth(
     values = [20] * 110 + [25] * 10
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate(values):
-        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
-    rows.extend(f"{elapsed}\t100\t25\t100\t25\t25\t0\t0\t1\t1" for elapsed in range(600, 656, 5))
+        rows.append(_resource_row(index * 5, 100, value, 100, value, value))
+    rows.extend(_resource_row(elapsed, 100, 25, 100, 25, 25) for elapsed in range(600, 656, 5))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
@@ -1032,11 +1528,17 @@ def test_resource_gate_ignores_spike_and_requires_formal_sample_floor(
     def evidence_for(values: list[int]) -> dict[str, object]:
         rows = [harness.RESOURCE_HEADER]
         for index, value in enumerate(values):
-            rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+            rows.append(_resource_row(index * 5, 100, value, 100, value, value))
         load_finished_seconds = (len(values) - 1) * 5
         rows.extend(
-            f"{load_finished_seconds + offset}\t100\t{values[-1]}\t100\t{values[-1]}"
-            f"\t{values[-1]}\t0\t0\t1\t1"
+            _resource_row(
+                load_finished_seconds + offset,
+                100,
+                values[-1],
+                100,
+                values[-1],
+                values[-1],
+            )
             for offset in range(5, 61, 5)
         )
         resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -1117,18 +1619,34 @@ def test_provider_and_database_safety_contracts_are_fail_closed() -> None:
     assert "prepare.commercial_baseline_incomplete" in source
 
 
-def test_wrapper_has_fresh_baselines_cleanup_and_no_quick_acceptance_claim() -> None:
+def test_wrapper_has_fresh_baselines_cleanup_and_no_quick_acceptance_claim(
+    harness: ModuleType,
+) -> None:
     source = _source(WRAPPER)
 
     dataset_match = re.search(r"^DATASET_CONFIG='(.+)'$", source, re.MULTILINE)
     assert dataset_match is not None
+    dataset_id_match = re.search(r'^DATASET_ID="(.+)"$', source, re.MULTILINE)
+    assert dataset_id_match is not None
+    assert dataset_id_match.group(1) == harness.EXPECTED_DATASET_ID
     dataset = json.loads(dataset_match.group(1))
-    assert dataset["contract"] == "p5_b4_runtime_dataset.v3"
+    assert dataset == harness.EXPECTED_DATASET_CONFIG
+    assert dataset_match.group(1) == json.dumps(
+        harness.EXPECTED_DATASET_CONFIG,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert dataset["contract"] == "p5_b4_runtime_dataset.v4"
     assert dataset["commercial"] == {"max_ai_credits_per_site_period": 10_000.0}
     assert dataset["formal"]["resource_idle_recovery_seconds"] == 60
     assert dataset["formal"]["resource_idle_minimum_sample_count"] == 12
     assert dataset["formal"]["resource_idle_minimum_span_seconds"] == 55
-    assert dataset["formal"]["resource_process_scope"] == "pid1_service_tree_stable_snapshot_v1"
+    assert dataset["formal"]["resource_process_scope"] == "pid1_service_tree_stable_cohort_v2"
+    assert dataset["formal"]["rss_endpoint_window_sample_count"] == 12
+    assert dataset["formal"]["rss_endpoint_window_min_span_seconds"] == 55
+    assert dataset["formal"]["rss_growth_method"] == "steady_endpoint_window_median_v1"
+    assert dataset["formal"]["rss_growth_percent_max"] == 10
+    assert dataset["formal"]["rss_idle_method"] == "four_block_budget_confirmation_v1"
 
     assert "NON-ACCEPTANCE" in source
     assert "--volumes" in source
@@ -1147,6 +1665,10 @@ def test_wrapper_has_fresh_baselines_cleanup_and_no_quick_acceptance_claim() -> 
     assert "service process tree changed during measurement" in source
     assert 'container_process_metrics "${api_container}" 3' in source
     assert 'container_process_metrics "${worker_container}" 1' in source
+    assert "api_process_count" in source
+    assert "worker_process_count" in source
+    assert "api_process_identity_sha256" in source
+    assert "worker_process_identity_sha256" in source
     assert "publish_output" in source
     assert "os.fsync(stream.fileno())" in source
     assert source.index("os.fsync(stream.fileno())") < source.index(
