@@ -55,12 +55,12 @@ from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService
 from app.domain.provider_connections.service import ProviderConnectionAdminService
 
-CONTRACT_ID = "p5_b4_external_runtime_load_soak_proof.v2"
+CONTRACT_ID = "p5_b4_external_runtime_load_soak_proof.v3"
 DISPOSABLE_CONFIRMATION = "I_UNDERSTAND_THIS_DESTROYS_PROOF_DATA"
 DATABASE_HOST = "proof-postgres"
 DATABASE_NAME = "npcink_p5_b4_proof"
 DATABASE_USER = "npcink_p5_b4"
-DATABASE_COMMENT = "p5_b4_external_runtime_load_soak_proof_v2"
+DATABASE_COMMENT = "p5_b4_external_runtime_load_soak_proof_v3"
 REDIS_HOST = "proof-redis"
 REDIS_DATABASE = 15
 REDIS_PREFIX = "p5_b4:external_runtime_proof"
@@ -74,6 +74,9 @@ FORMAL_QUEUE_BURST = 64
 DEFAULT_WORKER_POLL_SECONDS = 5
 DEFAULT_WORKER_BATCH_SIZE = 8
 FORMAL_PROVIDER_DELAY_MS = 150
+FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS = 60
+FORMAL_RESOURCE_IDLE_MIN_SAMPLES = 12
+FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS = 55.0
 PROOF_PLAN_ID = "plan_p5_b4_disposable"
 PROOF_PLAN_VERSION_ID = "plan_version_p5_b4_disposable_v1"
 PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD = 10_000.0
@@ -314,9 +317,7 @@ def _diagnostic_summary(
         "response_shape_violation_count": response_shape_violation_count,
         "negative_control_included": negative_control_included,
         "complete": (
-            other_count == 0
-            and response_shape_violation_count == 0
-            and negative_control_included
+            other_count == 0 and response_shape_violation_count == 0 and negative_control_included
         ),
     }
 
@@ -451,10 +452,9 @@ def _dataset_attribution() -> tuple[dict[str, object], str]:
         raise ProofFailure("configuration.dataset_config_sensitive")
     commercial = parsed.get("commercial")
     if (
-        parsed.get("contract") != "p5_b4_runtime_dataset.v2"
+        parsed.get("contract") != "p5_b4_runtime_dataset.v3"
         or not isinstance(commercial, dict)
-        or commercial.get("max_ai_credits_per_site_period")
-        != PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD
+        or commercial.get("max_ai_credits_per_site_period") != PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD
     ):
         raise ProofFailure("configuration.dataset_contract_invalid")
     canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
@@ -875,9 +875,7 @@ def _prepare(baseline_index: int) -> dict[str, object]:
                     "dataset_fingerprint": _env("P5_B4_DATASET_ID"),
                     "site_count": SITE_COUNT,
                     "artifact_baseline": artifact_baseline,
-                    "max_ai_credits_per_site_period": (
-                        PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD
-                    ),
+                    "max_ai_credits_per_site_period": (PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD),
                 },
                 sort_keys=True,
             ),
@@ -976,9 +974,7 @@ def _payload(
 ) -> tuple[bytes, str]:
     request_hash = _request_hash(label)
     idempotency_key = f"idem-{request_hash[:48]}"
-    proof_metadata: dict[str, object] = {
-        "proof_request_ref": _proof_request_ref(request_hash)
-    }
+    proof_metadata: dict[str, object] = {"proof_request_ref": _proof_request_ref(request_hash)}
     if provider_concurrency_target:
         proof_metadata["proof_concurrency_target"] = str(provider_concurrency_target)
     _proof_concurrency_target(proof_metadata)
@@ -1319,9 +1315,7 @@ def _queue_timing_evidence(
             "complete": complete,
             "wait_seconds": _timing_distribution(waits),
             "first_claim_lag_seconds": round(
-                max(0.0, min(claims) - min(submissions))
-                if claims and submissions
-                else 0.0,
+                max(0.0, min(claims) - min(submissions)) if claims and submissions else 0.0,
                 4,
             ),
             "submission_span_seconds": round(
@@ -1661,6 +1655,8 @@ def _resource_evidence(
     shape: Shape,
     *,
     warmup_finished_seconds: float,
+    load_finished_seconds: float,
+    idle_finished_seconds: float,
 ) -> dict[str, object]:
     lines = path.read_text(encoding="utf-8").splitlines()
     if not lines or lines[0] != RESOURCE_HEADER:
@@ -1676,35 +1672,48 @@ def _resource_evidence(
             raise ProofFailure("resources.row_invalid") from error
     if not rows:
         raise ProofFailure("resources.samples_missing")
-    if any(
-        current[0] <= previous[0]
-        for previous, current in zip(rows, rows[1:], strict=False)
-    ):
+    if any(current[0] <= previous[0] for previous, current in zip(rows, rows[1:], strict=False)):
         raise ProofFailure("resources.elapsed_not_increasing")
-    warmup_rows = [row for row in rows if row[0] >= warmup_finished_seconds]
-    if shape.formal and not warmup_rows:
+    if load_finished_seconds < warmup_finished_seconds:
+        raise ProofFailure("resources.load_boundary_invalid")
+    if idle_finished_seconds < load_finished_seconds:
+        raise ProofFailure("resources.idle_boundary_invalid")
+    measured_rows = [
+        row for row in rows if warmup_finished_seconds <= row[0] <= load_finished_seconds
+    ]
+    idle_rows = [row for row in rows if load_finished_seconds < row[0] <= idle_finished_seconds]
+    if shape.formal and not measured_rows:
         raise ProofFailure("resources.measured_samples_missing")
-    selected = warmup_rows or rows
+    selected = measured_rows or rows
     first, final = selected[0], selected[-1]
-    minimum_samples = (
-        max(1, math.floor(shape.duration_seconds / 5 * 0.9)) if shape.formal else 1
+    minimum_samples = max(1, math.floor(shape.duration_seconds / 5 * 0.9)) if shape.formal else 1
+    idle_span_seconds = idle_rows[-1][0] - idle_rows[0][0] if len(idle_rows) >= 2 else 0.0
+    idle_samples_complete = not shape.formal or (
+        len(idle_rows) >= FORMAL_RESOURCE_IDLE_MIN_SAMPLES
+        and idle_span_seconds >= FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS
     )
 
     def growth(start: float, end: float) -> float:
         return ((end - start) / start * 100.0) if start > 0 else 100.0
 
-    def resource_trend(samples: list[tuple[float, float]]) -> dict[str, object]:
+    def resource_trend(
+        samples: list[tuple[float, float]],
+        idle_samples: list[tuple[float, float]],
+    ) -> dict[str, object]:
         sample_count = len(samples)
         if not shape.formal or sample_count < minimum_samples:
             return {
                 "sample_count": sample_count,
                 "evaluated": False,
-                "method": "six_block_median_low_with_terminal_subwindows",
+                "method": (
+                    "six_block_median_low_with_terminal_subwindows_and_post_load_idle_confirmation"
+                ),
                 "block_sample_counts": [],
                 "block_median_levels": [],
                 "new_high_event_blocks": [],
                 "new_high_event_count": 0,
                 "first_to_last_delta": 0.0,
+                "global_candidate_growth": False,
                 "global_sustained_growth": False,
                 "terminal_window": {
                     "evaluated": False,
@@ -1713,9 +1722,28 @@ def _resource_evidence(
                     "new_high_event_blocks": [],
                     "new_high_event_count": 0,
                     "first_to_last_delta": 0.0,
+                    "candidate_growth": False,
                     "sustained_growth": False,
                 },
+                "idle_recovery": {
+                    "required": shape.formal,
+                    "evaluated": False,
+                    "sample_count": len(idle_samples),
+                    "sample_span_seconds": round(idle_span_seconds, 3),
+                    "minimum_sample_count": FORMAL_RESOURCE_IDLE_MIN_SAMPLES,
+                    "minimum_span_seconds": FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS,
+                    "samples_complete": idle_samples_complete,
+                    "block_sample_counts": [],
+                    "block_median_levels": [],
+                    "reference_level": None,
+                    "retained_growth_threshold": None,
+                    "last_two_block_levels": [],
+                    "continued_growth_candidate": False,
+                    "status": "not_evaluated",
+                },
                 "least_squares_slope_per_minute": 0.0,
+                "candidate_growth": False,
+                "confirmed_sustained_growth": False,
                 "sustained_growth": False,
             }
 
@@ -1734,16 +1762,14 @@ def _resource_evidence(
             for index in range(6)
         ]
         block_levels = [float(median_low([sample[1] for sample in block])) for block in blocks]
-        new_high_event_blocks, first_to_last_delta, global_sustained = repeated_new_high(
+        new_high_event_blocks, first_to_last_delta, global_candidate = repeated_new_high(
             block_levels
         )
         terminal_samples = blocks[-1]
         terminal_count = len(terminal_samples)
         terminal_blocks = (
             [
-                terminal_samples[
-                    index * terminal_count // 4 : (index + 1) * terminal_count // 4
-                ]
+                terminal_samples[index * terminal_count // 4 : (index + 1) * terminal_count // 4]
                 for index in range(4)
             ]
             if terminal_count >= 4
@@ -1755,11 +1781,46 @@ def _resource_evidence(
             else []
         )
         if terminal_levels:
-            terminal_events, terminal_delta, terminal_sustained = repeated_new_high(
-                terminal_levels
-            )
+            terminal_events, terminal_delta, terminal_candidate = repeated_new_high(terminal_levels)
         else:
-            terminal_events, terminal_delta, terminal_sustained = [], 0.0, False
+            terminal_events, terminal_delta, terminal_candidate = [], 0.0, False
+
+        active_candidate = global_candidate or terminal_candidate
+        idle_blocks = (
+            [
+                idle_samples[index * len(idle_samples) // 4 : (index + 1) * len(idle_samples) // 4]
+                for index in range(4)
+            ]
+            if idle_samples_complete
+            else []
+        )
+        idle_levels = (
+            [float(median_low([sample[1] for sample in block])) for block in idle_blocks]
+            if idle_blocks
+            else []
+        )
+        reference_level = block_levels[0]
+        retained_growth_threshold = reference_level + 2.0
+        if idle_levels:
+            _, _, idle_continued_growth = repeated_new_high(idle_levels)
+            last_two_idle_levels = idle_levels[-2:]
+            if idle_continued_growth:
+                idle_status = "continued_growth"
+            elif all(level < retained_growth_threshold for level in last_two_idle_levels):
+                idle_status = "recovered"
+            elif all(level >= retained_growth_threshold for level in last_two_idle_levels):
+                idle_status = "retained"
+            else:
+                idle_status = "inconclusive"
+        else:
+            idle_continued_growth = False
+            last_two_idle_levels = []
+            idle_status = "insufficient_samples"
+
+        confirmation_failed = idle_status != "recovered"
+        global_sustained = global_candidate and confirmation_failed
+        terminal_sustained = terminal_candidate and confirmation_failed
+        sustained = idle_continued_growth or (active_candidate and confirmation_failed)
 
         elapsed_minutes = [(sample[0] - samples[0][0]) / 60.0 for sample in samples]
         values = [sample[1] for sample in samples]
@@ -1775,16 +1836,18 @@ def _resource_evidence(
             if denominator > 0
             else 0.0
         )
-        sustained = global_sustained or terminal_sustained
         return {
             "sample_count": sample_count,
             "evaluated": True,
-            "method": "six_block_median_low_with_terminal_subwindows",
+            "method": (
+                "six_block_median_low_with_terminal_subwindows_and_post_load_idle_confirmation"
+            ),
             "block_sample_counts": [len(block) for block in blocks],
             "block_median_levels": block_levels,
             "new_high_event_blocks": new_high_event_blocks,
             "new_high_event_count": len(new_high_event_blocks),
             "first_to_last_delta": round(first_to_last_delta, 3),
+            "global_candidate_growth": global_candidate,
             "global_sustained_growth": global_sustained,
             "terminal_window": {
                 "evaluated": bool(terminal_blocks),
@@ -1793,34 +1856,69 @@ def _resource_evidence(
                 "new_high_event_blocks": terminal_events,
                 "new_high_event_count": len(terminal_events),
                 "first_to_last_delta": round(terminal_delta, 3),
+                "candidate_growth": terminal_candidate,
                 "sustained_growth": terminal_sustained,
             },
+            "idle_recovery": {
+                "required": True,
+                "evaluated": bool(idle_blocks),
+                "sample_count": len(idle_samples),
+                "sample_span_seconds": round(idle_span_seconds, 3),
+                "minimum_sample_count": FORMAL_RESOURCE_IDLE_MIN_SAMPLES,
+                "minimum_span_seconds": FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS,
+                "samples_complete": idle_samples_complete,
+                "block_sample_counts": [len(block) for block in idle_blocks],
+                "block_median_levels": idle_levels,
+                "reference_level": reference_level,
+                "retained_growth_threshold": retained_growth_threshold,
+                "last_two_block_levels": last_two_idle_levels,
+                "continued_growth_candidate": idle_continued_growth,
+                "status": idle_status,
+            },
             "least_squares_slope_per_minute": round(slope, 6),
+            "candidate_growth": active_candidate,
+            "confirmed_sustained_growth": sustained,
             "sustained_growth": sustained,
         }
 
     api_growth = growth(first[1], final[1])
     worker_growth = growth(first[3], final[3])
-    api_fd_trend = resource_trend([(row[0], row[2]) for row in selected])
-    worker_fd_trend = resource_trend([(row[0], row[4]) for row in selected])
-    postgres_connection_trend = resource_trend([(row[0], row[5]) for row in selected])
+    api_fd_trend = resource_trend(
+        [(row[0], row[2]) for row in selected],
+        [(row[0], row[2]) for row in idle_rows],
+    )
+    worker_fd_trend = resource_trend(
+        [(row[0], row[4]) for row in selected],
+        [(row[0], row[4]) for row in idle_rows],
+    )
+    postgres_connection_trend = resource_trend(
+        [(row[0], row[5]) for row in selected],
+        [(row[0], row[5]) for row in idle_rows],
+    )
     survival = all(row[8] == 1 and row[9] == 1 for row in rows)
     restart_free = all(row[6] == 0 and row[7] == 0 for row in rows)
     return {
         "sample_count": len(rows),
         "measured_sample_count": len(selected),
         "minimum_sample_count": minimum_samples,
-        "sample_count_passed": len(selected) >= minimum_samples,
+        "measured_sample_count_passed": len(selected) >= minimum_samples,
+        "idle_recovery_required": shape.formal,
+        "idle_recovery_sample_count": len(idle_rows),
+        "idle_recovery_minimum_sample_count": FORMAL_RESOURCE_IDLE_MIN_SAMPLES,
+        "idle_recovery_sample_span_seconds": round(idle_span_seconds, 3),
+        "idle_recovery_minimum_span_seconds": FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS,
+        "idle_recovery_samples_complete": idle_samples_complete,
+        "sample_count_passed": len(selected) >= minimum_samples and idle_samples_complete,
         "warmup_boundary_elapsed_seconds": round(warmup_finished_seconds, 3),
+        "load_end_boundary_elapsed_seconds": round(load_finished_seconds, 3),
+        "idle_end_boundary_elapsed_seconds": round(idle_finished_seconds, 3),
         "api_peak_rss_bytes": int(max(row[1] for row in rows)),
         "worker_peak_rss_bytes": int(max(row[3] for row in rows)),
         "api_warmup_to_final_rss_growth_percent": round(api_growth, 3),
         "worker_warmup_to_final_rss_growth_percent": round(worker_growth, 3),
         "api_fd_sustained_growth": bool(api_fd_trend["sustained_growth"]),
         "worker_fd_sustained_growth": bool(worker_fd_trend["sustained_growth"]),
-        "postgres_connection_sustained_growth": bool(
-            postgres_connection_trend["sustained_growth"]
-        ),
+        "postgres_connection_sustained_growth": bool(postgres_connection_trend["sustained_growth"]),
         "api_fd_trend": api_fd_trend,
         "worker_fd_trend": worker_fd_trend,
         "postgres_connection_trend": postgres_connection_trend,
@@ -1834,9 +1932,7 @@ def _latency_summary(
     invocations: dict[str, int],
     durations: dict[str, float],
 ) -> dict[str, object]:
-    accepted_observations = [
-        item for item in observations if item.accepted and bool(item.run_id)
-    ]
+    accepted_observations = [item for item in observations if item.accepted and bool(item.run_id)]
     excluded: list[float] = []
     provider_wall: list[float] = []
     db_call: list[float] = []
@@ -2018,6 +2114,13 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
         observations.extend(soak)
         unexpected_5xx += sum(item.http_status >= 500 for item in soak)
 
+    load_finished_seconds = resource_time_origin + time.monotonic() - record_started
+    idle_finished_seconds = load_finished_seconds
+    if shape.formal:
+        await asyncio.to_thread(_resource_time_origin, args.resource_file)
+        await asyncio.sleep(FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS)
+        idle_finished_seconds = await asyncio.to_thread(_resource_time_origin, args.resource_file)
+
     integrity, invocations, durations = _integrity(
         settings,
         observations,
@@ -2029,6 +2132,8 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
         args.resource_file,
         shape,
         warmup_finished_seconds=warmup_finished_seconds,
+        load_finished_seconds=load_finished_seconds,
+        idle_finished_seconds=idle_finished_seconds,
     )
     identity = _identity()
     attempted = len(observations)
@@ -2129,6 +2234,15 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
             "worker_poll_seconds": DEFAULT_WORKER_POLL_SECONDS,
             "worker_batch_size": DEFAULT_WORKER_BATCH_SIZE,
             "provider_delay_ms": int(os.environ.get("P5_B4_PROVIDER_DELAY_MS", "0")),
+            "resource_idle_recovery_seconds": (
+                FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS if shape.formal else 0
+            ),
+            "resource_idle_minimum_sample_count": (
+                FORMAL_RESOURCE_IDLE_MIN_SAMPLES if shape.formal else 0
+            ),
+            "resource_idle_minimum_span_seconds": (
+                FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS if shape.formal else 0
+            ),
         },
         "scheduler": {
             "warmup": warmup_stats,

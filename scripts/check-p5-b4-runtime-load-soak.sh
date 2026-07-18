@@ -8,8 +8,8 @@ COMPOSE_FILE="${ROOT_DIR}/docker-compose.p5-b4-runtime-proof.yml"
 HARNESS_FILE="${ROOT_DIR}/scripts/p5_b4_runtime_load_soak.py"
 MIGRATIONS_DIR="${ROOT_DIR}/migrations"
 DISPOSABLE_CONFIRMATION="I_UNDERSTAND_THIS_DESTROYS_PROOF_DATA"
-DATASET_ID="p5_b4_runtime_8_sites_v2"
-DATASET_CONFIG='{"commercial":{"max_ai_credits_per_site_period":10000.0},"contract":"p5_b4_runtime_dataset.v2","formal":{"baselines":3,"concurrency":8,"queue_burst":64,"request_rate":8,"soak_seconds":600,"warmup_seconds":30},"provider_delay_ms":150,"quick":{"baselines":1,"concurrency":2,"queue_burst":8,"request_rate":2,"soak_seconds":5,"warmup_seconds":3},"sites":8,"worker":{"batch_size":8,"poll_seconds":5}}'
+DATASET_ID="p5_b4_runtime_8_sites_v3"
+DATASET_CONFIG='{"commercial":{"max_ai_credits_per_site_period":10000.0},"contract":"p5_b4_runtime_dataset.v3","formal":{"baselines":3,"concurrency":8,"queue_burst":64,"request_rate":8,"resource_idle_minimum_sample_count":12,"resource_idle_minimum_span_seconds":55,"resource_idle_recovery_seconds":60,"resource_process_scope":"pid1_service_tree_stable_snapshot_v1","soak_seconds":600,"warmup_seconds":30},"provider_delay_ms":150,"quick":{"baselines":1,"concurrency":2,"queue_burst":8,"request_rate":2,"soak_seconds":5,"warmup_seconds":3},"sites":8,"worker":{"batch_size":8,"poll_seconds":5}}'
 
 MODE=""
 OUTPUT_ARGUMENT=""
@@ -375,28 +375,126 @@ export P5_B4_CONTEXT_SHA256
 
 container_process_metrics() {
 	local container_id="$1"
+	local expected_min_processes="$2"
 	docker exec --user 0 "${container_id}" python -c '
 import glob
 import os
+import sys
+import time
 
+MAX_ATTEMPTS = 5
 own_pid = os.getpid()
-rss_bytes = 0
-fd_count = 0
-for status_path in glob.glob("/proc/[0-9]*/status"):
-    pid = int(status_path.split("/")[2])
-    if pid == own_pid:
-        continue
+
+
+class SnapshotRace(RuntimeError):
+    pass
+
+
+def process_identity(pid):
     try:
-        with open(status_path, encoding="utf-8") as handle:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            raw = handle.read().strip()
+    except OSError as error:
+        raise SnapshotRace("process identity unavailable") from error
+    command_end = raw.rfind(")")
+    fields = raw[command_end + 2 :].split() if command_end >= 0 else []
+    if len(fields) <= 19:
+        raise SnapshotRace("process identity malformed")
+    try:
+        parent_pid = int(fields[1])
+        starttime = int(fields[19])
+    except ValueError as error:
+        raise SnapshotRace("process identity malformed") from error
+    return parent_pid, starttime
+
+
+def identity_snapshot():
+    identities = {}
+    for stat_path in glob.glob("/proc/[0-9]*/stat"):
+        pid = int(stat_path.split("/")[2])
+        if pid == own_pid:
+            continue
+        try:
+            identities[pid] = process_identity(pid)
+        except SnapshotRace:
+            continue
+    if 1 not in identities:
+        raise SnapshotRace("pid 1 identity unavailable")
+    return identities
+
+
+def service_snapshot(identities):
+    service = {1: identities[1]}
+    while True:
+        children = {
+            pid: identity
+            for pid, identity in identities.items()
+            if pid not in service and identity[0] != 0 and identity[0] in service
+        }
+        if not children:
+            return service
+        service.update(children)
+
+
+def process_metrics(pid):
+    try:
+        rss_bytes = None
+        with open(f"/proc/{pid}/status", encoding="utf-8") as handle:
             for line in handle:
                 if line.startswith("VmRSS:"):
-                    rss_bytes += int(line.split()[1]) * 1024
+                    rss_bytes = int(line.split()[1]) * 1024
                     break
-        fd_count += len(os.listdir(f"/proc/{pid}/fd"))
-    except (FileNotFoundError, PermissionError, ProcessLookupError):
-        continue
-print(f"{rss_bytes}\t{fd_count}")
-'
+        fd_count = len(os.listdir(f"/proc/{pid}/fd"))
+    except (OSError, ValueError) as error:
+        raise SnapshotRace("process metrics unavailable") from error
+    if rss_bytes is None:
+        raise SnapshotRace("process rss unavailable")
+    return rss_bytes, fd_count
+
+
+def capture(expected_min_processes):
+    before = service_snapshot(identity_snapshot())
+    if len(before) < expected_min_processes:
+        raise SnapshotRace("service process count below minimum")
+    metrics = {}
+    for pid, identity in before.items():
+        if process_identity(pid) != identity:
+            raise SnapshotRace("process identity changed before measurement")
+        metrics[pid] = process_metrics(pid)
+        if process_identity(pid) != identity:
+            raise SnapshotRace("process identity changed during measurement")
+    after = service_snapshot(identity_snapshot())
+    if after != before:
+        raise SnapshotRace("service process tree changed during measurement")
+    rss_bytes = sum(metric[0] for metric in metrics.values())
+    fd_count = sum(metric[1] for metric in metrics.values())
+    if 1 not in metrics or len(metrics) < expected_min_processes:
+        raise SnapshotRace("service process metrics incomplete")
+    if rss_bytes <= 0 or fd_count <= 0:
+        raise SnapshotRace("service process metrics invalid")
+    return rss_bytes, fd_count
+
+
+try:
+    expected_min_processes = int(sys.argv[1])
+except (IndexError, ValueError) as error:
+    raise SystemExit("expected minimum process count is invalid") from error
+if expected_min_processes < 1:
+    raise SystemExit("expected minimum process count is invalid")
+
+last_error = None
+for attempt in range(MAX_ATTEMPTS):
+    try:
+        rss_bytes, fd_count = capture(expected_min_processes)
+        print(f"{rss_bytes}\t{fd_count}")
+        break
+    except SnapshotRace as error:
+        last_error = error
+        if attempt + 1 < MAX_ATTEMPTS:
+            time.sleep(0.05)
+else:
+    raise SystemExit("stable service process metrics unavailable") from last_error
+' "${expected_min_processes}"
 }
 
 container_is_healthy_and_unrestarted() {
@@ -458,8 +556,8 @@ EOF
 ${worker_state}
 EOF
 		[ "${provider_state}" = "1 0" ]
-		api_metrics="$(container_process_metrics "${api_container}")"
-		worker_metrics="$(container_process_metrics "${worker_container}")"
+		api_metrics="$(container_process_metrics "${api_container}" 3)"
+		worker_metrics="$(container_process_metrics "${worker_container}" 1)"
 		IFS=$'\t' read -r api_rss api_fds <<EOF
 ${api_metrics}
 EOF

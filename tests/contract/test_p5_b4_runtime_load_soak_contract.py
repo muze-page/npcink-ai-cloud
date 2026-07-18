@@ -72,7 +72,7 @@ def _record(
     p99: float = 150,
 ) -> dict:
     return {
-        "contract": "p5_b4_external_runtime_load_soak_proof.v2",
+        "contract": "p5_b4_external_runtime_load_soak_proof.v3",
         "mode": mode,
         "baseline_index": index,
         "baseline_environment_receipt_sha256": f"{index:064x}",
@@ -135,6 +135,7 @@ def test_external_topology_replaces_all_old_in_process_seams() -> None:
 
 
 def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) -> None:
+    assert harness.CONTRACT_ID == "p5_b4_external_runtime_load_soak_proof.v3"
     assert harness.FORMAL_RECORDS == 3
     assert harness.FORMAL_DURATION_SECONDS == 600
     assert harness.FORMAL_WARMUP_SECONDS == 30
@@ -143,6 +144,9 @@ def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) ->
     assert harness.FORMAL_QUEUE_BURST == 64
     assert harness.DEFAULT_WORKER_POLL_SECONDS == 5
     assert harness.DEFAULT_WORKER_BATCH_SIZE == 8
+    assert harness.FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS == 60
+    assert harness.FORMAL_RESOURCE_IDLE_MIN_SAMPLES == 12
+    assert harness.FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS == 55.0
     assert harness.SITE_COUNT == 8
     assert harness.PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD == 10_000.0
     parser = harness._parser()
@@ -154,6 +158,34 @@ def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) ->
         parser.parse_args(["--confirm-disposable", "prepare", "--baseline-index", "1"]).command
         == "prepare"
     )
+
+
+def test_dataset_attribution_requires_v3(
+    harness: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = {
+        "commercial": {"max_ai_credits_per_site_period": 10_000.0},
+        "contract": "p5_b4_runtime_dataset.v3",
+    }
+
+    def set_dataset(value: dict[str, object]) -> None:
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":"))
+        monkeypatch.setenv("P5_B4_DATASET_CONFIG", raw)
+        monkeypatch.setenv("P5_B4_DATASET_SHA256", hashlib.sha256(raw.encode()).hexdigest())
+
+    set_dataset(dataset)
+    parsed, digest = harness._dataset_attribution()
+    assert parsed == dataset
+    assert (
+        digest
+        == hashlib.sha256(
+            json.dumps(dataset, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+
+    set_dataset({**dataset, "contract": "p5_b4_runtime_dataset.v2"})
+    with pytest.raises(harness.ProofFailure, match="configuration.dataset_contract_invalid"):
+        harness._dataset_attribution()
 
 
 def test_formal_needs_three_records_and_quick_never_claims_acceptance(
@@ -202,9 +234,7 @@ def test_formal_aggregate_locks_first_record_and_keeps_receipts(
     assert report["first_record_sha256"] == expected_hash
     assert len(report["baseline_receipts"]) == 3
     assert all("record_sha256" in receipt for receipt in report["baseline_receipts"])
-    assert all(
-        "observation_diagnostics" in receipt for receipt in report["baseline_receipts"]
-    )
+    assert all("observation_diagnostics" in receipt for receipt in report["baseline_receipts"])
     assert report["diagnostics_valid_all_records"] is True
 
     records[2]["contract"] = "unexpected-contract"
@@ -221,9 +251,24 @@ def test_formal_aggregate_locks_first_record_and_keeps_receipts(
         harness.ProofFailure,
         match="aggregate.observation_diagnostics_invalid",
     ):
-        harness._aggregate(
-            SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3)
-        )
+        harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
+
+
+def test_formal_aggregate_rejects_legacy_v2_record(
+    harness: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
+    records = [_record(harness, index) for index in range(1, 4)]
+    records[1]["contract"] = "p5_b4_external_runtime_load_soak_proof.v2"
+    _write_records(tmp_path, records)
+
+    report, ok = harness._aggregate(
+        SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3)
+    )
+
+    assert ok is False
+    assert report["formal_acceptance"] is False
+    assert report["record_contracts_match"] is False
 
 
 def test_regression_requires_both_absolute_and_relative_thresholds(harness: ModuleType) -> None:
@@ -313,9 +358,7 @@ def test_queue_timing_evidence_and_gate_fail_closed_without_processing_start(
             run_id=f"hidden-run-{index:03d}",
             started_at=submitted_at,
             processing_started_at=(
-                None
-                if index == 7
-                else submitted_at + timedelta(seconds=1 + index / 10)
+                None if index == 7 else submitted_at + timedelta(seconds=1 + index / 10)
             ),
         )
         for index in range(harness.FORMAL_QUEUE_BURST)
@@ -337,10 +380,7 @@ def test_queue_timing_evidence_and_gate_fail_closed_without_processing_start(
     source = _source(HARNESS)
     assert 'int(queue_timing["sample_count"]) == shape.queue_burst' in source
     assert 'and bool(queue_timing["complete"])' in source
-    assert (
-        'float(integrity["queue_wait_p95_seconds"]) <= DEFAULT_WORKER_POLL_SECONDS * 2'
-        in source
-    )
+    assert 'float(integrity["queue_wait_p95_seconds"]) <= DEFAULT_WORKER_POLL_SECONDS * 2' in source
 
 
 def test_diagnostics_are_bounded_redacted_and_require_run_identifier(
@@ -386,9 +426,7 @@ def test_diagnostics_are_bounded_redacted_and_require_run_identifier(
     assert valid.accepted is True
     assert missing_identifier.success_envelope is True
     assert missing_identifier.accepted is False
-    summary = harness._diagnostic_summary(
-        [negative_control, valid, missing_identifier, unsafe]
-    )
+    summary = harness._diagnostic_summary([negative_control, valid, missing_identifier, unsafe])
     assert set(summary["by_http_status"]) == set(harness.DIAGNOSTIC_HTTP_BUCKETS)
     assert set(summary["by_error_code"]) == set(harness.DIAGNOSTIC_ERROR_BUCKETS)
     assert set(summary["by_runtime_status"]) == set(harness.DIAGNOSTIC_RUNTIME_BUCKETS)
@@ -436,9 +474,7 @@ def test_provider_reference_is_reversible_and_never_looks_like_pii(
         *(f"baseline-1-queue-{index}" for index in range(harness.FORMAL_QUEUE_BURST)),
         *(
             f"baseline-1-soak-{index}"
-            for index in range(
-                round(harness.FORMAL_DURATION_SECONDS * harness.FORMAL_REQUEST_RATE)
-            )
+            for index in range(round(harness.FORMAL_DURATION_SECONDS * harness.FORMAL_REQUEST_RATE))
         ),
     ]
     for label in labels:
@@ -447,9 +483,7 @@ def test_provider_reference_is_reversible_and_never_looks_like_pii(
         assert harness.PROOF_REQUEST_REF_PATTERN.fullmatch(request_ref)
         assert harness._proof_request_hash(request_ref) == request_hash
         assert (
-            find_runtime_data_guard_finding(
-                {"metadata": {"proof_request_ref": request_ref}}
-            )
+            find_runtime_data_guard_finding({"metadata": {"proof_request_ref": request_ref}})
             is None
         )
 
@@ -490,12 +524,10 @@ def test_concurrency_probe_metadata_and_provider_barrier_are_fail_closed(
                 return self.values.pop(0)
             return self.values[0]
 
-    assert harness._wait_for_provider_concurrency(
-        ActiveRedis([7, 8]), 8, timeout_seconds=0.1
-    ) is True
-    assert harness._wait_for_provider_concurrency(
-        ActiveRedis([7]), 8, timeout_seconds=0
-    ) is False
+    assert (
+        harness._wait_for_provider_concurrency(ActiveRedis([7, 8]), 8, timeout_seconds=0.1) is True
+    )
+    assert harness._wait_for_provider_concurrency(ActiveRedis([7]), 8, timeout_seconds=0) is False
     assert "provider_concurrency_target=concurrency" in _source(HARNESS)
 
 
@@ -660,11 +692,14 @@ def test_resource_gate_detects_restart_downtime_and_per_service_growth(
         "35\t107\t12\t107\t22\t5\t0\t0\t1\t1",
         "40\t108\t12\t108\t22\t5\t1\t0\t0\t1",
     ]
+    rows.extend(f"{elapsed}\t108\t12\t108\t22\t5\t1\t0\t1\t1" for elapsed in range(45, 101, 5))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
     quick = harness._resource_evidence(
         resource,
         harness.Shape("quick", 5, 1, 2, 2.0, 8),
         warmup_finished_seconds=0,
+        load_finished_seconds=40,
+        idle_finished_seconds=40,
     )
     assert quick["api_fd_trend"]["evaluated"] is False
     assert quick["api_fd_sustained_growth"] is False
@@ -673,6 +708,8 @@ def test_resource_gate_detects_restart_downtime_and_per_service_growth(
         resource,
         harness.Shape("formal", 45, 0, 2, 2.0, 8),
         warmup_finished_seconds=0,
+        load_finished_seconds=40,
+        idle_finished_seconds=100,
     )
     assert evidence["services_survived_all_samples"] is False
     assert evidence["restart_count_zero"] is False
@@ -684,6 +721,8 @@ def test_resource_gate_detects_restart_downtime_and_per_service_growth(
         resource,
         harness.Shape("formal", 45, 0, 2, 2.0, 8),
         warmup_finished_seconds=35,
+        load_finished_seconds=40,
+        idle_finished_seconds=100,
     )
     assert measured["measured_sample_count"] == 2
     assert measured["api_fd_trend"]["evaluated"] is False
@@ -701,15 +740,15 @@ def test_resource_gate_does_not_call_initial_step_or_stable_jitter_a_leak(
     for index, (api_fd, worker_fd, connections) in enumerate(
         zip(api_fds, worker_fds, postgres_connections, strict=True)
     ):
-        rows.append(
-            f"{index * 5}\t100\t{api_fd}\t100\t{worker_fd}\t{connections}"
-            "\t0\t0\t1\t1"
-        )
+        rows.append(f"{index * 5}\t100\t{api_fd}\t100\t{worker_fd}\t{connections}\t0\t0\t1\t1")
+    rows.extend(f"{elapsed}\t100\t12\t100\t20\t4\t0\t0\t1\t1" for elapsed in range(45, 101, 5))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
     evidence = harness._resource_evidence(
         resource,
         harness.Shape("formal", 45, 0, 8, 8.0, 64),
         warmup_finished_seconds=0,
+        load_finished_seconds=40,
+        idle_finished_seconds=100,
     )
     assert evidence["api_fd_sustained_growth"] is False
     assert evidence["worker_fd_sustained_growth"] is False
@@ -725,12 +764,18 @@ def test_resource_gate_does_not_call_one_permanent_step_sustained_growth(
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate(values):
         rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+    rows.extend(
+        f"{elapsed}\t100\t{values[-1]}\t100\t{values[-1]}\t{values[-1]}\t0\t0\t1\t1"
+        for elapsed in range(600, 656, 5)
+    )
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
         resource,
         harness.Shape("formal", 600, 0, 8, 8.0, 64),
         warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
     )
     trend = evidence["api_fd_trend"]
     assert trend["evaluated"] is True
@@ -753,17 +798,179 @@ def test_resource_gate_detects_repeated_or_late_growth(
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate(values):
         rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+    rows.extend(
+        f"{elapsed}\t100\t{values[-1]}\t100\t{values[-1]}\t{values[-1]}\t0\t0\t1\t1"
+        for elapsed in range(600, 656, 5)
+    )
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
         resource,
         harness.Shape("formal", 600, 0, 8, 8.0, 64),
         warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
     )
     trend = evidence["api_fd_trend"]
     assert trend["evaluated"] is True
     assert trend["new_high_event_count"] >= 2
     assert trend["first_to_last_delta"] >= 2
+    assert trend["candidate_growth"] is True
+    assert trend["idle_recovery"]["status"] == "retained"
+    assert trend["sustained_growth"] is True
+
+
+def test_resource_gate_transient_active_growth_recovers_during_idle(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    resource = tmp_path / "resources-transient-recovery.tsv"
+    measured = [20] * 40 + [21] * 40 + [22] * 40
+    idle = [22] * 3 + [21] * 3 + [20] * 6
+    values = [*measured, *idle]
+    rows = [harness.RESOURCE_HEADER]
+    for index, value in enumerate(values):
+        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+    resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    evidence = harness._resource_evidence(
+        resource,
+        harness.Shape("formal", 600, 0, 8, 8.0, 64),
+        warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
+    )
+    trend = evidence["api_fd_trend"]
+    assert evidence["idle_recovery_samples_complete"] is True
+    assert trend["candidate_growth"] is True
+    assert trend["global_candidate_growth"] is True
+    assert trend["idle_recovery"]["status"] == "recovered"
+    assert trend["global_sustained_growth"] is False
+    assert trend["confirmed_sustained_growth"] is False
+    assert trend["sustained_growth"] is False
+
+
+def test_resource_gate_excludes_samples_after_idle_end_boundary(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    resource = tmp_path / "resources-bounded-idle.tsv"
+    measured = [20] * 40 + [21] * 40 + [22] * 40
+    idle = [22] * 3 + [21] * 3 + [20] * 6
+    after_idle = [30, 31, 32, 33, 34, 35]
+    rows = [harness.RESOURCE_HEADER]
+    for index, value in enumerate([*measured, *idle, *after_idle]):
+        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+    resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    evidence = harness._resource_evidence(
+        resource,
+        harness.Shape("formal", 600, 0, 8, 8.0, 64),
+        warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
+    )
+    trend = evidence["api_fd_trend"]
+    assert evidence["sample_count"] == len(measured) + len(idle) + len(after_idle)
+    assert evidence["idle_recovery_sample_count"] == 12
+    assert evidence["idle_end_boundary_elapsed_seconds"] == 655
+    assert trend["idle_recovery"]["block_median_levels"] == [22.0, 21.0, 20.0, 20.0]
+    assert trend["idle_recovery"]["status"] == "recovered"
+    assert trend["sustained_growth"] is False
+
+
+def test_resource_gate_rejects_idle_end_before_load_end(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    resource = tmp_path / "resources-invalid-idle-boundary.tsv"
+    resource.write_text(
+        f"{harness.RESOURCE_HEADER}\n0\t100\t10\t100\t20\t3\t0\t0\t1\t1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(harness.ProofFailure, match="resources.idle_boundary_invalid"):
+        harness._resource_evidence(
+            resource,
+            harness.Shape("quick", 5, 1, 2, 2.0, 8),
+            warmup_finished_seconds=0,
+            load_finished_seconds=5,
+            idle_finished_seconds=4,
+        )
+
+
+def test_resource_gate_fails_closed_when_idle_samples_are_insufficient(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    resource = tmp_path / "resources-idle-insufficient.tsv"
+    measured = [20] * 40 + [21] * 40 + [22] * 40
+    idle = [22] * 11
+    rows = [harness.RESOURCE_HEADER]
+    for index, value in enumerate([*measured, *idle]):
+        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+    resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    evidence = harness._resource_evidence(
+        resource,
+        harness.Shape("formal", 600, 0, 8, 8.0, 64),
+        warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=650,
+    )
+    trend = evidence["api_fd_trend"]
+    assert evidence["measured_sample_count_passed"] is True
+    assert evidence["idle_recovery_sample_count"] == 11
+    assert evidence["idle_recovery_sample_span_seconds"] == 50
+    assert evidence["idle_recovery_samples_complete"] is False
+    assert evidence["sample_count_passed"] is False
+    assert trend["candidate_growth"] is True
+    assert trend["idle_recovery"]["status"] == "insufficient_samples"
+    assert trend["sustained_growth"] is True
+
+
+def test_resource_gate_treats_mixed_idle_floor_as_inconclusive(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    resource = tmp_path / "resources-idle-inconclusive.tsv"
+    measured = [20] * 40 + [21] * 40 + [22] * 40
+    idle = [22] * 6 + [21] * 3 + [22] * 3
+    rows = [harness.RESOURCE_HEADER]
+    for index, value in enumerate([*measured, *idle]):
+        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+    resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    evidence = harness._resource_evidence(
+        resource,
+        harness.Shape("formal", 600, 0, 8, 8.0, 64),
+        warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
+    )
+    trend = evidence["api_fd_trend"]
+    assert trend["idle_recovery"]["last_two_block_levels"] == [21.0, 22.0]
+    assert trend["idle_recovery"]["status"] == "inconclusive"
+    assert trend["sustained_growth"] is True
+
+
+def test_resource_gate_fails_when_idle_itself_keeps_growing(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    resource = tmp_path / "resources-idle-growing.tsv"
+    measured = [20] * 120
+    idle = [20] * 3 + [21] * 3 + [22] * 3 + [23] * 3
+    rows = [harness.RESOURCE_HEADER]
+    for index, value in enumerate([*measured, *idle]):
+        rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+    resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    evidence = harness._resource_evidence(
+        resource,
+        harness.Shape("formal", 600, 0, 8, 8.0, 64),
+        warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
+    )
+    trend = evidence["api_fd_trend"]
+    assert trend["candidate_growth"] is False
+    assert trend["idle_recovery"]["continued_growth_candidate"] is True
+    assert trend["idle_recovery"]["status"] == "continued_growth"
     assert trend["sustained_growth"] is True
 
 
@@ -775,15 +982,18 @@ def test_resource_gate_detects_growth_confined_to_terminal_window(
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate(values):
         rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+    rows.extend(f"{elapsed}\t100\t24\t100\t24\t24\t0\t0\t1\t1" for elapsed in range(600, 656, 5))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
         resource,
         harness.Shape("formal", 600, 0, 8, 8.0, 64),
         warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
     )
     trend = evidence["api_fd_trend"]
-    assert trend["global_sustained_growth"] is False
+    assert trend["global_candidate_growth"] is False
     assert trend["new_high_event_count"] == 1
     assert trend["terminal_window"]["new_high_event_count"] >= 2
     assert trend["terminal_window"]["sustained_growth"] is True
@@ -798,12 +1008,15 @@ def test_resource_gate_does_not_call_one_late_step_terminal_growth(
     rows = [harness.RESOURCE_HEADER]
     for index, value in enumerate(values):
         rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+    rows.extend(f"{elapsed}\t100\t25\t100\t25\t25\t0\t0\t1\t1" for elapsed in range(600, 656, 5))
     resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     evidence = harness._resource_evidence(
         resource,
         harness.Shape("formal", 600, 0, 8, 8.0, 64),
         warmup_finished_seconds=0,
+        load_finished_seconds=595,
+        idle_finished_seconds=655,
     )
     trend = evidence["api_fd_trend"]
     assert trend["terminal_window"]["new_high_event_count"] == 1
@@ -819,14 +1032,20 @@ def test_resource_gate_ignores_spike_and_requires_formal_sample_floor(
     def evidence_for(values: list[int]) -> dict[str, object]:
         rows = [harness.RESOURCE_HEADER]
         for index, value in enumerate(values):
-            rows.append(
-                f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1"
-            )
+            rows.append(f"{index * 5}\t100\t{value}\t100\t{value}\t{value}\t0\t0\t1\t1")
+        load_finished_seconds = (len(values) - 1) * 5
+        rows.extend(
+            f"{load_finished_seconds + offset}\t100\t{values[-1]}\t100\t{values[-1]}"
+            f"\t{values[-1]}\t0\t0\t1\t1"
+            for offset in range(5, 61, 5)
+        )
         resource.write_text("\n".join(rows) + "\n", encoding="utf-8")
         return harness._resource_evidence(
             resource,
             harness.Shape("formal", 600, 0, 8, 8.0, 64),
             warmup_finished_seconds=0,
+            load_finished_seconds=load_finished_seconds,
+            idle_finished_seconds=load_finished_seconds + 60,
         )
 
     spike = evidence_for([20] * 59 + [50] + [20] * 60)
@@ -850,6 +1069,22 @@ def test_resource_sampler_origin_is_shared_before_record_timer(harness: ModuleTy
     assert source.index(
         "resource_time_origin = await asyncio.to_thread(_resource_time_origin"
     ) < source.index("record_started = time.monotonic()")
+    client_close = source.index(
+        "load_finished_seconds = resource_time_origin + time.monotonic() - record_started"
+    )
+    first_idle_sync = source.index(
+        "await asyncio.to_thread(_resource_time_origin, args.resource_file)",
+        client_close,
+    )
+    idle_wait = source.index(
+        "await asyncio.sleep(FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS)",
+        first_idle_sync,
+    )
+    final_idle_sync = source.index(
+        "idle_finished_seconds = await asyncio.to_thread(",
+        idle_wait,
+    )
+    assert client_close < first_idle_sync < idle_wait < final_idle_sync
 
 
 def test_redaction_and_atomic_locked_output(harness: ModuleType, tmp_path: Path) -> None:
@@ -888,8 +1123,12 @@ def test_wrapper_has_fresh_baselines_cleanup_and_no_quick_acceptance_claim() -> 
     dataset_match = re.search(r"^DATASET_CONFIG='(.+)'$", source, re.MULTILINE)
     assert dataset_match is not None
     dataset = json.loads(dataset_match.group(1))
-    assert dataset["contract"] == "p5_b4_runtime_dataset.v2"
+    assert dataset["contract"] == "p5_b4_runtime_dataset.v3"
     assert dataset["commercial"] == {"max_ai_credits_per_site_period": 10_000.0}
+    assert dataset["formal"]["resource_idle_recovery_seconds"] == 60
+    assert dataset["formal"]["resource_idle_minimum_sample_count"] == 12
+    assert dataset["formal"]["resource_idle_minimum_span_seconds"] == 55
+    assert dataset["formal"]["resource_process_scope"] == "pid1_service_tree_stable_snapshot_v1"
 
     assert "NON-ACCEPTANCE" in source
     assert "--volumes" in source
@@ -904,6 +1143,10 @@ def test_wrapper_has_fresh_baselines_cleanup_and_no_quick_acceptance_claim() -> 
     assert "probe-api" in source
     assert "baseline-" in source
     assert "aggregate" in source
+    assert "def process_identity(pid):" in source
+    assert "service process tree changed during measurement" in source
+    assert 'container_process_metrics "${api_container}" 3' in source
+    assert 'container_process_metrics "${worker_container}" 1' in source
     assert "publish_output" in source
     assert "os.fsync(stream.fileno())" in source
     assert source.index("os.fsync(stream.fileno())") < source.index(
