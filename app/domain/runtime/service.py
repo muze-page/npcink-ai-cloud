@@ -558,13 +558,14 @@ class RuntimeService:
             self.commercial_service.record_run_acceptance(session=session, run=run)
 
             if should_enqueue:
-                self.run_lifecycle_service.publish_queue_signal(run.run_id)
                 session.commit()
-                return self._build_execution_response(
+                response = self._build_execution_response(
                     run,
                     repository=repository,
                     idempotent_replay=False,
                 )
+                self.run_lifecycle_service.publish_queue_signal(run.run_id)
+                return response
 
             provider_input_payload = request.input_payload
             if self._is_wordpress_ai_connector_request(request):
@@ -691,13 +692,14 @@ class RuntimeService:
             self.commercial_service.record_run_acceptance(session=session, run=run)
 
             if should_enqueue:
-                self.run_lifecycle_service.publish_queue_signal(run.run_id)
                 session.commit()
-                return self._build_execution_response(
+                response = self._build_execution_response(
                     run,
                     repository=repository,
                     idempotent_replay=False,
                 )
+                self.run_lifecycle_service.publish_queue_signal(run.run_id)
+                return response
 
             self._execute_site_knowledge_run(
                 run,
@@ -812,13 +814,14 @@ class RuntimeService:
             self.commercial_service.record_run_acceptance(session=session, run=run)
 
             if should_enqueue:
-                self.run_lifecycle_service.publish_queue_signal(run.run_id)
                 session.commit()
-                return self._build_execution_response(
+                response = self._build_execution_response(
                     run,
                     repository=repository,
                     idempotent_replay=False,
                 )
+                self.run_lifecycle_service.publish_queue_signal(run.run_id)
+                return response
 
             self._execute_cloud_batch_runtime_run(
                 run,
