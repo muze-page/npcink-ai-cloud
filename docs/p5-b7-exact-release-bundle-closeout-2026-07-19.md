@@ -26,9 +26,17 @@ archive twice without rebuilding or pulling during deployment:
 | bundle SHA-256 | `592d1ce23334cddf4a09db0f147d6db48aa1c696980adc24630ed333660baa17` |
 | checksum-file SHA-256 | `4b1aef59a0ceb42e003908ca43af39bfbfc359095a07183914e5392359c6f3ab` |
 | manifest schema | `npcink.release-bundle.v1` |
+| manifest SHA-256 | `c5f82b97f2955a9ea83828cf823d789a4582a66b173565a0d5e20e72d7e96343` |
 | payload records | `95` |
+| internal `SHA256SUMS` | `96` records covering the manifest and all payloads; SHA-256 `754a92293f99813d43249af4fa839f4612ee43e9683380ed6126205c4b723939` |
 | image archives / roles | `5` / `8` |
 | scan evidence files | `27` |
+| scan index SHA-256 | `35bae9c632ccbef891c1914ffd224e0d33aa2a289fbe9582e81f919af75a7108` |
+
+The 96 internal checksum records cover the manifest and all 95 payloads; the
+checksum table does not self-cover. The manifest and checksum table cover the
+final compressed image archives, while the image table below records the
+scanner's uncompressed `image.tar` inputs.
 
 The five archives are `api`, `frontend`, `postgres`, locked external Redis,
 and locked external NGINX. API is the one scanned and archived image for the
