@@ -108,6 +108,14 @@ def fixture_archive_config_id(path: Path) -> str:
     return "sha256:" + hashlib.sha256(config_bytes).hexdigest()
 
 
+def fixture_repo_digest(reference: str) -> str:
+    tagged, digest = reference.rsplit("@", 1)
+    last_slash = tagged.rfind("/")
+    last_colon = tagged.rfind(":")
+    repository = tagged[:last_colon] if last_colon > last_slash else tagged
+    return f"{repository}@{digest}"
+
+
 def test_docker_archive_rejects_undeclared_repo_tags(tmp_path: Path) -> None:
     helper = load_helper_module()
     archive = tmp_path / "api.tar.gz"
@@ -282,7 +290,11 @@ def create_scan_evidence(bundle: Path, lock: dict[str, object]) -> dict[str, str
             "config_image_id": config_ids[key],
             "syft_subject_manifest_digest": "sha256:" + "d" * 64,
             "source_daemon_image_id": source_ids[key],
-            "repo_digests": [references[key]] if key in {"redis", "nginx"} else [],
+            "repo_digests": (
+                [fixture_repo_digest(references[key])]
+                if key in {"redis", "nginx"}
+                else []
+            ),
             "platform": "linux/amd64",
             "scanner_docker_context": "default",
             "policy": policy,
@@ -699,6 +711,39 @@ def test_scan_evidence_rejects_stale_database_and_post_scan_image_drift(
     update_scan_receipt_index(bundle, "api", api_receipt)
     with pytest.raises(helper.BundleError, match="bundled Docker archive is not the scanned"):
         helper.validate_scan_evidence(bundle, lock, manifest["archives"], "linux/amd64")
+
+
+def test_scan_evidence_requires_external_repository_digest_identity(
+    exact_bundle_fixture: tuple[Path, Path, Path],
+) -> None:
+    source, bundle, _ = exact_bundle_fixture
+    helper = load_helper_module()
+    manifest = json.loads((bundle / "release-bundle-manifest.json").read_text(encoding="utf-8"))
+    lock = json.loads((source / "deploy/image-lock/production-images.json").read_text())
+
+    helper.validate_scan_evidence(bundle, lock, manifest["archives"], "linux/amd64")
+    redis_receipt_path = bundle / "release/image-scan/redis.receipt.json"
+    redis_receipt = json.loads(redis_receipt_path.read_text(encoding="utf-8"))
+    invalid_repo_digests = (
+        ["attacker.example/redis@sha256:" + "1" * 64],
+        ["npcink-ai-cloud-external-redis@sha256:" + "1" * 64],
+        ["redis@sha256:" + "9" * 64],
+    )
+    for repo_digests in invalid_repo_digests:
+        redis_receipt["repo_digests"] = repo_digests
+        update_scan_receipt_index(bundle, "redis", redis_receipt)
+        with pytest.raises(helper.BundleError, match="lacks the locked repo digest for redis"):
+            helper.validate_scan_evidence(bundle, lock, manifest["archives"], "linux/amd64")
+
+
+def test_repository_digest_identity_strips_tags_but_preserves_registry_ports() -> None:
+    helper = load_helper_module()
+    assert helper.repository_digest_identity("redis:7-alpine@sha256:" + "1" * 64) == (
+        "redis@sha256:" + "1" * 64
+    )
+    assert helper.repository_digest_identity(
+        "registry.example:5000/team/redis:7-alpine@sha256:" + "2" * 64
+    ) == ("registry.example:5000/team/redis@sha256:" + "2" * 64)
 
 
 def test_finalize_image_records_requires_a_complete_passed_release_index(

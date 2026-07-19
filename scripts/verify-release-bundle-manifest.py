@@ -96,6 +96,20 @@ def fail(message: str) -> None:
     raise BundleError(message)
 
 
+def repository_digest_identity(reference: str) -> str:
+    if "@" not in reference:
+        fail("external image reference must be digest-pinned")
+    tagged, digest = reference.rsplit("@", 1)
+    if IMAGE_ID_RE.fullmatch(digest) is None:
+        fail("external image reference has an invalid digest")
+    last_slash = tagged.rfind("/")
+    last_colon = tagged.rfind(":")
+    repository = tagged[:last_colon] if last_colon > last_slash else tagged
+    if not repository:
+        fail("external image reference has an invalid repository")
+    return f"{repository}@{digest}"
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -745,7 +759,8 @@ def validate_scan_evidence(
             fail(f"bundled Docker archive is not the scanned archive for {key}")
         if key in external_keys:
             repo_digests = receipt.get("repo_digests")
-            if not isinstance(repo_digests, list) or expected_references[key] not in repo_digests:
+            expected_repo_digest = repository_digest_identity(expected_references[key])
+            if not isinstance(repo_digests, list) or expected_repo_digest not in repo_digests:
                 fail(f"external scan receipt lacks the locked repo digest for {key}")
         by_key[key] = record
     if set(by_key) != expected_keys:
