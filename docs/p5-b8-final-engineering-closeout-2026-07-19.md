@@ -1,9 +1,12 @@
 # P5-B8 Final Engineering Closeout — 2026-07-19
 
-Status: `passed` for the P5-B8 code-owned/local engineering gate set. The
-P0-P5 architecture is frozen, but global P5 and the overall refactor phase-exit
-remain incomplete until the operator-only P1-E05/P1-E06 evidence exists. This
-is not a production release, GA decision, or real-user value claim.
+Status: historical P5-B8 code-owned/local engineering gates passed at the
+recorded revisions. Later migration, test, documentation, and deployment work
+is not covered by the recorded exact bundle and requires a new build, scan,
+and replay. The P0-P5 architecture remains frozen, but global P5 and the
+overall refactor phase-exit remain incomplete until the operator-only
+P1-E05/P1-E06 evidence exists. This is not a production release, GA decision,
+or real-user value claim.
 
 ## Decision
 
@@ -48,12 +51,14 @@ and GA.
 
 The changes from `0663d95f` through `054ae3d8` are limited to the B7 evidence
 documents, Dependabot configuration, the release-policy checker, and its
-contract tests. The diff contains no `app/**`, `frontend/**`, Compose, deploy
-payload, or image-lock change. Therefore this closeout retains `0663d95f` as
-the last exact release-payload revision instead of mislabeling the bundle as a
-`054ae3d8` artifact. Any later runtime, dependency, frontend, Compose, deploy,
-or image-lock change invalidates that bundle evidence and requires a rebuild,
-scan, and replay.
+contract tests. The original closeout treated those changes as outside the
+release payload. Integration review corrected that conclusion: the Dockerfile
+copies `scripts/**` into the API image, so the release-policy checker changes
+the API build context even though application and frontend source are
+unchanged. The `0663d95f` bundle remains valid historical evidence only for
+that exact `linux/arm64` revision; it does not represent `054ae3d8` or any
+later branch head. A current AMD64 release requires a fresh build, scan,
+manifest, and same-bundle replay.
 
 ## Exact WordPress Acceptance Set
 
@@ -128,7 +133,7 @@ below rather than being disguised as a fourth status or as a clean first pass.
 | P1 identity, durable-run ownership, and migration | `principal_id`, account, membership, site, and local actor remain separate; `run_records` stays Cloud-hosted truth and Redis non-canonical. Alembic head is `20260717_0068`, with SQLite and PostgreSQL semantic rehearsal recorded by P5-B1. | passed |
 | P1-E05 production title execution | The current production connector runbook still marks this as operator-only phase-exit proof. P5-B8 deterministic WordPress evidence cannot close it, so it blocks production promotion and GA. | production-only not claimed |
 | P1-E06 production-like inventory, carry-forward, and restore | The deletion inventory and production connector runbook still require operator evidence. The disposable restore drill cannot close it, so it blocks production promotion and GA. | production-only not claimed |
-| P2 title, summary, and selected-text rewrite | P5-B8 records POSTs from all three editor endpoints and `6/6` successful Cloud runs, proving the current exact transport/UI path. [P5-B3](p5-b3-wordpress-ai-text-acceptance-2026-07-18.md) remains the task/profile and real-provider runtime-metadata evidence: `fb3c1d7..0663d95f` is empty for the connector, WordPress operation, provider-adapter, and runtime-route seams, and `0663d95f..054ae3d8` changes no runtime/frontend payload. P5-B8 alone is not task-semantic routing proof. | passed |
+| P2 title, summary, and selected-text rewrite | P5-B8 records POSTs from all three editor endpoints and `6/6` successful Cloud runs, proving the recorded transport/UI path. [P5-B3](p5-b3-wordpress-ai-text-acceptance-2026-07-18.md) remains the task/profile and real-provider runtime-metadata evidence: `fb3c1d7..0663d95f` is empty for the connector, WordPress operation, provider-adapter, and runtime-route seams, while `0663d95f..054ae3d8` changes none of those source seams or frontend source. P5-B8 alone is not task-semantic routing proof, and the historical bundle is not current release evidence. | passed |
 | P2 real Save-and-Verify connection path | The WordPress settings handler performed capability and nonce checks, stored an encrypted credential envelope without plaintext credentials, and ended configured, verified, and connector-enabled. | passed |
 | P2 suggestion review and local write ownership | Pre-save WordPress writes were `0`; the user-visible review path then performed exactly `1` save with revision delta `+1`, preserved non-target sentinels, and removed the fixture. Cloud performed no WordPress write. | passed |
 | P2 idempotent local apply and failure posture | The data-path proof records one explicit apply and a second no-op; [P5-B3](p5-b3-wordpress-ai-text-acceptance-2026-07-18.md) retains deterministic offline/failure and runtime-metadata evidence for the unchanged local package path. | passed |

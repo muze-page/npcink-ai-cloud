@@ -33,13 +33,17 @@ Changed together:
 - frontend types, fail-closed response validation, PUT payload, UI copy, unit
   contracts, and Playwright coverage;
 - current boundary documentation and ADR rollback semantics;
-- Alembic `20260717_0068`, which converts only current hosted-profile policy
-  JSON in `routing_profiles.default_policy_json` and
-  `routing_bindings.selection_policy_json`.
+- Alembic `20260717_0068`, which converts the actual pre-cutover WordPress
+  managed-policy shape in `routing_profiles.default_policy_json` and
+  `routing_bindings.selection_policy_json` to the current hosted-profile
+  contract.
 
-The migration preserves candidate chains, operator notes, revisions,
-timestamps, and unrelated policy fields. Historical run records and service
-audit events are intentionally immutable and are not rewritten.
+The migration preserves candidate chains, operator notes, timestamps, and
+unrelated policy fields. The one intentional revision change
+maps the former Admin-created binding prefix to `runtime-profiles-admin-`, so a
+post-migration catalog refresh preserves operator-managed candidates and
+policy. Catalog-created revisions remain unchanged. Historical run records
+and service audit events are intentionally immutable and are not rewritten.
 
 Not changed:
 
@@ -78,8 +82,8 @@ No WordPress repository change was required.
 | Runtime Profiles Playwright spec | `7 passed` |
 | Active source superseded-version/former-field search | empty across `app`, `tests`, `frontend/src`, and `frontend/tests` |
 | Alembic head | `20260717_0068` |
-| SQLite migration upgrade/downgrade/idempotency/atomicity | `4 passed` |
-| PostgreSQL 16 semantic rehearsal | `0067 -> 0068 -> 0067` passed; both policy columns and preserved fields verified |
+| SQLite migration upgrade/downgrade/idempotency/atomicity/catalog-refresh retention | `5 passed` |
+| PostgreSQL 16 semantic rehearsal | fresh `0067 -> 0068 -> 0067` passed against the real pre-cutover Admin and catalog shapes; both policy columns, Admin revision mapping, catalog-refresh retention, and downgrade shape verified |
 | `pnpm run check:fast` | contract `156 passed, 1 skipped`; domain `602 passed, 3 skipped` |
 | `pnpm run check:seam` | API `746 passed`; perimeter `9 passed` |
 | `pnpm run check:anti-drift` | passed |
@@ -97,13 +101,35 @@ Existing warnings were limited to the repository's pnpm override-location
 warning, Starlette TestClient deprecation warning, and one pre-existing
 Pydantic alias warning. No new warning was attributed to this batch.
 
+## Integration Correction — 2026-07-20
+
+PR integration review found that the original migration fixture represented a
+transition shape that the pre-cutover `master` writers never persisted. Real
+rows used the former WordPress managed surface without the new platform,
+connector, or operation-contract fields. The original migration would
+therefore have skipped those rows, and a following catalog refresh could have
+replaced an Admin-managed candidate chain because its revision still used the
+former Admin prefix.
+
+Commit `63ae041a` corrects the migration at the data boundary instead of adding
+a runtime compatibility path. Upgrade now recognizes the real old surface,
+writes the complete current contract, and maps only the old Admin revision
+prefix. Downgrade restores the exact old surface and Admin prefix while
+removing the new fields. The replacement regression fixture copies both real
+Admin and catalog writer shapes and proves refresh retention, idempotency,
+non-target isolation, historical-record immutability, and transactional
+rollback. A fresh PostgreSQL 16 rehearsal verified the corrected path. The
+earlier four-test and PostgreSQL result remain historical attempts and are not
+the authoritative migration evidence.
+
 ## Review Resolution
 
-Three cross-area read-only reviews found one release-blocking documentation
-error: ADR-018 still described a code-only rollback despite the new data
-migration. The ADR now requires coordinated application and migration order.
-A second stale future-tense description in the multi-platform boundary was
-also corrected. Both fixes were rechecked; no P0-P2 finding remains.
+The initial cross-area reviews found a release-blocking rollback-documentation
+error and a stale future-tense multi-platform description; both were corrected.
+The later PR integration review then found the real-data migration defect
+recorded above. That defect is now guarded by executable old-writer fixtures
+and a PostgreSQL rehearsal. This document still closes only the hosted-profile
+contract batch and does not approve the production deployment sequence.
 
 ## Promotion And Rollback
 
