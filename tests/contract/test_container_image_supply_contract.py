@@ -339,7 +339,7 @@ def test_application_runtime_identity_is_stable_and_verified_in_built_images() -
     assert '[ "$(id -g)" = "999" ]' in smoke
 
 
-def test_scan_policy_is_fail_closed_and_allowlist_is_empty_by_default() -> None:
+def test_scan_policy_is_fail_closed_and_canonical_exceptions_are_exact_and_bounded() -> None:
     lock = _lock()
     policy = lock["scan_policy"]
     allowlist = json.loads((ROOT / policy["allowlist_file"]).read_text())
@@ -355,10 +355,25 @@ def test_scan_policy_is_fail_closed_and_allowlist_is_empty_by_default() -> None:
         "allowlist_file": "deploy/image-lock/cve-allowlist.json",
         "generated_artifacts_must_not_be_committed": True,
     }
-    assert allowlist == {
-        "schema_version": "npcink.production-image-cve-allowlist.v1",
-        "entries": [],
-    }
+    assert allowlist["schema_version"] == "npcink.production-image-cve-allowlist.v1"
+    entries = allowlist["entries"]
+    assert [
+        (
+            entry["image"],
+            entry["vulnerability_id"],
+            entry["package"],
+            entry["package_version"],
+        )
+        for entry in entries
+    ] == [
+        ("api", "CVE-2026-11940", "python", "3.14.6"),
+        ("api", "CVE-2026-11972", "python", "3.14.6"),
+        ("api", "CVE-2026-15308", "python", "3.14.6"),
+    ]
+    assert {entry["owner"] for entry in entries} == {"Muze"}
+    assert {entry["expires_on"] for entry in entries} == {"2026-08-05"}
+    assert all("P5 engineering" in entry["reason"] for entry in entries)
+    assert all("no production or GA authorization" in entry["reason"] for entry in entries)
     required = schema["properties"]["entries"]["items"]["required"]
     assert {"image", "vulnerability_id", "package", "package_version"}.issubset(required)
     assert {"owner", "reason", "expires_on"}.issubset(required)
@@ -656,7 +671,28 @@ def _write_release_receipt(
             },
         },
     )
-    _write_json(report_path, _scan_report(severity=severity, built=built, image_key=key))
+    report = _scan_report(severity=severity, built=built, image_key=key)
+    if key == "api":
+        canonical_allowlist = json.loads(
+            (ROOT / lock["scan_policy"]["allowlist_file"]).read_text()
+        )
+        matches = report["matches"]
+        assert isinstance(matches, list)
+        for entry in canonical_allowlist["entries"]:
+            matches.append(
+                {
+                    "vulnerability": {
+                        "id": entry["vulnerability_id"],
+                        "severity": "high",
+                        "fix": {"versions": [], "state": ""},
+                    },
+                    "artifact": {
+                        "name": entry["package"],
+                        "version": entry["package_version"],
+                    },
+                }
+            )
+    _write_json(report_path, report)
     args = Namespace(
         lock=str(LOCK_PATH),
         allowlist=str(ROOT / lock["scan_policy"]["allowlist_file"]),
@@ -756,6 +792,8 @@ def test_release_scan_index_requires_complete_deploy_set_and_real_id_equivalence
     forged = json.loads(api_path.read_text())
     forged["status"] = "passed"
     forged["blocking_finding_count"] = 0
+    forged["allowlisted_blocking_finding_count"] = 0
+    forged["allowlisted_blocking_findings"] = []
     forged["unallowlisted_blocking_finding_count"] = 0
     forged["unallowlisted_blocking_findings"] = []
     _write_json(api_path, forged)
