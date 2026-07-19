@@ -55,12 +55,12 @@ from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService
 from app.domain.provider_connections.service import ProviderConnectionAdminService
 
-CONTRACT_ID = "p5_b4_external_runtime_load_soak_proof.v4"
+CONTRACT_ID = "p5_b4_external_runtime_load_soak_proof.v5"
 DISPOSABLE_CONFIRMATION = "I_UNDERSTAND_THIS_DESTROYS_PROOF_DATA"
 DATABASE_HOST = "proof-postgres"
 DATABASE_NAME = "npcink_p5_b4_proof"
 DATABASE_USER = "npcink_p5_b4"
-DATABASE_COMMENT = "p5_b4_external_runtime_load_soak_proof_v4"
+DATABASE_COMMENT = "p5_b4_external_runtime_load_soak_proof_v5"
 REDIS_HOST = "proof-redis"
 REDIS_DATABASE = 15
 REDIS_PREFIX = "p5_b4:external_runtime_proof"
@@ -73,6 +73,7 @@ FORMAL_REQUEST_RATE = 8.0
 FORMAL_QUEUE_BURST = 64
 DEFAULT_WORKER_POLL_SECONDS = 5
 DEFAULT_WORKER_BATCH_SIZE = 8
+FORMAL_WORKER_REPLICAS = 2
 FORMAL_PROVIDER_DELAY_MS = 150
 FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS = 60
 FORMAL_RESOURCE_IDLE_MIN_SAMPLES = 12
@@ -83,10 +84,10 @@ FORMAL_RSS_IDLE_BLOCK_COUNT = 4
 PROOF_PLAN_ID = "plan_p5_b4_disposable"
 PROOF_PLAN_VERSION_ID = "plan_version_p5_b4_disposable_v1"
 PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD = 10_000.0
-EXPECTED_DATASET_ID = "p5_b4_runtime_8_sites_v4"
+EXPECTED_DATASET_ID = "p5_b4_runtime_8_sites_v5"
 EXPECTED_DATASET_CONFIG: dict[str, object] = {
     "commercial": {"max_ai_credits_per_site_period": 10_000.0},
-    "contract": "p5_b4_runtime_dataset.v4",
+    "contract": "p5_b4_runtime_dataset.v5",
     "formal": {
         "baselines": 3,
         "concurrency": 8,
@@ -95,7 +96,7 @@ EXPECTED_DATASET_CONFIG: dict[str, object] = {
         "resource_idle_minimum_sample_count": 12,
         "resource_idle_minimum_span_seconds": 55,
         "resource_idle_recovery_seconds": 60,
-        "resource_process_scope": "pid1_service_tree_stable_cohort_v2",
+        "resource_process_scope": "pid1_service_trees_aggregate_stable_cohort_v3",
         "rss_endpoint_window_min_span_seconds": 55,
         "rss_endpoint_window_sample_count": 12,
         "rss_growth_method": "steady_endpoint_window_median_v1",
@@ -114,7 +115,7 @@ EXPECTED_DATASET_CONFIG: dict[str, object] = {
         "warmup_seconds": 3,
     },
     "sites": 8,
-    "worker": {"batch_size": 8, "poll_seconds": 5},
+    "worker": {"batch_size": 8, "poll_seconds": 5, "replicas": 2},
 }
 RESOURCE_HEADER = (
     "elapsed_seconds\tapi_rss_bytes\tapi_fd_count\tworker_rss_bytes\t"
@@ -136,6 +137,58 @@ THRESHOLDS = {
     "duplicate_count_max": 0,
     "residue_count_max": 0,
 }
+RECORD_CHECK_IDS = (
+    "unexpected_5xx_zero",
+    "transport_http_failures_zero",
+    "accepted_rate",
+    "completed_rate",
+    "provider_excluded_p95",
+    "provider_excluded_p99",
+    "persistent_provider_latency_complete",
+    "queue_requested_accepted_completed_exact",
+    "queue_timing_evidence_complete",
+    "queue_wait",
+    "identifier_set_exact",
+    "observation_diagnostics_complete",
+    "proof_fixture_rejections_zero",
+    "provider_usage_integrity",
+    "cross_site_and_result_read_isolation",
+    "runtime_queue_residue_zero",
+    "artifacts_returned_to_manifest_baseline",
+    "rss_growth",
+    "process_cohort_stable",
+    "api_fd_not_sustained_growth",
+    "worker_fd_not_sustained_growth",
+    "db_connections_not_sustained_growth",
+    "resource_samples_complete",
+    "services_survived",
+    "service_restarts_zero",
+    "formal_clean_revision_requirement_satisfied",
+    "achieved_rate",
+    "scheduler_drift",
+    "real_concurrency_observed",
+)
+RECORD_BOUNDARY = {
+    "cloud_role": "hosted_runtime_and_worker_evidence_only",
+    "external_http_gunicorn": True,
+    "local_control_plane_unchanged": True,
+    "wordpress_write_owner_unchanged": True,
+    "new_runtime_infrastructure": False,
+}
+RECORD_REDACTION = {
+    "aggregate_only": True,
+    "prompt_fields_emitted": False,
+    "result_fields_emitted": False,
+    "secret_fields_emitted": False,
+    "raw_run_or_site_identifiers_emitted": False,
+    "real_provider_credentials_present": False,
+}
+RECORD_LIMITATIONS = (
+    "deterministic_local_provider_excludes_upstream_provider_latency_and_quality",
+    "quick_mode_is_never_acceptance_evidence",
+    "one_formal_record_cannot_claim_acceptance",
+    "engineering_proof_does_not_define_a_production_slo",
+)
 PROVIDER_CREDENTIAL_ENV_NAMES = (
     "NPCINK_CLOUD_OPENAI_API_KEY",
     "NPCINK_CLOUD_ANTHROPIC_API_KEY",
@@ -218,7 +271,7 @@ DIAGNOSTIC_PHASE_BUCKETS = (
     "soak",
     "other",
 )
-DIAGNOSTIC_SCHEMA = "p5_b4_observation_diagnostics.v1"
+DIAGNOSTIC_SCHEMA = "p5_b4_observation_diagnostics.v2"
 PROOF_FIXTURE_REJECTION_BUCKETS = (
     "auth.invalid_key",
     "auth.invalid_signature",
@@ -342,13 +395,19 @@ def _diagnostic_summary(
     by_error_code = _fixed_counts(DIAGNOSTIC_ERROR_BUCKETS)
     by_runtime_status = _fixed_counts(DIAGNOSTIC_RUNTIME_BUCKETS)
     by_phase = _fixed_counts(DIAGNOSTIC_PHASE_BUCKETS)
+    by_phase_and_error_code = {
+        phase: _fixed_counts(DIAGNOSTIC_ERROR_BUCKETS) for phase in DIAGNOSTIC_PHASE_BUCKETS
+    }
     response_shape_violation_count = 0
     negative_control_count = 0
     for item in observations:
+        error_bucket = _diagnostic_error_bucket(item.error_code)
+        phase_bucket = _diagnostic_phase_bucket(item.phase)
         by_http_status[_diagnostic_http_bucket(item)] += 1
-        by_error_code[_diagnostic_error_bucket(item.error_code)] += 1
+        by_error_code[error_bucket] += 1
         by_runtime_status[_diagnostic_runtime_bucket(item.runtime_status)] += 1
-        by_phase[_diagnostic_phase_bucket(item.phase)] += 1
+        by_phase[phase_bucket] += 1
+        by_phase_and_error_code[phase_bucket][error_bucket] += 1
         response_shape_violation_count += int(not _response_shape_valid(item))
         negative_control_count += int(
             item.phase == "cross_site"
@@ -369,6 +428,7 @@ def _diagnostic_summary(
         "by_error_code": by_error_code,
         "by_runtime_status": by_runtime_status,
         "by_phase": by_phase,
+        "by_phase_and_error_code": by_phase_and_error_code,
         "other_count": other_count,
         "response_shape_violation_count": response_shape_violation_count,
         "negative_control_included": negative_control_included,
@@ -388,6 +448,7 @@ def _diagnostics_valid(payload: object) -> bool:
         "by_error_code",
         "by_runtime_status",
         "by_phase",
+        "by_phase_and_error_code",
         "other_count",
         "response_shape_violation_count",
         "negative_control_included",
@@ -420,6 +481,45 @@ def _diagnostics_valid(payload: object) -> bool:
             return False
         if sum(counts.values()) != sample_count:
             return False
+    phase_error_counts = payload.get("by_phase_and_error_code")
+    if not isinstance(phase_error_counts, dict) or set(phase_error_counts) != set(
+        DIAGNOSTIC_PHASE_BUCKETS
+    ):
+        return False
+    for phase in DIAGNOSTIC_PHASE_BUCKETS:
+        error_counts = phase_error_counts.get(phase)
+        if not isinstance(error_counts, dict) or set(error_counts) != set(DIAGNOSTIC_ERROR_BUCKETS):
+            return False
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in error_counts.values()
+        ):
+            return False
+        if sum(error_counts.values()) != cast(dict[str, int], payload["by_phase"])[phase]:
+            return False
+    for error_code in DIAGNOSTIC_ERROR_BUCKETS:
+        phase_total = sum(
+            cast(dict[str, int], cast(dict[str, object], phase_error_counts)[phase])[error_code]
+            for phase in DIAGNOSTIC_PHASE_BUCKETS
+        )
+        if phase_total != cast(dict[str, int], payload["by_error_code"])[error_code]:
+            return False
+    transport_error_total = sum(
+        cast(dict[str, int], payload["by_error_code"])[error_code]
+        for error_code in DIAGNOSTIC_ERROR_BUCKETS
+        if error_code.startswith("transport.")
+    )
+    if transport_error_total != cast(dict[str, int], payload["by_http_status"])["transport"]:
+        return False
+    negative_control_count = cast(
+        dict[str, int],
+        cast(dict[str, object], phase_error_counts)["cross_site"],
+    )["auth.site_mismatch"]
+    if (
+        negative_control_count != 1
+        or cast(dict[str, int], payload["by_error_code"])["auth.site_mismatch"] != 1
+    ):
+        return False
     calculated_other = sum(
         int(cast(dict[str, int], payload[name])["other"])
         for name in ("by_http_status", "by_error_code", "by_runtime_status", "by_phase")
@@ -441,6 +541,13 @@ def _proof_fixture_rejections_zero(diagnostics: object) -> bool:
         return False
     errors = cast(dict[str, int], cast(dict[str, object], diagnostics)["by_error_code"])
     return all(errors[name] == 0 for name in PROOF_FIXTURE_REJECTION_BUCKETS)
+
+
+def _transport_http_failures_zero(diagnostics: object) -> bool:
+    if not _diagnostics_valid(diagnostics):
+        return False
+    http_statuses = cast(dict[str, int], cast(dict[str, object], diagnostics)["by_http_status"])
+    return http_statuses["transport"] == 0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1721,7 +1828,7 @@ def _parse_resource_sample(fields: list[str]) -> ResourceSample:
         or elapsed_seconds < 0
         or any(value < 0 for value in integer_values)
         or integer_values[7] not in {0, 1}
-        or integer_values[8] not in {0, 1}
+        or integer_values[8] not in range(FORMAL_WORKER_REPLICAS + 1)
         or not HASH_PATTERN.fullmatch(fields[12])
         or not HASH_PATTERN.fullmatch(fields[13])
     ):
@@ -1778,7 +1885,7 @@ def _process_cohort_evidence(samples: list[ResourceSample]) -> dict[str, object]
     worker = service_evidence(
         process_counts=[sample.worker_process_count for sample in samples],
         identities=[sample.worker_process_identity_sha256 for sample in samples],
-        minimum_process_count=1,
+        minimum_process_count=FORMAL_WORKER_REPLICAS,
     )
     return {
         "scope": "measured_and_idle_samples",
@@ -2231,7 +2338,9 @@ def _resource_evidence(
     )
     cohort_samples = [*selected, *idle_rows]
     process_cohort_evidence = _process_cohort_evidence(cohort_samples)
-    survival = all(row.api_running == 1 and row.worker_running == 1 for row in rows)
+    survival = all(
+        row.api_running == 1 and row.worker_running == FORMAL_WORKER_REPLICAS for row in rows
+    )
     restart_free = all(row.api_restart_count == 0 and row.worker_restart_count == 0 for row in rows)
     return {
         "sample_count": len(rows),
@@ -2329,6 +2438,60 @@ def _identity() -> dict[str, object]:
     }
 
 
+def _record_configuration(shape: Shape, *, provider_delay_ms: int) -> dict[str, object]:
+    return {
+        "duration_seconds": shape.duration_seconds,
+        "warmup_seconds": shape.warmup_seconds,
+        "concurrency_cap": shape.concurrency,
+        "request_rate": shape.request_rate,
+        "site_count": SITE_COUNT,
+        "queue_burst": shape.queue_burst,
+        "worker_poll_seconds": DEFAULT_WORKER_POLL_SECONDS,
+        "worker_batch_size": DEFAULT_WORKER_BATCH_SIZE,
+        "worker_replicas": FORMAL_WORKER_REPLICAS,
+        "provider_delay_ms": provider_delay_ms,
+        "resource_idle_recovery_seconds": (
+            FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS if shape.formal else 0
+        ),
+        "resource_idle_minimum_sample_count": (
+            FORMAL_RESOURCE_IDLE_MIN_SAMPLES if shape.formal else 0
+        ),
+        "resource_idle_minimum_span_seconds": (
+            FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS if shape.formal else 0
+        ),
+        "resource_process_scope": "pid1_service_trees_aggregate_stable_cohort_v3",
+        "rss_endpoint_window_sample_count": (
+            FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES if shape.formal else 0
+        ),
+        "rss_endpoint_window_min_span_seconds": (
+            FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS if shape.formal else 0
+        ),
+        "rss_growth_method": "steady_endpoint_window_median_v1" if shape.formal else "unevaluated",
+        "rss_growth_percent_max": THRESHOLDS["rss_growth_percent_max"] if shape.formal else 0,
+        "rss_idle_method": "four_block_budget_confirmation_v1" if shape.formal else "unevaluated",
+    }
+
+
+def _expected_record_shape(mode: str) -> Shape:
+    if mode == "formal":
+        return Shape(
+            mode="formal",
+            duration_seconds=FORMAL_DURATION_SECONDS,
+            warmup_seconds=FORMAL_WARMUP_SECONDS,
+            concurrency=FORMAL_CONCURRENCY,
+            request_rate=FORMAL_REQUEST_RATE,
+            queue_burst=FORMAL_QUEUE_BURST,
+        )
+    return Shape(
+        mode="quick",
+        duration_seconds=5,
+        warmup_seconds=3,
+        concurrency=2,
+        request_rate=2.0,
+        queue_burst=8,
+    )
+
+
 async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool]:
     shape = _shape(args.mode)
     if args.baseline_index < 1:
@@ -2343,7 +2506,12 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
     api_url = _env("P5_B4_PROOF_API_URL")
     resource_time_origin = await asyncio.to_thread(_resource_time_origin, args.resource_file)
     record_started = time.monotonic()
-    async with httpx.AsyncClient(base_url=api_url, timeout=45.0) as client:
+    limits = httpx.Limits(
+        max_connections=shape.concurrency,
+        max_keepalive_connections=shape.concurrency,
+        keepalive_expiry=5.0,
+    )
+    async with httpx.AsyncClient(base_url=api_url, timeout=45.0, limits=limits) as client:
         before_mismatch = await asyncio.to_thread(_side_effect_snapshot, settings)
         mismatch = await _execute(
             client,
@@ -2505,6 +2673,7 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
     queue_timing = cast(dict[str, object], integrity["queue_timing_evidence"])
     checks = {
         "unexpected_5xx_zero": unexpected_5xx == 0,
+        "transport_http_failures_zero": _transport_http_failures_zero(diagnostics),
         "accepted_rate": accepted_rate >= THRESHOLDS["accepted_rate_min"],
         "completed_rate": completed_rate >= THRESHOLDS["completed_rate_min"],
         "provider_excluded_p95": float(latency["provider_excluded_p95_ms"]) <= 500,
@@ -2523,7 +2692,7 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
             _diagnostics_valid(diagnostics) and diagnostics["complete"]
         ),
         "proof_fixture_rejections_zero": _proof_fixture_rejections_zero(diagnostics),
-        "provider_usage_integrity": int(integrity["duplicates_or_missing"]) == 0,
+        "provider_usage_integrity": _provider_usage_integrity_passed(integrity),
         "cross_site_and_result_read_isolation": all(isolation.values()),
         "runtime_queue_residue_zero": residue == 0,
         "artifacts_returned_to_manifest_baseline": int(integrity["artifact_records"])
@@ -2551,6 +2720,8 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
             and int(integrity["provider_barrier_timeouts"]) == 0
         ),
     }
+    if tuple(checks) != RECORD_CHECK_IDS:
+        raise ProofFailure("harness.record_check_contract_drift")
     passed = all(checks.values())
     report = {
         "contract": CONTRACT_ID,
@@ -2564,39 +2735,10 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
         "formal_acceptance": False,
         "production_slo_claim": False,
         "identity": identity,
-        "configuration": {
-            "duration_seconds": shape.duration_seconds,
-            "warmup_seconds": shape.warmup_seconds,
-            "concurrency_cap": shape.concurrency,
-            "request_rate": shape.request_rate,
-            "site_count": SITE_COUNT,
-            "queue_burst": shape.queue_burst,
-            "worker_poll_seconds": DEFAULT_WORKER_POLL_SECONDS,
-            "worker_batch_size": DEFAULT_WORKER_BATCH_SIZE,
-            "provider_delay_ms": int(os.environ.get("P5_B4_PROVIDER_DELAY_MS", "0")),
-            "resource_idle_recovery_seconds": (
-                FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS if shape.formal else 0
-            ),
-            "resource_idle_minimum_sample_count": (
-                FORMAL_RESOURCE_IDLE_MIN_SAMPLES if shape.formal else 0
-            ),
-            "resource_idle_minimum_span_seconds": (
-                FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS if shape.formal else 0
-            ),
-            "rss_endpoint_window_sample_count": (
-                FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES if shape.formal else 0
-            ),
-            "rss_endpoint_window_min_span_seconds": (
-                FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS if shape.formal else 0
-            ),
-            "rss_growth_method": (
-                "steady_endpoint_window_median_v1" if shape.formal else "unevaluated"
-            ),
-            "rss_growth_percent_max": (THRESHOLDS["rss_growth_percent_max"] if shape.formal else 0),
-            "rss_idle_method": (
-                "four_block_budget_confirmation_v1" if shape.formal else "unevaluated"
-            ),
-        },
+        "configuration": _record_configuration(
+            shape,
+            provider_delay_ms=int(os.environ.get("P5_B4_PROVIDER_DELAY_MS", "0")),
+        ),
         "scheduler": {
             "warmup": warmup_stats,
             "measured": soak_stats,
@@ -2625,27 +2767,9 @@ async def _run_record(args: argparse.Namespace) -> tuple[dict[str, object], bool
         "isolation": isolation,
         "resources": resources,
         "checks": checks,
-        "boundary": {
-            "cloud_role": "hosted_runtime_and_worker_evidence_only",
-            "external_http_gunicorn": True,
-            "local_control_plane_unchanged": True,
-            "wordpress_write_owner_unchanged": True,
-            "new_runtime_infrastructure": False,
-        },
-        "redaction": {
-            "aggregate_only": True,
-            "prompt_fields_emitted": False,
-            "result_fields_emitted": False,
-            "secret_fields_emitted": False,
-            "raw_run_or_site_identifiers_emitted": False,
-            "real_provider_credentials_present": False,
-        },
-        "limitations": [
-            "deterministic_local_provider_excludes_upstream_provider_latency_and_quality",
-            "quick_mode_is_never_acceptance_evidence",
-            "one_formal_record_cannot_claim_acceptance",
-            "engineering_proof_does_not_define_a_production_slo",
-        ],
+        "boundary": dict(RECORD_BOUNDARY),
+        "redaction": dict(RECORD_REDACTION),
+        "limitations": list(RECORD_LIMITATIONS),
     }
     dispose_engine(settings.database_url)
     return report, passed
@@ -2665,25 +2789,1520 @@ def _regression_failed(reference_ms: float, later_ms: float) -> bool:
     return delta > 100.0 and percent > 20.0
 
 
+def _canonical_record_mapping(record: dict[str, object], field: str) -> str:
+    value = record.get(field)
+    if not isinstance(value, dict):
+        raise ProofFailure(f"aggregate.{field}_invalid")
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise ProofFailure(f"aggregate.{field}_invalid") from error
+
+
+def _strict_int(value: object, *, minimum: int = 0) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and value >= minimum
+
+
+def _strict_float(value: object, *, minimum: float = 0.0) -> bool:
+    return isinstance(value, float) and math.isfinite(value) and value >= minimum
+
+
+def _finite_float(value: object) -> bool:
+    return isinstance(value, float) and math.isfinite(value)
+
+
+def _exact_mapping(value: object, keys: set[str]) -> dict[str, object] | None:
+    if not isinstance(value, dict) or set(value) != keys:
+        return None
+    return cast(dict[str, object], value)
+
+
+def _exact_typed_mapping(value: object, expected: dict[str, object]) -> bool:
+    payload = _exact_mapping(value, set(expected))
+    return bool(
+        payload
+        and all(
+            type(payload[name]) is type(expected_value) and payload[name] == expected_value
+            for name, expected_value in expected.items()
+        )
+    )
+
+
+def _timing_distribution_valid(value: object, *, expected_samples: int) -> bool:
+    payload = _exact_mapping(value, {"sample_count", "p50", "p90", "p95", "p99", "max"})
+    if (
+        not payload
+        or not _strict_int(payload["sample_count"])
+        or payload["sample_count"] != expected_samples
+        or any(not _strict_float(payload[name]) for name in ("p50", "p90", "p95", "p99", "max"))
+    ):
+        return False
+    percentiles = [cast(float, payload[name]) for name in ("p50", "p90", "p95", "p99", "max")]
+    return percentiles == sorted(percentiles) and (
+        expected_samples > 0 or all(value == 0.0 for value in percentiles)
+    )
+
+
+def _queue_timing_section_valid(value: object, *, required_count: int) -> bool:
+    keys = {
+        "sample_count",
+        "processing_started_sample_count",
+        "missing_started_at_count",
+        "missing_processing_started_count",
+        "timing_sample_count",
+        "wait_seconds",
+        "first_claim_lag_seconds",
+        "submission_span_seconds",
+        "processing_start_span_seconds",
+        "adjacent_claim_gap_seconds",
+        "complete",
+    }
+    payload = _exact_mapping(value, keys)
+    if not payload or not _strict_int(required_count, minimum=1):
+        return False
+    count_fields = (
+        "sample_count",
+        "processing_started_sample_count",
+        "missing_started_at_count",
+        "missing_processing_started_count",
+        "timing_sample_count",
+    )
+    if any(not _strict_int(payload[name]) for name in count_fields):
+        return False
+    sample_count = cast(int, payload["sample_count"])
+    processing_started = cast(int, payload["processing_started_sample_count"])
+    missing_started = cast(int, payload["missing_started_at_count"])
+    missing_processing = cast(int, payload["missing_processing_started_count"])
+    timing_samples = cast(int, payload["timing_sample_count"])
+    submission_samples = sample_count - missing_started
+    if (
+        sample_count > required_count
+        or missing_started > sample_count
+        or missing_processing > sample_count
+        or processing_started != sample_count - missing_processing
+        or timing_samples > min(submission_samples, processing_started)
+        or timing_samples < max(0, submission_samples + processing_started - sample_count)
+        or not isinstance(payload["complete"], bool)
+        or any(
+            not _strict_float(payload[name])
+            for name in (
+                "first_claim_lag_seconds",
+                "submission_span_seconds",
+                "processing_start_span_seconds",
+            )
+        )
+        or not _timing_distribution_valid(payload["wait_seconds"], expected_samples=timing_samples)
+        or not _timing_distribution_valid(
+            payload["adjacent_claim_gap_seconds"],
+            expected_samples=max(0, processing_started - 1),
+        )
+    ):
+        return False
+    complete = (
+        sample_count == required_count
+        and missing_started == 0
+        and missing_processing == 0
+        and timing_samples == required_count
+    )
+    return payload["complete"] is complete
+
+
+def _queue_timing_valid(value: object, *, expected_count: int) -> bool:
+    keys = {
+        "expected_sample_count",
+        "sample_count",
+        "processing_started_sample_count",
+        "missing_started_at_count",
+        "missing_processing_started_count",
+        "timing_sample_count",
+        "wait_seconds",
+        "first_claim_lag_seconds",
+        "submission_span_seconds",
+        "processing_start_span_seconds",
+        "adjacent_claim_gap_seconds",
+        "complete",
+        "cohort_size",
+        "expected_cohort_count",
+        "cohort_count",
+        "cohorts",
+    }
+    payload = _exact_mapping(value, keys)
+    if (
+        not payload
+        or not _strict_int(expected_count, minimum=1)
+        or expected_count % DEFAULT_WORKER_BATCH_SIZE != 0
+    ):
+        return False
+    expected_cohorts = expected_count // DEFAULT_WORKER_BATCH_SIZE
+    integer_expectations = {
+        "expected_sample_count": expected_count,
+        "cohort_size": DEFAULT_WORKER_BATCH_SIZE,
+        "expected_cohort_count": expected_cohorts,
+    }
+    if any(
+        not _strict_int(payload[name]) or payload[name] != expected
+        for name, expected in integer_expectations.items()
+    ):
+        return False
+    section_keys = keys - {
+        "expected_sample_count",
+        "cohort_size",
+        "expected_cohort_count",
+        "cohort_count",
+        "cohorts",
+    }
+    if not _queue_timing_section_valid(
+        {name: payload[name] for name in section_keys}, required_count=expected_count
+    ):
+        return False
+    cohorts = payload["cohorts"]
+    sample_count = cast(int, payload["sample_count"])
+    expected_observed_cohorts = (
+        sample_count + DEFAULT_WORKER_BATCH_SIZE - 1
+    ) // DEFAULT_WORKER_BATCH_SIZE
+    if (
+        not _strict_int(payload["cohort_count"])
+        or not isinstance(cohorts, list)
+        or payload["cohort_count"] != len(cohorts)
+        or len(cohorts) != expected_observed_cohorts
+    ):
+        return False
+    cohort_keys = section_keys | {"cohort_index"}
+    cohort_totals = dict.fromkeys(
+        (
+            "sample_count",
+            "processing_started_sample_count",
+            "missing_started_at_count",
+            "missing_processing_started_count",
+            "timing_sample_count",
+        ),
+        0,
+    )
+    for index, item in enumerate(cohorts, start=1):
+        cohort = _exact_mapping(item, cohort_keys)
+        if (
+            not cohort
+            or not _strict_int(cohort["cohort_index"], minimum=1)
+            or cohort["cohort_index"] != index
+            or not _queue_timing_section_valid(
+                {name: cohort[name] for name in section_keys},
+                required_count=DEFAULT_WORKER_BATCH_SIZE,
+            )
+        ):
+            return False
+        for name in cohort_totals:
+            cohort_totals[name] += cast(int, cohort[name])
+    if any(cohort_totals[name] != payload[name] for name in cohort_totals):
+        return False
+    complete = (
+        sample_count == expected_count
+        and payload["missing_started_at_count"] == 0
+        and payload["missing_processing_started_count"] == 0
+        and payload["timing_sample_count"] == expected_count
+        and len(cohorts) == expected_cohorts
+        and all(cast(bool, cast(dict[str, object], cohort)["complete"]) for cohort in cohorts)
+    )
+    return payload["complete"] is complete
+
+
+def _phase_stats_valid(value: object, *, expected_samples: int) -> bool:
+    payload = _exact_mapping(
+        value,
+        {
+            "actual_phase_wall_seconds",
+            "achieved_requests_per_second",
+            "achieved_rate_ratio",
+            "scheduler_drift_p95_ms",
+            "scheduler_drift_max_ms",
+            "semaphore_wait_p95_ms",
+            "semaphore_wait_max_ms",
+            "max_in_flight",
+            "sample_count",
+        },
+    )
+    return bool(
+        payload
+        and _strict_int(payload["sample_count"], minimum=1)
+        and payload["sample_count"] == expected_samples
+        and _strict_int(payload["max_in_flight"], minimum=1)
+        and all(
+            _strict_float(payload[name])
+            for name in (
+                "actual_phase_wall_seconds",
+                "achieved_requests_per_second",
+                "achieved_rate_ratio",
+                "scheduler_drift_p95_ms",
+                "scheduler_drift_max_ms",
+                "semaphore_wait_p95_ms",
+                "semaphore_wait_max_ms",
+            )
+        )
+    )
+
+
+def _process_service_evidence_valid(
+    value: object,
+    *,
+    expected_sample_count: int,
+    minimum_process_count: int,
+) -> bool:
+    payload = _exact_mapping(
+        value,
+        {
+            "sample_count",
+            "minimum_process_count",
+            "process_counts",
+            "process_count_stable",
+            "minimum_process_count_met",
+            "identity_sha256_values",
+            "identity_sha256_unique",
+            "passed",
+        },
+    )
+    if not payload:
+        return False
+    process_counts = payload["process_counts"]
+    identities = payload["identity_sha256_values"]
+    if (
+        not _strict_int(payload["sample_count"], minimum=1)
+        or payload["sample_count"] != expected_sample_count
+        or payload["minimum_process_count"] != minimum_process_count
+        or not isinstance(process_counts, list)
+        or not process_counts
+        or any(not _strict_int(count, minimum=1) for count in process_counts)
+        or not isinstance(identities, list)
+        or not identities
+        or any(
+            not isinstance(identity, str) or not HASH_PATTERN.fullmatch(identity)
+            for identity in identities
+        )
+    ):
+        return False
+    count_stable = len(process_counts) == 1
+    minimum_met = all(count >= minimum_process_count for count in process_counts)
+    identity_unique = len(identities) == 1
+    passed = count_stable and minimum_met and identity_unique
+    return (
+        payload["process_count_stable"] is count_stable
+        and payload["minimum_process_count_met"] is minimum_met
+        and payload["identity_sha256_unique"] is identity_unique
+        and payload["passed"] is passed
+    )
+
+
+def _process_cohort_valid(value: object) -> bool:
+    payload = _exact_mapping(
+        value,
+        {"scope", "evaluated", "sample_count", "api", "worker", "all_valid"},
+    )
+    if (
+        not payload
+        or payload["scope"] != "measured_and_idle_samples"
+        or payload["evaluated"] is not True
+        or not _strict_int(payload["sample_count"], minimum=1)
+    ):
+        return False
+    sample_count = cast(int, payload["sample_count"])
+    api_valid = _process_service_evidence_valid(
+        payload["api"], expected_sample_count=sample_count, minimum_process_count=3
+    )
+    worker_valid = _process_service_evidence_valid(
+        payload["worker"],
+        expected_sample_count=sample_count,
+        minimum_process_count=FORMAL_WORKER_REPLICAS,
+    )
+    if not api_valid or not worker_valid:
+        return False
+    api = cast(dict[str, object], payload["api"])
+    worker = cast(dict[str, object], payload["worker"])
+    return payload["all_valid"] is bool(api["passed"] is True and worker["passed"] is True)
+
+
+def _resource_trend_valid(
+    value: object,
+    *,
+    formal: bool,
+    expected_measured_sample_count: int,
+    expected_minimum_sample_count: int,
+    expected_idle_sample_count: int,
+    expected_idle_span_seconds: float,
+    expected_idle_samples_complete: bool,
+) -> bool:
+    payload = _exact_mapping(
+        value,
+        {
+            "sample_count",
+            "evaluated",
+            "method",
+            "block_sample_counts",
+            "block_median_levels",
+            "new_high_event_blocks",
+            "new_high_event_count",
+            "first_to_last_delta",
+            "global_candidate_growth",
+            "global_sustained_growth",
+            "terminal_window",
+            "idle_recovery",
+            "least_squares_slope_per_minute",
+            "candidate_growth",
+            "confirmed_sustained_growth",
+            "sustained_growth",
+        },
+    )
+    terminal = _exact_mapping(
+        payload["terminal_window"] if payload else None,
+        {
+            "evaluated",
+            "block_sample_counts",
+            "block_median_levels",
+            "new_high_event_blocks",
+            "new_high_event_count",
+            "first_to_last_delta",
+            "candidate_growth",
+            "sustained_growth",
+        },
+    )
+    idle = _exact_mapping(
+        payload["idle_recovery"] if payload else None,
+        {
+            "required",
+            "evaluated",
+            "sample_count",
+            "sample_span_seconds",
+            "minimum_sample_count",
+            "minimum_span_seconds",
+            "samples_complete",
+            "block_sample_counts",
+            "block_median_levels",
+            "reference_level",
+            "retained_growth_threshold",
+            "last_two_block_levels",
+            "continued_growth_candidate",
+            "status",
+        },
+    )
+    if not payload or not terminal or not idle:
+        return False
+
+    boolean_fields = (
+        "evaluated",
+        "global_candidate_growth",
+        "global_sustained_growth",
+        "candidate_growth",
+        "confirmed_sustained_growth",
+        "sustained_growth",
+    )
+    terminal_boolean_fields = ("evaluated", "candidate_growth", "sustained_growth")
+    idle_boolean_fields = (
+        "required",
+        "evaluated",
+        "samples_complete",
+        "continued_growth_candidate",
+    )
+    if (
+        not _strict_int(payload["sample_count"], minimum=1)
+        or payload["sample_count"] != expected_measured_sample_count
+        or payload["method"]
+        != "six_block_median_low_with_terminal_subwindows_and_post_load_idle_confirmation"
+        or not _strict_int(payload["new_high_event_count"])
+        or not _finite_float(payload["first_to_last_delta"])
+        or not _finite_float(payload["least_squares_slope_per_minute"])
+        or any(not isinstance(payload[name], bool) for name in boolean_fields)
+        or not _strict_int(terminal["new_high_event_count"])
+        or not _finite_float(terminal["first_to_last_delta"])
+        or any(not isinstance(terminal[name], bool) for name in terminal_boolean_fields)
+        or idle["required"] is not formal
+        or any(not isinstance(idle[name], bool) for name in idle_boolean_fields)
+        or not _strict_int(idle["sample_count"])
+        or idle["sample_count"] != expected_idle_sample_count
+        or not _strict_float(idle["sample_span_seconds"])
+        or idle["sample_span_seconds"] != expected_idle_span_seconds
+        or not _strict_int(idle["minimum_sample_count"])
+        or idle["minimum_sample_count"] != FORMAL_RESOURCE_IDLE_MIN_SAMPLES
+        or not _strict_float(idle["minimum_span_seconds"])
+        or idle["minimum_span_seconds"] != FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS
+        or idle["samples_complete"] is not expected_idle_samples_complete
+        or not isinstance(idle["status"], str)
+    ):
+        return False
+
+    def integer_list(item: object, *, minimum: int = 0) -> list[int] | None:
+        if not isinstance(item, list) or any(
+            not _strict_int(element, minimum=minimum) for element in item
+        ):
+            return None
+        return cast(list[int], item)
+
+    def float_list(item: object) -> list[float] | None:
+        if not isinstance(item, list) or any(not _strict_float(element) for element in item):
+            return None
+        return cast(list[float], item)
+
+    block_counts = integer_list(payload["block_sample_counts"], minimum=1)
+    block_levels = float_list(payload["block_median_levels"])
+    event_blocks = integer_list(payload["new_high_event_blocks"], minimum=1)
+    terminal_counts = integer_list(terminal["block_sample_counts"], minimum=1)
+    terminal_levels = float_list(terminal["block_median_levels"])
+    terminal_events = integer_list(terminal["new_high_event_blocks"], minimum=1)
+    idle_counts = integer_list(idle["block_sample_counts"], minimum=1)
+    idle_levels = float_list(idle["block_median_levels"])
+    idle_last_two = float_list(idle["last_two_block_levels"])
+    if any(
+        item is None
+        for item in (
+            block_counts,
+            block_levels,
+            event_blocks,
+            terminal_counts,
+            terminal_levels,
+            terminal_events,
+            idle_counts,
+            idle_levels,
+            idle_last_two,
+        )
+    ):
+        return False
+
+    evaluated = formal and expected_measured_sample_count >= expected_minimum_sample_count
+    if payload["evaluated"] is not evaluated:
+        return False
+    if not evaluated:
+        return bool(
+            block_counts == []
+            and block_levels == []
+            and event_blocks == []
+            and payload["new_high_event_count"] == 0
+            and payload["first_to_last_delta"] == 0.0
+            and payload["global_candidate_growth"] is False
+            and payload["global_sustained_growth"] is False
+            and terminal["evaluated"] is False
+            and terminal_counts == []
+            and terminal_levels == []
+            and terminal_events == []
+            and terminal["new_high_event_count"] == 0
+            and terminal["first_to_last_delta"] == 0.0
+            and terminal["candidate_growth"] is False
+            and terminal["sustained_growth"] is False
+            and idle["evaluated"] is False
+            and idle_counts == []
+            and idle_levels == []
+            and idle["reference_level"] is None
+            and idle["retained_growth_threshold"] is None
+            and idle_last_two == []
+            and idle["continued_growth_candidate"] is False
+            and idle["status"] == "not_evaluated"
+            and payload["least_squares_slope_per_minute"] == 0.0
+            and payload["candidate_growth"] is False
+            and payload["confirmed_sustained_growth"] is False
+            and payload["sustained_growth"] is False
+        )
+
+    def repeated_new_high(levels: list[float]) -> tuple[list[int], float, bool]:
+        running_high = levels[0]
+        events: list[int] = []
+        for index, level in enumerate(levels[1:], start=1):
+            if level >= running_high + 1.0:
+                events.append(index)
+                running_high = level
+        delta = levels[-1] - levels[0]
+        return events, delta, len(events) >= 2 and delta >= 2.0
+
+    expected_block_counts = [
+        (index + 1) * expected_measured_sample_count // 6
+        - index * expected_measured_sample_count // 6
+        for index in range(6)
+    ]
+    if block_counts != expected_block_counts or len(cast(list[float], block_levels)) != 6:
+        return False
+    expected_events, expected_delta, expected_global_candidate = repeated_new_high(
+        cast(list[float], block_levels)
+    )
+    if (
+        event_blocks != expected_events
+        or payload["new_high_event_count"] != len(expected_events)
+        or payload["first_to_last_delta"] != round(expected_delta, 3)
+        or payload["global_candidate_growth"] is not expected_global_candidate
+    ):
+        return False
+
+    terminal_count = expected_block_counts[-1]
+    expected_terminal_counts = [
+        (index + 1) * terminal_count // 4 - index * terminal_count // 4 for index in range(4)
+    ]
+    if (
+        terminal["evaluated"] is not True
+        or terminal_counts != expected_terminal_counts
+        or len(cast(list[float], terminal_levels)) != 4
+    ):
+        return False
+    expected_terminal_events, expected_terminal_delta, expected_terminal_candidate = (
+        repeated_new_high(cast(list[float], terminal_levels))
+    )
+    if (
+        terminal_events != expected_terminal_events
+        or terminal["new_high_event_count"] != len(expected_terminal_events)
+        or terminal["first_to_last_delta"] != round(expected_terminal_delta, 3)
+        or terminal["candidate_growth"] is not expected_terminal_candidate
+    ):
+        return False
+
+    reference_level = cast(list[float], block_levels)[0]
+    retained_threshold = reference_level + 2.0
+    if expected_idle_samples_complete:
+        expected_idle_counts = [
+            (index + 1) * expected_idle_sample_count // 4 - index * expected_idle_sample_count // 4
+            for index in range(4)
+        ]
+        if (
+            idle["evaluated"] is not True
+            or idle_counts != expected_idle_counts
+            or len(cast(list[float], idle_levels)) != 4
+            or idle["reference_level"] != reference_level
+            or idle["retained_growth_threshold"] != retained_threshold
+            or idle_last_two != cast(list[float], idle_levels)[-2:]
+        ):
+            return False
+        _idle_events, _idle_delta, idle_continued = repeated_new_high(
+            cast(list[float], idle_levels)
+        )
+        if idle_continued:
+            idle_status = "continued_growth"
+        elif all(level < retained_threshold for level in cast(list[float], idle_last_two)):
+            idle_status = "recovered"
+        elif all(level >= retained_threshold for level in cast(list[float], idle_last_two)):
+            idle_status = "retained"
+        else:
+            idle_status = "inconclusive"
+    else:
+        idle_continued = False
+        idle_status = "insufficient_samples"
+        if (
+            idle["evaluated"] is not False
+            or idle_counts != []
+            or idle_levels != []
+            or idle["reference_level"] != reference_level
+            or idle["retained_growth_threshold"] != retained_threshold
+            or idle_last_two != []
+        ):
+            return False
+    confirmation_failed = idle_status != "recovered"
+    active_candidate = expected_global_candidate or expected_terminal_candidate
+    expected_sustained = idle_continued or (active_candidate and confirmation_failed)
+    return bool(
+        idle["continued_growth_candidate"] is idle_continued
+        and idle["status"] == idle_status
+        and payload["global_sustained_growth"]
+        is (expected_global_candidate and confirmation_failed)
+        and terminal["sustained_growth"] is (expected_terminal_candidate and confirmation_failed)
+        and payload["candidate_growth"] is active_candidate
+        and payload["confirmed_sustained_growth"] is expected_sustained
+        and payload["sustained_growth"] is expected_sustained
+    )
+
+
+def _rss_growth_valid(
+    value: object,
+    *,
+    formal: bool,
+    expected_measured_sample_count: int,
+    expected_idle_sample_count: int,
+) -> bool:
+    payload = _exact_mapping(
+        value,
+        {
+            "evaluated",
+            "method",
+            "threshold_percent",
+            "observed_measured_sample_count",
+            "baseline_window",
+            "terminal_window",
+            "windows_non_overlapping",
+            "growth_percent",
+            "growth_percent_rounded",
+            "active_within_budget",
+            "idle_confirmation",
+            "within_budget",
+        },
+    )
+    if not payload or payload["method"] != "steady_endpoint_window_median_v1":
+        return False
+    if (
+        not _strict_float(payload["threshold_percent"])
+        or payload["threshold_percent"] != THRESHOLDS["rss_growth_percent_max"]
+        or not _strict_int(payload["observed_measured_sample_count"])
+        or payload["observed_measured_sample_count"] != expected_measured_sample_count
+        or not all(
+            isinstance(payload[name], bool) for name in ("evaluated", "windows_non_overlapping")
+        )
+    ):
+        return False
+    if not formal and (
+        payload["evaluated"] is not False
+        or payload["windows_non_overlapping"] is not False
+        or payload["active_within_budget"] is not None
+        or payload["within_budget"] is not None
+    ):
+        return False
+    window_keys = {
+        "sample_count",
+        "sample_span_seconds",
+        "minimum_sample_count",
+        "minimum_span_seconds",
+        "median_rss_bytes",
+        "complete",
+    }
+    windows: dict[str, dict[str, object]] = {}
+    for name in ("baseline_window", "terminal_window"):
+        window = _exact_mapping(payload[name], window_keys)
+        if (
+            not window
+            or not _strict_int(window["sample_count"])
+            or window["sample_count"] > expected_measured_sample_count
+            or not _strict_int(window["minimum_sample_count"])
+            or window["minimum_sample_count"] != FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES
+            or not _strict_float(window["minimum_span_seconds"])
+            or window["minimum_span_seconds"] != FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS
+            or not isinstance(window["complete"], bool)
+        ):
+            return False
+        for optional_float in ("sample_span_seconds", "median_rss_bytes"):
+            if window[optional_float] is not None and not _strict_float(window[optional_float]):
+                return False
+        if formal:
+            if not _strict_float(window["sample_span_seconds"]):
+                return False
+            complete = (
+                window["sample_count"] == FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES
+                and cast(float, window["sample_span_seconds"])
+                >= FORMAL_RSS_ENDPOINT_WINDOW_MIN_SPAN_SECONDS
+                and _strict_float(window["median_rss_bytes"])
+                and cast(float, window["median_rss_bytes"]) > 0.0
+            )
+            if (
+                window["sample_count"]
+                != min(expected_measured_sample_count, FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES)
+                or window["complete"] is not complete
+            ):
+                return False
+        elif (
+            window["sample_count"] != 0
+            or window["sample_span_seconds"] is not None
+            or window["median_rss_bytes"] is not None
+            or window["complete"] is not False
+        ):
+            return False
+        windows[name] = window
+    idle = _exact_mapping(
+        payload["idle_confirmation"],
+        {
+            "required",
+            "evaluated",
+            "method",
+            "sample_count",
+            "sample_span_seconds",
+            "minimum_sample_count",
+            "minimum_span_seconds",
+            "block_sample_counts",
+            "block_median_rss_bytes",
+            "baseline_median_rss_bytes",
+            "budget_ceiling_rss_bytes",
+            "last_two_block_median_rss_bytes",
+            "status",
+            "within_budget",
+        },
+    )
+    if (
+        not idle
+        or idle["required"] is not formal
+        or not isinstance(idle["evaluated"], bool)
+        or idle["method"] != "four_block_budget_confirmation_v1"
+        or not _strict_int(idle["sample_count"])
+        or idle["sample_count"] != expected_idle_sample_count
+        or not _strict_float(idle["sample_span_seconds"])
+        or not _strict_int(idle["minimum_sample_count"])
+        or idle["minimum_sample_count"] != FORMAL_RESOURCE_IDLE_MIN_SAMPLES
+        or not _strict_float(idle["minimum_span_seconds"])
+        or idle["minimum_span_seconds"] != FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS
+        or not isinstance(idle["status"], str)
+    ):
+        return False
+    if not formal and (
+        idle["evaluated"] is not False
+        or idle["status"] != "not_evaluated"
+        or idle["within_budget"] is not None
+    ):
+        return False
+    block_counts = idle["block_sample_counts"]
+    block_levels = idle["block_median_rss_bytes"]
+    last_two_levels = idle["last_two_block_median_rss_bytes"]
+    if (
+        not isinstance(block_counts, list)
+        or any(not _strict_int(count, minimum=1) for count in block_counts)
+        or not isinstance(block_levels, list)
+        or any(not _strict_float(level) for level in block_levels)
+        or not isinstance(last_two_levels, list)
+        or any(not _strict_float(level) for level in last_two_levels)
+    ):
+        return False
+    for optional_float in (
+        "baseline_median_rss_bytes",
+        "budget_ceiling_rss_bytes",
+    ):
+        if idle[optional_float] is not None and not _strict_float(idle[optional_float]):
+            return False
+    for optional_float in (
+        "growth_percent",
+        "growth_percent_rounded",
+    ):
+        if payload[optional_float] is not None and not _finite_float(payload[optional_float]):
+            return False
+    if not formal:
+        if (
+            block_counts
+            or block_levels
+            or last_two_levels
+            or idle["baseline_median_rss_bytes"] is not None
+            or idle["budget_ceiling_rss_bytes"] is not None
+        ):
+            return False
+        return True
+
+    if not isinstance(payload["active_within_budget"], bool) or not isinstance(
+        payload["within_budget"], bool
+    ):
+        return False
+    baseline = windows["baseline_window"]
+    terminal = windows["terminal_window"]
+    endpoint_evaluated = bool(
+        baseline["complete"] and terminal["complete"] and payload["windows_non_overlapping"]
+    )
+    if payload["evaluated"] is not endpoint_evaluated or (
+        expected_measured_sample_count < FORMAL_RSS_ENDPOINT_WINDOW_SAMPLES * 2
+        and payload["windows_non_overlapping"] is not False
+    ):
+        return False
+    if endpoint_evaluated:
+        baseline_median = cast(float, baseline["median_rss_bytes"])
+        terminal_median = cast(float, terminal["median_rss_bytes"])
+        growth_percent = (terminal_median - baseline_median) / baseline_median * 100.0
+        if (
+            not _finite_float(payload["growth_percent"])
+            or not math.isclose(
+                cast(float, payload["growth_percent"]),
+                growth_percent,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+            or payload["growth_percent_rounded"] != round(growth_percent, 3)
+            or payload["active_within_budget"]
+            is not (
+                terminal_median * 100.0
+                <= baseline_median * (100.0 + cast(float, payload["threshold_percent"]))
+            )
+        ):
+            return False
+    elif (
+        payload["growth_percent"] is not None
+        or payload["growth_percent_rounded"] is not None
+        or payload["active_within_budget"] is not False
+    ):
+        return False
+
+    baseline_median = baseline["median_rss_bytes"]
+    if idle["baseline_median_rss_bytes"] != baseline_median:
+        return False
+    idle_evaluated = bool(block_levels)
+    if (
+        idle["evaluated"] is not idle_evaluated
+        or bool(block_counts) is not idle_evaluated
+        or (idle_evaluated and len(block_counts) != FORMAL_RSS_IDLE_BLOCK_COUNT)
+        or (idle_evaluated and len(block_levels) != FORMAL_RSS_IDLE_BLOCK_COUNT)
+        or (idle_evaluated and sum(cast(list[int], block_counts)) != idle["sample_count"])
+        or (
+            idle_evaluated
+            and (
+                cast(int, idle["sample_count"]) < FORMAL_RESOURCE_IDLE_MIN_SAMPLES
+                or cast(float, idle["sample_span_seconds"]) < FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS
+                or not _strict_float(baseline_median)
+                or cast(float, baseline_median) <= 0.0
+            )
+        )
+    ):
+        return False
+    expected_budget_ceiling = (
+        cast(float, baseline_median) * (1.0 + cast(float, payload["threshold_percent"]) / 100.0)
+        if idle_evaluated
+        else None
+    )
+    if idle["budget_ceiling_rss_bytes"] != expected_budget_ceiling:
+        return False
+    expected_last_two = cast(list[float], block_levels)[-2:] if idle_evaluated else []
+    if last_two_levels != expected_last_two:
+        return False
+    if expected_budget_ceiling is None or len(expected_last_two) != 2:
+        idle_status = "insufficient_samples"
+    elif all(
+        level * 100.0
+        <= cast(float, baseline_median) * (100.0 + cast(float, payload["threshold_percent"]))
+        for level in expected_last_two
+    ):
+        idle_status = "within_budget"
+    elif all(
+        level * 100.0
+        > cast(float, baseline_median) * (100.0 + cast(float, payload["threshold_percent"]))
+        for level in expected_last_two
+    ):
+        idle_status = "retained_over_budget"
+    else:
+        idle_status = "inconclusive"
+    idle_within_budget = idle_status == "within_budget"
+    if idle["status"] != idle_status or idle["within_budget"] is not idle_within_budget:
+        return False
+    within_budget = bool(
+        endpoint_evaluated and payload["active_within_budget"] and idle_within_budget
+    )
+    if payload["within_budget"] is not within_budget:
+        return False
+    return True
+
+
+def _provider_usage_integrity_passed(integrity: dict[str, object]) -> bool:
+    return bool(
+        all(
+            integrity[name] is True
+            for name in (
+                "provider_invocation_set_exact",
+                "provider_usage_key_set_exact",
+                "run_usage_key_set_exact",
+                "provider_meter_set_exact",
+            )
+        )
+        and integrity["provider_meter_mismatches"] == 0
+        and integrity["usage_event_contract_violations"] == 0
+        and integrity["duplicates_or_missing"] == 0
+        and integrity["provider_invocations"] == integrity["provider_call_records"]
+    )
+
+
+def _record_identity_valid(value: object, *, formal: bool) -> bool:
+    payload = _exact_mapping(
+        value,
+        {
+            "revision",
+            "proof_image",
+            "context_sha256",
+            "harness_sha256",
+            "compose_sha256",
+            "wrapper_sha256",
+            "git_status_sha256",
+            "git_dirty",
+            "git_dirty_count",
+            "postgres_image",
+            "redis_image",
+            "migration_manifest_sha256",
+            "migration_head_sha256",
+            "migration_head_source_sha256",
+            "environment_fingerprint",
+            "dataset_fingerprint",
+            "dataset_config",
+            "dataset_sha256",
+            "docker",
+        },
+    )
+    if (
+        not payload
+        or not isinstance(payload["revision"], str)
+        or not re.fullmatch(r"[0-9a-f]{40}", payload["revision"])
+    ):
+        return False
+    for name in (
+        "context_sha256",
+        "harness_sha256",
+        "compose_sha256",
+        "wrapper_sha256",
+        "git_status_sha256",
+        "migration_manifest_sha256",
+        "migration_head_sha256",
+        "migration_head_source_sha256",
+        "environment_fingerprint",
+        "dataset_sha256",
+    ):
+        if not isinstance(payload[name], str) or not HASH_PATTERN.fullmatch(payload[name]):
+            return False
+    if any(
+        not isinstance(payload[name], str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload[name])
+        for name in ("proof_image", "postgres_image", "redis_image")
+    ):
+        return False
+    if (
+        not isinstance(payload["git_dirty"], bool)
+        or not _strict_int(payload["git_dirty_count"])
+        or payload["git_dirty"] is not (payload["git_dirty_count"] > 0)
+        or (formal and payload["git_dirty"] is not False)
+        or payload["dataset_fingerprint"] != EXPECTED_DATASET_ID
+    ):
+        return False
+    try:
+        dataset_canonical = json.dumps(
+            payload["dataset_config"], sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        expected_canonical = json.dumps(
+            EXPECTED_DATASET_CONFIG, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+    except (TypeError, ValueError):
+        return False
+    if (
+        dataset_canonical != expected_canonical
+        or hashlib.sha256(dataset_canonical.encode()).hexdigest() != payload["dataset_sha256"]
+    ):
+        return False
+    docker = _exact_mapping(
+        payload["docker"],
+        {
+            "arch",
+            "cpu_count",
+            "memory_bytes",
+            "server_version",
+            "compose_version",
+            "background_container_count",
+        },
+    )
+    if not docker or any(not isinstance(item, str) or not item for item in docker.values()):
+        return False
+    return bool(
+        re.fullmatch(r"[1-9][0-9]*", cast(str, docker["cpu_count"]))
+        and re.fullmatch(r"[1-9][0-9]*", cast(str, docker["memory_bytes"]))
+        and re.fullmatch(r"[0-9]+", cast(str, docker["background_container_count"]))
+    )
+
+
+def _record_schema_valid(record: dict[str, object], *, expected_mode: str) -> bool:
+    top_level = _exact_mapping(
+        record,
+        {
+            "contract",
+            "generated_at",
+            "verdict",
+            "mode",
+            "baseline_index",
+            "baseline_environment_receipt_sha256",
+            "record_thresholds_passed",
+            "formal_record_shape",
+            "formal_acceptance",
+            "production_slo_claim",
+            "identity",
+            "configuration",
+            "scheduler",
+            "requests",
+            "observation_diagnostics",
+            "queue",
+            "latency",
+            "integrity",
+            "isolation",
+            "resources",
+            "checks",
+            "boundary",
+            "redaction",
+            "limitations",
+        },
+    )
+    if not top_level or expected_mode not in {"quick", "formal"}:
+        return False
+    formal = expected_mode == "formal"
+    try:
+        generated_at = datetime.fromisoformat(cast(str, top_level["generated_at"]))
+    except (TypeError, ValueError):
+        return False
+    if (
+        generated_at.tzinfo is None
+        or top_level["contract"] != CONTRACT_ID
+        or top_level["mode"] != expected_mode
+        or not _strict_int(top_level["baseline_index"], minimum=1)
+        or not isinstance(top_level["baseline_environment_receipt_sha256"], str)
+        or not HASH_PATTERN.fullmatch(top_level["baseline_environment_receipt_sha256"])
+        or top_level["formal_record_shape"] is not formal
+        or top_level["formal_acceptance"] is not False
+        or top_level["production_slo_claim"] is not False
+        or not isinstance(top_level["record_thresholds_passed"], bool)
+        or not _record_identity_valid(top_level["identity"], formal=formal)
+    ):
+        return False
+    shape = _expected_record_shape(expected_mode)
+    expected_configuration = _record_configuration(
+        shape, provider_delay_ms=FORMAL_PROVIDER_DELAY_MS
+    )
+    try:
+        configuration = json.dumps(
+            top_level["configuration"], sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        expected_configuration_json = json.dumps(
+            expected_configuration, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+    except (TypeError, ValueError):
+        return False
+    if configuration != expected_configuration_json:
+        return False
+
+    warmup_samples = max(1, round(shape.warmup_seconds * shape.request_rate))
+    soak_samples = max(1, round(shape.duration_seconds * shape.request_rate))
+    expected_attempted = 1 + shape.concurrency + shape.queue_burst + warmup_samples + soak_samples
+    scheduler = _exact_mapping(
+        top_level["scheduler"],
+        {"warmup", "measured", "concurrency_probe_client_max", "concurrency_probe_provider_max"},
+    )
+    if (
+        not scheduler
+        or not _phase_stats_valid(scheduler["warmup"], expected_samples=warmup_samples)
+        or not _phase_stats_valid(scheduler["measured"], expected_samples=soak_samples)
+        or not _strict_int(scheduler["concurrency_probe_client_max"], minimum=1)
+        or not _strict_int(scheduler["concurrency_probe_provider_max"])
+    ):
+        return False
+    measured = cast(dict[str, object], scheduler["measured"])
+
+    requests = _exact_mapping(
+        top_level["requests"],
+        {"attempted", "accepted", "completed", "accepted_rate", "completed_rate", "unexpected_5xx"},
+    )
+    if not requests or any(
+        not _strict_int(requests[name])
+        for name in ("attempted", "accepted", "completed", "unexpected_5xx")
+    ):
+        return False
+    attempted = cast(int, requests["attempted"])
+    accepted = cast(int, requests["accepted"])
+    completed = cast(int, requests["completed"])
+    expected_completed_rate = round(completed / accepted, 6) if accepted else 0.0
+    if (
+        attempted != expected_attempted
+        or accepted > attempted
+        or completed > accepted
+        or not _strict_float(requests["accepted_rate"])
+        or not _strict_float(requests["completed_rate"])
+        or requests["accepted_rate"] != round(accepted / attempted, 6)
+        or requests["completed_rate"] != expected_completed_rate
+    ):
+        return False
+
+    diagnostics = top_level["observation_diagnostics"]
+    if (
+        not _diagnostics_valid(diagnostics)
+        or cast(dict[str, object], diagnostics)["sample_count"] != attempted + 1
+    ):
+        return False
+    diagnostics_payload = cast(dict[str, object], diagnostics)
+    diagnostics_http = cast(dict[str, int], diagnostics_payload["by_http_status"])
+    diagnostics_runtime = cast(dict[str, int], diagnostics_payload["by_runtime_status"])
+    if diagnostics_http["5xx"] > requests["unexpected_5xx"] or accepted != sum(
+        diagnostics_runtime[name] for name in ("queued", "running", "succeeded")
+    ):
+        return False
+
+    queue = _exact_mapping(
+        top_level["queue"],
+        {
+            "requested",
+            "accepted",
+            "completed",
+            "wait_p95_seconds",
+            "timing_evidence",
+            "result_read_succeeded",
+        },
+    )
+    queue_timing = queue["timing_evidence"] if queue else None
+    if (
+        not queue
+        or any(not _strict_int(queue[name]) for name in ("requested", "accepted", "completed"))
+        or queue["requested"] != shape.queue_burst
+        or not cast(int, queue["completed"])
+        <= cast(int, queue["accepted"])
+        <= cast(int, queue["requested"])
+        or not _strict_float(queue["wait_p95_seconds"])
+        or not isinstance(queue["result_read_succeeded"], bool)
+        or not _queue_timing_valid(queue_timing, expected_count=shape.queue_burst)
+        or queue["wait_p95_seconds"]
+        != cast(dict[str, object], cast(dict[str, object], queue_timing)["wait_seconds"])["p95"]
+    ):
+        return False
+
+    latency = _exact_mapping(
+        top_level["latency"],
+        {
+            "attempted_sample_count",
+            "accepted_sample_count",
+            "sample_count",
+            "missing_persistent_evidence_count",
+            "provider_excluded_p95_ms",
+            "provider_excluded_p99_ms",
+            "proof_provider_wall_p95_ms",
+            "database_provider_call_p95_ms",
+            "exclusion_method",
+            "all_accepted_samples_have_persistent_provider_evidence",
+        },
+    )
+    latency_complete = (
+        latency["all_accepted_samples_have_persistent_provider_evidence"] if latency else None
+    )
+    if (
+        not latency
+        or any(
+            not _strict_int(latency[name])
+            for name in (
+                "attempted_sample_count",
+                "accepted_sample_count",
+                "sample_count",
+                "missing_persistent_evidence_count",
+            )
+        )
+        or latency["attempted_sample_count"] != soak_samples
+        or not cast(int, latency["sample_count"])
+        <= cast(int, latency["accepted_sample_count"])
+        <= cast(int, latency["attempted_sample_count"])
+        or latency["missing_persistent_evidence_count"]
+        != cast(int, latency["accepted_sample_count"]) - cast(int, latency["sample_count"])
+        or not all(
+            _strict_float(latency[name])
+            for name in (
+                "provider_excluded_p95_ms",
+                "provider_excluded_p99_ms",
+                "proof_provider_wall_p95_ms",
+                "database_provider_call_p95_ms",
+            )
+        )
+        or latency["exclusion_method"]
+        != "client_elapsed_minus_max_persistent_provider_wall_and_database_provider_call"
+        or not isinstance(latency_complete, bool)
+        or latency_complete is not (cast(int, latency["missing_persistent_evidence_count"]) == 0)
+    ):
+        return False
+
+    integrity_keys = {
+        "observed_records",
+        "database_records",
+        "observed_identifier_set_exact",
+        "succeeded_records",
+        "provider_call_records",
+        "provider_invocations",
+        "provider_invocation_set_exact",
+        "provider_usage_key_set_exact",
+        "run_usage_key_set_exact",
+        "provider_meter_set_exact",
+        "provider_meter_mismatches",
+        "usage_event_contract_violations",
+        "duplicates_or_missing",
+        "queued_residue",
+        "running_residue",
+        "dispatching_residue",
+        "redis_queue_residue",
+        "provider_active_residue",
+        "provider_max_concurrency",
+        "provider_barrier_timeouts",
+        "artifact_records",
+        "queue_timing_evidence",
+        "queue_wait_p95_seconds",
+    }
+    integrity = _exact_mapping(top_level["integrity"], integrity_keys)
+    if not integrity:
+        return False
+    integrity_bool_fields = (
+        "observed_identifier_set_exact",
+        "provider_invocation_set_exact",
+        "provider_usage_key_set_exact",
+        "run_usage_key_set_exact",
+        "provider_meter_set_exact",
+    )
+    integrity_int_fields = tuple(
+        integrity_keys
+        - set(integrity_bool_fields)
+        - {"queue_timing_evidence", "queue_wait_p95_seconds"}
+    )
+    if (
+        any(not isinstance(integrity[name], bool) for name in integrity_bool_fields)
+        or any(not _strict_int(integrity[name]) for name in integrity_int_fields)
+        or not _strict_float(integrity["queue_wait_p95_seconds"])
+        or integrity["queue_timing_evidence"] != queue["timing_evidence"]
+        or integrity["queue_wait_p95_seconds"] != queue["wait_p95_seconds"]
+        or integrity["succeeded_records"] != completed
+        or integrity["provider_max_concurrency"] != scheduler["concurrency_probe_provider_max"]
+        or not cast(int, integrity["succeeded_records"])
+        <= cast(int, integrity["provider_call_records"])
+        <= cast(int, integrity["database_records"])
+        or (
+            integrity["observed_identifier_set_exact"] is True
+            and integrity["observed_records"] != integrity["database_records"]
+        )
+    ):
+        return False
+
+    isolation = _exact_mapping(
+        top_level["isolation"],
+        {
+            "payload_mismatch_zero_side_effect",
+            "cross_site_record_read_rejected",
+            "cross_site_result_read_rejected",
+            "own_site_result_read_succeeded",
+        },
+    )
+    if not isolation or any(not isinstance(value, bool) for value in isolation.values()):
+        return False
+
+    resource_keys = {
+        "sample_count",
+        "measured_sample_count",
+        "minimum_sample_count",
+        "measured_sample_count_passed",
+        "idle_recovery_required",
+        "idle_recovery_sample_count",
+        "idle_recovery_minimum_sample_count",
+        "idle_recovery_sample_span_seconds",
+        "idle_recovery_minimum_span_seconds",
+        "idle_recovery_samples_complete",
+        "sample_count_passed",
+        "warmup_boundary_elapsed_seconds",
+        "load_end_boundary_elapsed_seconds",
+        "idle_end_boundary_elapsed_seconds",
+        "api_peak_rss_bytes",
+        "worker_peak_rss_bytes",
+        "api_rss_growth",
+        "worker_rss_growth",
+        "process_cohort_evidence",
+        "api_fd_sustained_growth",
+        "worker_fd_sustained_growth",
+        "postgres_connection_sustained_growth",
+        "api_fd_trend",
+        "worker_fd_trend",
+        "postgres_connection_trend",
+        "services_survived_all_samples",
+        "restart_count_zero",
+    }
+    resources = _exact_mapping(top_level["resources"], resource_keys)
+    if not resources:
+        return False
+    resource_int_fields = (
+        "sample_count",
+        "measured_sample_count",
+        "minimum_sample_count",
+        "idle_recovery_sample_count",
+        "idle_recovery_minimum_sample_count",
+        "api_peak_rss_bytes",
+        "worker_peak_rss_bytes",
+    )
+    resource_bool_fields = (
+        "measured_sample_count_passed",
+        "idle_recovery_required",
+        "idle_recovery_samples_complete",
+        "sample_count_passed",
+        "api_fd_sustained_growth",
+        "worker_fd_sustained_growth",
+        "postgres_connection_sustained_growth",
+        "services_survived_all_samples",
+        "restart_count_zero",
+    )
+    expected_minimum_sample_count = (
+        max(1, math.floor(shape.duration_seconds / 5 * 0.9)) if formal else 1
+    )
+    if (
+        any(not _strict_int(resources[name]) for name in resource_int_fields)
+        or any(not isinstance(resources[name], bool) for name in resource_bool_fields)
+        or any(
+            not _strict_float(resources[name])
+            for name in (
+                "idle_recovery_sample_span_seconds",
+                "idle_recovery_minimum_span_seconds",
+                "warmup_boundary_elapsed_seconds",
+                "load_end_boundary_elapsed_seconds",
+                "idle_end_boundary_elapsed_seconds",
+            )
+        )
+        or resources["idle_recovery_required"] is not formal
+        or not _rss_growth_valid(
+            resources["api_rss_growth"],
+            formal=formal,
+            expected_measured_sample_count=cast(int, resources["measured_sample_count"]),
+            expected_idle_sample_count=cast(int, resources["idle_recovery_sample_count"]),
+        )
+        or not _rss_growth_valid(
+            resources["worker_rss_growth"],
+            formal=formal,
+            expected_measured_sample_count=cast(int, resources["measured_sample_count"]),
+            expected_idle_sample_count=cast(int, resources["idle_recovery_sample_count"]),
+        )
+        or not _process_cohort_valid(resources["process_cohort_evidence"])
+        or any(
+            not _resource_trend_valid(
+                resources[trend_name],
+                formal=formal,
+                expected_measured_sample_count=cast(int, resources["measured_sample_count"]),
+                expected_minimum_sample_count=expected_minimum_sample_count,
+                expected_idle_sample_count=cast(int, resources["idle_recovery_sample_count"]),
+                expected_idle_span_seconds=cast(
+                    float, resources["idle_recovery_sample_span_seconds"]
+                ),
+                expected_idle_samples_complete=cast(
+                    bool, resources["idle_recovery_samples_complete"]
+                ),
+            )
+            for trend_name in (
+                "api_fd_trend",
+                "worker_fd_trend",
+                "postgres_connection_trend",
+            )
+        )
+    ):
+        return False
+    measured_sample_count = cast(int, resources["measured_sample_count"])
+    minimum_sample_count = cast(int, resources["minimum_sample_count"])
+    idle_sample_count = cast(int, resources["idle_recovery_sample_count"])
+    idle_minimum_sample_count = cast(int, resources["idle_recovery_minimum_sample_count"])
+    idle_sample_span = cast(float, resources["idle_recovery_sample_span_seconds"])
+    idle_minimum_span = cast(float, resources["idle_recovery_minimum_span_seconds"])
+    measured_passed = measured_sample_count >= minimum_sample_count
+    idle_complete = not formal or (
+        idle_sample_count >= idle_minimum_sample_count and idle_sample_span >= idle_minimum_span
+    )
+    process_cohort_payload = cast(dict[str, object], resources["process_cohort_evidence"])
+    if (
+        minimum_sample_count != expected_minimum_sample_count
+        or idle_minimum_sample_count != FORMAL_RESOURCE_IDLE_MIN_SAMPLES
+        or idle_minimum_span != FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS
+        or resources["measured_sample_count_passed"] is not measured_passed
+        or resources["idle_recovery_samples_complete"] is not idle_complete
+        or resources["sample_count_passed"] is not (measured_passed and idle_complete)
+        or cast(int, resources["sample_count"]) < measured_sample_count + idle_sample_count
+        or process_cohort_payload["sample_count"] != measured_sample_count + idle_sample_count
+        or not cast(float, resources["warmup_boundary_elapsed_seconds"])
+        <= cast(float, resources["load_end_boundary_elapsed_seconds"])
+        <= cast(float, resources["idle_end_boundary_elapsed_seconds"])
+        or cast(int, resources["api_peak_rss_bytes"]) <= 0
+        or cast(int, resources["worker_peak_rss_bytes"]) <= 0
+    ):
+        return False
+    trend_pairs = (
+        ("api_fd_sustained_growth", "api_fd_trend"),
+        ("worker_fd_sustained_growth", "worker_fd_trend"),
+        ("postgres_connection_sustained_growth", "postgres_connection_trend"),
+    )
+    for summary_name, trend_name in trend_pairs:
+        trend = resources[trend_name]
+        if (
+            not isinstance(trend, dict)
+            or not isinstance(trend.get("sustained_growth"), bool)
+            or resources[summary_name] is not trend["sustained_growth"]
+        ):
+            return False
+
+    if not _exact_typed_mapping(top_level["boundary"], RECORD_BOUNDARY) or not _exact_typed_mapping(
+        top_level["redaction"], RECORD_REDACTION
+    ):
+        return False
+    if top_level["limitations"] != list(RECORD_LIMITATIONS):
+        return False
+
+    process_cohort = cast(dict[str, object], resources["process_cohort_evidence"])
+    api_growth = cast(dict[str, object], resources["api_rss_growth"])
+    worker_growth = cast(dict[str, object], resources["worker_rss_growth"])
+    concurrency_target = shape.concurrency if formal else 1
+    recomputed_checks = {
+        "unexpected_5xx_zero": requests["unexpected_5xx"] == 0,
+        "transport_http_failures_zero": _transport_http_failures_zero(diagnostics),
+        "accepted_rate": requests["accepted_rate"] >= THRESHOLDS["accepted_rate_min"],
+        "completed_rate": requests["completed_rate"] >= THRESHOLDS["completed_rate_min"],
+        "provider_excluded_p95": latency["provider_excluded_p95_ms"]
+        <= THRESHOLDS["api_p95_ms_max"],
+        "provider_excluded_p99": latency["provider_excluded_p99_ms"]
+        <= THRESHOLDS["api_p99_ms_max"],
+        "persistent_provider_latency_complete": latency[
+            "all_accepted_samples_have_persistent_provider_evidence"
+        ],
+        "queue_requested_accepted_completed_exact": (
+            queue["requested"] == queue["accepted"] == queue["completed"]
+            and queue["result_read_succeeded"] is True
+        ),
+        "queue_timing_evidence_complete": (
+            cast(dict[str, object], queue["timing_evidence"])["sample_count"] == shape.queue_burst
+            and cast(dict[str, object], queue["timing_evidence"])["complete"] is True
+        ),
+        "queue_wait": queue["wait_p95_seconds"]
+        <= DEFAULT_WORKER_POLL_SECONDS * THRESHOLDS["queue_wait_poll_multiple_max"],
+        "identifier_set_exact": integrity["observed_identifier_set_exact"],
+        "observation_diagnostics_complete": diagnostics_payload["complete"],
+        "proof_fixture_rejections_zero": _proof_fixture_rejections_zero(diagnostics),
+        "provider_usage_integrity": _provider_usage_integrity_passed(integrity),
+        "cross_site_and_result_read_isolation": all(isolation.values()),
+        "runtime_queue_residue_zero": sum(
+            cast(int, integrity[name])
+            for name in (
+                "queued_residue",
+                "running_residue",
+                "dispatching_residue",
+                "redis_queue_residue",
+                "provider_active_residue",
+            )
+        )
+        == 0,
+        "artifacts_returned_to_manifest_baseline": integrity["artifact_records"] == 0,
+        "rss_growth": not formal
+        or (api_growth["within_budget"] is True and worker_growth["within_budget"] is True),
+        "process_cohort_stable": process_cohort["all_valid"],
+        "api_fd_not_sustained_growth": not resources["api_fd_sustained_growth"],
+        "worker_fd_not_sustained_growth": not resources["worker_fd_sustained_growth"],
+        "db_connections_not_sustained_growth": not resources[
+            "postgres_connection_sustained_growth"
+        ],
+        "resource_samples_complete": resources["sample_count_passed"],
+        "services_survived": resources["services_survived_all_samples"],
+        "service_restarts_zero": resources["restart_count_zero"],
+        "formal_clean_revision_requirement_satisfied": not formal
+        or cast(dict[str, object], top_level["identity"])["git_dirty"] is False,
+        "achieved_rate": _achieved_rate_passed(
+            cast(float, measured["achieved_requests_per_second"]), shape.request_rate
+        ),
+        "scheduler_drift": measured["scheduler_drift_max_ms"]
+        <= THRESHOLDS["scheduler_drift_ms_max"],
+        "real_concurrency_observed": (
+            scheduler["concurrency_probe_client_max"] >= concurrency_target
+            and integrity["provider_max_concurrency"] >= concurrency_target
+            and integrity["provider_barrier_timeouts"] == 0
+        ),
+    }
+    checks = _exact_mapping(top_level["checks"], set(RECORD_CHECK_IDS))
+    if (
+        not checks
+        or any(not isinstance(value, bool) for value in checks.values())
+        or checks != recomputed_checks
+    ):
+        return False
+    passed = all(recomputed_checks.values())
+    return top_level["record_thresholds_passed"] is passed and top_level["verdict"] == (
+        "record_passed" if passed else "record_failed"
+    )
+
+
 def _aggregate(args: argparse.Namespace) -> tuple[dict[str, object], bool]:
     if args.baseline_count < 1:
         raise ProofFailure("aggregate.baseline_count_invalid")
     paths = sorted(args.input_dir.glob("baseline-*.json"))
     if len(paths) != args.baseline_count:
         raise ProofFailure("aggregate.baseline_count_mismatch")
-    records = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+    loaded_records = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+    if any(not isinstance(record, dict) for record in loaded_records):
+        raise ProofFailure("aggregate.record_schema_invalid")
+    records = cast(list[dict[str, object]], loaded_records)
+    if not all(_record_schema_valid(record, expected_mode=args.mode) for record in records):
+        raise ProofFailure("aggregate.record_schema_invalid")
     diagnostics_valid_all_records = all(
         _diagnostics_valid(record.get("observation_diagnostics")) for record in records
     )
     if not diagnostics_valid_all_records:
         raise ProofFailure("aggregate.observation_diagnostics_invalid")
     formal_shape = args.mode == "formal" and args.baseline_count == FORMAL_RECORDS
-    same_identity = bool(records) and all(
-        record.get("identity") == records[0].get("identity") for record in records
-    )
-    same_configuration = bool(records) and all(
-        record.get("configuration") == records[0].get("configuration") for record in records
-    )
+    identity_receipts = [_canonical_record_mapping(record, "identity") for record in records]
+    configuration_receipts = [
+        _canonical_record_mapping(record, "configuration") for record in records
+    ]
+    same_identity = bool(records) and len(set(identity_receipts)) == 1
+    same_configuration = bool(records) and len(set(configuration_receipts)) == 1
     indices = sorted(int(record.get("baseline_index", 0)) for record in records)
     environment_receipts = {
         str(record.get("baseline_environment_receipt_sha256") or "") for record in records

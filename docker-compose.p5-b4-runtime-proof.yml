@@ -159,6 +159,8 @@ services:
       - 0.0.0.0:8000
       - --timeout
       - "60"
+      - --keep-alive
+      - "10"
       - --access-logfile
       - /dev/null
       - --error-logfile
@@ -191,6 +193,8 @@ services:
   proof-worker:
     <<: *proof-app
     command: ["python", "-m", "app.workers.runtime_queue"]
+    deploy:
+      replicas: 2
     depends_on:
       proof-postgres:
         condition: service_healthy

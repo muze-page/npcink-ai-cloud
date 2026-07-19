@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import importlib.util
 import json
 import re
 import stat
+import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -27,6 +29,16 @@ def _source(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _shell_function(source: str, name: str) -> str:
+    match = re.search(
+        rf"^{re.escape(name)}\(\) \{{.*?^\}}$",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None
+    return match.group(0)
+
+
 def _module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("p5_b4_runtime_load_soak", HARNESS)
     assert spec is not None and spec.loader is not None
@@ -41,7 +53,8 @@ def harness() -> ModuleType:
     return _module()
 
 
-def _valid_diagnostics(harness: ModuleType) -> dict[str, object]:
+def _valid_diagnostics(harness: ModuleType, *, sample_count: int = 2) -> dict[str, object]:
+    assert sample_count >= 2
     observations = [
         harness.Observation(
             request_hash="a" * 64,
@@ -62,7 +75,16 @@ def _valid_diagnostics(harness: ModuleType) -> dict[str, object]:
             phase="soak",
         ),
     ]
-    return harness._diagnostic_summary(observations)
+    summary = harness._diagnostic_summary(observations)
+    extra = sample_count - 2
+    summary["sample_count"] += extra
+    summary["by_http_status"]["200"] += extra
+    summary["by_error_code"]["none"] += extra
+    summary["by_runtime_status"]["succeeded"] += extra
+    summary["by_phase"]["soak"] += extra
+    summary["by_phase_and_error_code"]["soak"]["none"] += extra
+    assert harness._diagnostics_valid(summary) is True
+    return summary
 
 
 def _resource_row(
@@ -75,13 +97,13 @@ def _resource_row(
     api_restart_count: int = 0,
     worker_restart_count: int = 0,
     api_running: int = 1,
-    worker_running: int = 1,
+    worker_running: int = 2,
     api_process_count: int = 3,
-    worker_process_count: int = 1,
+    worker_process_count: int = 2,
     api_process_identity_sha256: str = API_PROCESS_IDENTITY_SHA256,
     worker_process_identity_sha256: str = WORKER_PROCESS_IDENTITY_SHA256,
 ) -> str:
-    """Build one v4 sampler row while preserving the first ten v3 columns."""
+    """Build one v5 aggregate sampler row while preserving the first ten columns."""
     return "\t".join(
         str(value)
         for value in (
@@ -103,40 +125,622 @@ def _resource_row(
     )
 
 
+def _valid_queue_timing(harness: ModuleType, count: int) -> dict[str, object]:
+    submitted_at = datetime(2026, 7, 19, tzinfo=UTC)
+    runs = [
+        SimpleNamespace(
+            started_at=submitted_at,
+            processing_started_at=submitted_at + timedelta(seconds=1 + index / 100),
+        )
+        for index in range(count)
+    ]
+    evidence = harness._queue_timing_evidence(
+        runs,
+        expected_count=count,
+        cohort_size=harness.DEFAULT_WORKER_BATCH_SIZE,
+    )
+    assert evidence["complete"] is True
+    return evidence
+
+
+def _valid_phase_stats(*, samples: int, rate: float, concurrency: int) -> dict[str, object]:
+    return {
+        "actual_phase_wall_seconds": float(samples / rate),
+        "achieved_requests_per_second": float(rate),
+        "achieved_rate_ratio": 1.0,
+        "scheduler_drift_p95_ms": 0.0,
+        "scheduler_drift_max_ms": 0.0,
+        "semaphore_wait_p95_ms": 0.0,
+        "semaphore_wait_max_ms": 0.0,
+        "max_in_flight": concurrency,
+        "sample_count": samples,
+    }
+
+
+def _valid_rss_growth(harness: ModuleType, *, formal: bool) -> dict[str, object]:
+    if formal:
+        window = {
+            "sample_count": 12,
+            "sample_span_seconds": 55.0,
+            "minimum_sample_count": 12,
+            "minimum_span_seconds": 55.0,
+            "median_rss_bytes": 1_000_000.0,
+            "complete": True,
+        }
+        idle = {
+            "required": True,
+            "evaluated": True,
+            "method": "four_block_budget_confirmation_v1",
+            "sample_count": 12,
+            "sample_span_seconds": 55.0,
+            "minimum_sample_count": 12,
+            "minimum_span_seconds": 55.0,
+            "block_sample_counts": [3, 3, 3, 3],
+            "block_median_rss_bytes": [1_000_000.0] * 4,
+            "baseline_median_rss_bytes": 1_000_000.0,
+            "budget_ceiling_rss_bytes": 1_100_000.0,
+            "last_two_block_median_rss_bytes": [1_000_000.0, 1_000_000.0],
+            "status": "within_budget",
+            "within_budget": True,
+        }
+        return {
+            "evaluated": True,
+            "method": "steady_endpoint_window_median_v1",
+            "threshold_percent": 10.0,
+            "observed_measured_sample_count": 120,
+            "baseline_window": dict(window),
+            "terminal_window": dict(window),
+            "windows_non_overlapping": True,
+            "growth_percent": 0.0,
+            "growth_percent_rounded": 0.0,
+            "active_within_budget": True,
+            "idle_confirmation": idle,
+            "within_budget": True,
+        }
+    empty_window = {
+        "sample_count": 0,
+        "sample_span_seconds": None,
+        "minimum_sample_count": 12,
+        "minimum_span_seconds": 55.0,
+        "median_rss_bytes": None,
+        "complete": False,
+    }
+    return {
+        "evaluated": False,
+        "method": "steady_endpoint_window_median_v1",
+        "threshold_percent": 10.0,
+        "observed_measured_sample_count": 2,
+        "baseline_window": dict(empty_window),
+        "terminal_window": dict(empty_window),
+        "windows_non_overlapping": False,
+        "growth_percent": None,
+        "growth_percent_rounded": None,
+        "active_within_budget": None,
+        "idle_confirmation": {
+            "required": False,
+            "evaluated": False,
+            "method": "four_block_budget_confirmation_v1",
+            "sample_count": 0,
+            "sample_span_seconds": 0.0,
+            "minimum_sample_count": 12,
+            "minimum_span_seconds": 55.0,
+            "block_sample_counts": [],
+            "block_median_rss_bytes": [],
+            "baseline_median_rss_bytes": None,
+            "budget_ceiling_rss_bytes": None,
+            "last_two_block_median_rss_bytes": [],
+            "status": "not_evaluated",
+            "within_budget": None,
+        },
+        "within_budget": None,
+    }
+
+
+def _valid_process_cohort(harness: ModuleType, *, sample_count: int) -> dict[str, object]:
+    def service(count: int, minimum: int, identity: str) -> dict[str, object]:
+        return {
+            "sample_count": sample_count,
+            "minimum_process_count": minimum,
+            "process_counts": [count],
+            "process_count_stable": True,
+            "minimum_process_count_met": True,
+            "identity_sha256_values": [identity],
+            "identity_sha256_unique": True,
+            "passed": True,
+        }
+
+    return {
+        "scope": "measured_and_idle_samples",
+        "evaluated": True,
+        "sample_count": sample_count,
+        "api": service(3, 3, API_PROCESS_IDENTITY_SHA256),
+        "worker": service(2, harness.FORMAL_WORKER_REPLICAS, WORKER_PROCESS_IDENTITY_SHA256),
+        "all_valid": True,
+    }
+
+
+def _valid_resource_trend(
+    harness: ModuleType,
+    *,
+    formal: bool,
+    measured_count: int,
+    idle_count: int,
+    idle_span: float,
+    idle_complete: bool,
+    level: float,
+) -> dict[str, object]:
+    method = "six_block_median_low_with_terminal_subwindows_and_post_load_idle_confirmation"
+    minimum_count = 108 if formal else 1
+    evaluated = formal and measured_count >= minimum_count
+    if not evaluated:
+        return {
+            "sample_count": measured_count,
+            "evaluated": False,
+            "method": method,
+            "block_sample_counts": [],
+            "block_median_levels": [],
+            "new_high_event_blocks": [],
+            "new_high_event_count": 0,
+            "first_to_last_delta": 0.0,
+            "global_candidate_growth": False,
+            "global_sustained_growth": False,
+            "terminal_window": {
+                "evaluated": False,
+                "block_sample_counts": [],
+                "block_median_levels": [],
+                "new_high_event_blocks": [],
+                "new_high_event_count": 0,
+                "first_to_last_delta": 0.0,
+                "candidate_growth": False,
+                "sustained_growth": False,
+            },
+            "idle_recovery": {
+                "required": formal,
+                "evaluated": False,
+                "sample_count": idle_count,
+                "sample_span_seconds": idle_span,
+                "minimum_sample_count": harness.FORMAL_RESOURCE_IDLE_MIN_SAMPLES,
+                "minimum_span_seconds": harness.FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS,
+                "samples_complete": idle_complete,
+                "block_sample_counts": [],
+                "block_median_levels": [],
+                "reference_level": None,
+                "retained_growth_threshold": None,
+                "last_two_block_levels": [],
+                "continued_growth_candidate": False,
+                "status": "not_evaluated",
+            },
+            "least_squares_slope_per_minute": 0.0,
+            "candidate_growth": False,
+            "confirmed_sustained_growth": False,
+            "sustained_growth": False,
+        }
+
+    block_counts = [
+        (index + 1) * measured_count // 6 - index * measured_count // 6 for index in range(6)
+    ]
+    terminal_count = block_counts[-1]
+    terminal_counts = [
+        (index + 1) * terminal_count // 4 - index * terminal_count // 4 for index in range(4)
+    ]
+    idle_counts = (
+        [(index + 1) * idle_count // 4 - index * idle_count // 4 for index in range(4)]
+        if idle_complete
+        else []
+    )
+    return {
+        "sample_count": measured_count,
+        "evaluated": True,
+        "method": method,
+        "block_sample_counts": block_counts,
+        "block_median_levels": [level] * 6,
+        "new_high_event_blocks": [],
+        "new_high_event_count": 0,
+        "first_to_last_delta": 0.0,
+        "global_candidate_growth": False,
+        "global_sustained_growth": False,
+        "terminal_window": {
+            "evaluated": True,
+            "block_sample_counts": terminal_counts,
+            "block_median_levels": [level] * 4,
+            "new_high_event_blocks": [],
+            "new_high_event_count": 0,
+            "first_to_last_delta": 0.0,
+            "candidate_growth": False,
+            "sustained_growth": False,
+        },
+        "idle_recovery": {
+            "required": True,
+            "evaluated": idle_complete,
+            "sample_count": idle_count,
+            "sample_span_seconds": idle_span,
+            "minimum_sample_count": harness.FORMAL_RESOURCE_IDLE_MIN_SAMPLES,
+            "minimum_span_seconds": harness.FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS,
+            "samples_complete": idle_complete,
+            "block_sample_counts": idle_counts,
+            "block_median_levels": [level] * 4 if idle_complete else [],
+            "reference_level": level,
+            "retained_growth_threshold": level + 2.0,
+            "last_two_block_levels": [level, level] if idle_complete else [],
+            "continued_growth_candidate": False,
+            "status": "recovered" if idle_complete else "insufficient_samples",
+        },
+        "least_squares_slope_per_minute": 0.0,
+        "candidate_growth": False,
+        "confirmed_sustained_growth": False,
+        "sustained_growth": False,
+    }
+
+
+def _valid_resources(harness: ModuleType, *, formal: bool) -> dict[str, object]:
+    sample_count = 132 if formal else 2
+    measured_count = 120 if formal else 2
+    idle_count = 12 if formal else 0
+    idle_span = 55.0 if formal else 0.0
+    idle_complete = True
+    return {
+        "sample_count": sample_count,
+        "measured_sample_count": measured_count,
+        "minimum_sample_count": 108 if formal else 1,
+        "measured_sample_count_passed": True,
+        "idle_recovery_required": formal,
+        "idle_recovery_sample_count": idle_count,
+        "idle_recovery_minimum_sample_count": 12,
+        "idle_recovery_sample_span_seconds": idle_span,
+        "idle_recovery_minimum_span_seconds": 55.0,
+        "idle_recovery_samples_complete": True,
+        "sample_count_passed": True,
+        "warmup_boundary_elapsed_seconds": 0.0,
+        "load_end_boundary_elapsed_seconds": 595.0 if formal else 5.0,
+        "idle_end_boundary_elapsed_seconds": 655.0 if formal else 5.0,
+        "api_peak_rss_bytes": 1_000_000,
+        "worker_peak_rss_bytes": 2_000_000,
+        "api_rss_growth": _valid_rss_growth(harness, formal=formal),
+        "worker_rss_growth": _valid_rss_growth(harness, formal=formal),
+        "process_cohort_evidence": _valid_process_cohort(harness, sample_count=sample_count),
+        "api_fd_sustained_growth": False,
+        "worker_fd_sustained_growth": False,
+        "postgres_connection_sustained_growth": False,
+        "api_fd_trend": _valid_resource_trend(
+            harness,
+            formal=formal,
+            measured_count=measured_count,
+            idle_count=idle_count,
+            idle_span=idle_span,
+            idle_complete=idle_complete,
+            level=10.0,
+        ),
+        "worker_fd_trend": _valid_resource_trend(
+            harness,
+            formal=formal,
+            measured_count=measured_count,
+            idle_count=idle_count,
+            idle_span=idle_span,
+            idle_complete=idle_complete,
+            level=20.0,
+        ),
+        "postgres_connection_trend": _valid_resource_trend(
+            harness,
+            formal=formal,
+            measured_count=measured_count,
+            idle_count=idle_count,
+            idle_span=idle_span,
+            idle_complete=idle_complete,
+            level=3.0,
+        ),
+        "services_survived_all_samples": True,
+        "restart_count_zero": True,
+    }
+
+
 def _record(
     harness: ModuleType,
     index: int,
     *,
     mode: str = "formal",
-    p95: float = 100,
-    p99: float = 150,
+    p95: float = 100.0,
+    p99: float = 150.0,
 ) -> dict:
+    shape = harness._expected_record_shape(mode)
+    formal = mode == "formal"
+    warmup_samples = max(1, round(shape.warmup_seconds * shape.request_rate))
+    soak_samples = max(1, round(shape.duration_seconds * shape.request_rate))
+    attempted = 1 + shape.concurrency + shape.queue_burst + warmup_samples + soak_samples
+    queue_timing = _valid_queue_timing(harness, shape.queue_burst)
+    dataset_raw = json.dumps(
+        harness.EXPECTED_DATASET_CONFIG,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    checks = dict.fromkeys(harness.RECORD_CHECK_IDS, True)
     return {
-        "contract": "p5_b4_external_runtime_load_soak_proof.v4",
+        "contract": harness.CONTRACT_ID,
+        "generated_at": datetime(2026, 7, 19, tzinfo=UTC).isoformat(),
         "mode": mode,
         "baseline_index": index,
         "baseline_environment_receipt_sha256": f"{index:064x}",
         "verdict": "record_passed",
         "record_thresholds_passed": True,
-        "formal_record_shape": mode == "formal",
+        "formal_record_shape": formal,
         "formal_acceptance": False,
-        "identity": {"revision": "a" * 40, "dataset_sha256": "b" * 64},
-        "configuration": {"duration_seconds": 600 if mode == "formal" else 5},
-        "scheduler": {"measured": {"max_in_flight": 8}},
-        "requests": {"unexpected_5xx": 0},
-        "observation_diagnostics": _valid_diagnostics(harness),
-        "queue": {"requested": 64, "accepted": 64, "completed": 64},
-        "latency": {
-            "provider_excluded_p95_ms": p95,
-            "provider_excluded_p99_ms": p99,
+        "production_slo_claim": False,
+        "identity": {
+            "revision": "a" * 40,
+            "proof_image": f"sha256:{'b' * 64}",
+            "context_sha256": "c" * 64,
+            "harness_sha256": "d" * 64,
+            "compose_sha256": "e" * 64,
+            "wrapper_sha256": "f" * 64,
+            "git_status_sha256": "1" * 64,
+            "git_dirty": False,
+            "git_dirty_count": 0,
+            "postgres_image": f"sha256:{'2' * 64}",
+            "redis_image": f"sha256:{'3' * 64}",
+            "migration_manifest_sha256": "4" * 64,
+            "migration_head_sha256": "5" * 64,
+            "migration_head_source_sha256": "6" * 64,
+            "environment_fingerprint": "7" * 64,
+            "dataset_fingerprint": harness.EXPECTED_DATASET_ID,
+            "dataset_config": json.loads(dataset_raw),
+            "dataset_sha256": hashlib.sha256(dataset_raw.encode()).hexdigest(),
+            "docker": {
+                "arch": "arm64",
+                "cpu_count": "8",
+                "memory_bytes": "17179869184",
+                "server_version": "test",
+                "compose_version": "test",
+                "background_container_count": "0",
+            },
         },
-        "integrity": {"duplicates_or_missing": 0},
-        "isolation": {"cross_site_result_read_rejected": True},
-        "resources": {"restart_count_zero": True},
-        "checks": {"all": True},
-        "boundary": {"external_http_gunicorn": True},
-        "limitations": ["deterministic_local_provider"],
+        "configuration": harness._record_configuration(
+            shape,
+            provider_delay_ms=harness.FORMAL_PROVIDER_DELAY_MS,
+        ),
+        "scheduler": {
+            "warmup": _valid_phase_stats(
+                samples=warmup_samples,
+                rate=shape.request_rate,
+                concurrency=shape.concurrency,
+            ),
+            "measured": _valid_phase_stats(
+                samples=soak_samples,
+                rate=shape.request_rate,
+                concurrency=shape.concurrency,
+            ),
+            "concurrency_probe_client_max": shape.concurrency,
+            "concurrency_probe_provider_max": shape.concurrency,
+        },
+        "requests": {
+            "attempted": attempted,
+            "accepted": attempted,
+            "completed": attempted,
+            "accepted_rate": 1.0,
+            "completed_rate": 1.0,
+            "unexpected_5xx": 0,
+        },
+        "observation_diagnostics": _valid_diagnostics(harness, sample_count=attempted + 1),
+        "queue": {
+            "requested": shape.queue_burst,
+            "accepted": shape.queue_burst,
+            "completed": shape.queue_burst,
+            "wait_p95_seconds": queue_timing["wait_seconds"]["p95"],
+            "timing_evidence": queue_timing,
+            "result_read_succeeded": True,
+        },
+        "latency": {
+            "attempted_sample_count": soak_samples,
+            "accepted_sample_count": soak_samples,
+            "sample_count": soak_samples,
+            "missing_persistent_evidence_count": 0,
+            "provider_excluded_p95_ms": float(p95),
+            "provider_excluded_p99_ms": float(p99),
+            "proof_provider_wall_p95_ms": 150.0,
+            "database_provider_call_p95_ms": 150.0,
+            "exclusion_method": (
+                "client_elapsed_minus_max_persistent_provider_wall_and_database_provider_call"
+            ),
+            "all_accepted_samples_have_persistent_provider_evidence": True,
+        },
+        "integrity": {
+            "observed_records": attempted,
+            "database_records": attempted,
+            "observed_identifier_set_exact": True,
+            "succeeded_records": attempted,
+            "provider_call_records": attempted,
+            "provider_invocations": attempted,
+            "provider_invocation_set_exact": True,
+            "provider_usage_key_set_exact": True,
+            "run_usage_key_set_exact": True,
+            "provider_meter_set_exact": True,
+            "provider_meter_mismatches": 0,
+            "usage_event_contract_violations": 0,
+            "duplicates_or_missing": 0,
+            "queued_residue": 0,
+            "running_residue": 0,
+            "dispatching_residue": 0,
+            "redis_queue_residue": 0,
+            "provider_active_residue": 0,
+            "provider_max_concurrency": shape.concurrency,
+            "provider_barrier_timeouts": 0,
+            "artifact_records": 0,
+            "queue_timing_evidence": queue_timing,
+            "queue_wait_p95_seconds": queue_timing["wait_seconds"]["p95"],
+        },
+        "isolation": {
+            "payload_mismatch_zero_side_effect": True,
+            "cross_site_record_read_rejected": True,
+            "cross_site_result_read_rejected": True,
+            "own_site_result_read_succeeded": True,
+        },
+        "resources": _valid_resources(harness, formal=formal),
+        "checks": checks,
+        "boundary": dict(harness.RECORD_BOUNDARY),
+        "redaction": dict(harness.RECORD_REDACTION),
+        "limitations": list(harness.RECORD_LIMITATIONS),
     }
+
+
+def _mark_record_failed(record: dict, *check_ids: str) -> None:
+    for check_id in check_ids:
+        record["checks"][check_id] = False
+    record["record_thresholds_passed"] = False
+    record["verdict"] = "record_failed"
+
+
+def _zero_accepted_record(harness: ModuleType, record: dict) -> None:
+    attempted = record["requests"]["attempted"]
+    observations = [
+        harness.Observation(
+            request_hash="a" * 64,
+            run_id="",
+            http_status=400,
+            runtime_status="",
+            error_code="auth.site_mismatch",
+            elapsed_ms=1.0,
+            phase="cross_site",
+        ),
+        *[
+            harness.Observation(
+                request_hash=f"{index:064x}",
+                run_id="",
+                http_status=400,
+                runtime_status="",
+                error_code="auth.invalid_signature",
+                elapsed_ms=1.0,
+                phase="soak",
+            )
+            for index in range(attempted)
+        ],
+    ]
+    diagnostics = harness._diagnostic_summary(observations)
+    assert diagnostics["complete"] is True
+    shape = harness._expected_record_shape(record["mode"])
+    queue_timing = harness._queue_timing_evidence(
+        [],
+        expected_count=shape.queue_burst,
+        cohort_size=harness.DEFAULT_WORKER_BATCH_SIZE,
+    )
+    assert queue_timing["complete"] is False
+    record["requests"].update(
+        accepted=0,
+        completed=0,
+        accepted_rate=0.0,
+        completed_rate=0.0,
+    )
+    record["observation_diagnostics"] = diagnostics
+    record["queue"].update(
+        accepted=0,
+        completed=0,
+        wait_p95_seconds=0.0,
+        timing_evidence=queue_timing,
+        result_read_succeeded=False,
+    )
+    record["latency"].update(
+        accepted_sample_count=0,
+        sample_count=0,
+        missing_persistent_evidence_count=0,
+        provider_excluded_p95_ms=0.0,
+        provider_excluded_p99_ms=0.0,
+        proof_provider_wall_p95_ms=0.0,
+        database_provider_call_p95_ms=0.0,
+        all_accepted_samples_have_persistent_provider_evidence=True,
+    )
+    record["scheduler"]["concurrency_probe_provider_max"] = 0
+    record["integrity"].update(
+        observed_records=0,
+        database_records=0,
+        succeeded_records=0,
+        provider_call_records=0,
+        provider_invocations=0,
+        provider_max_concurrency=0,
+        queue_timing_evidence=queue_timing,
+        queue_wait_p95_seconds=0.0,
+    )
+    _mark_record_failed(
+        record,
+        "accepted_rate",
+        "completed_rate",
+        "queue_requested_accepted_completed_exact",
+        "queue_timing_evidence_complete",
+        "proof_fixture_rejections_zero",
+        "real_concurrency_observed",
+    )
+
+
+def _incomplete_queue_record(harness: ModuleType, record: dict) -> None:
+    shape = harness._expected_record_shape(record["mode"])
+    submitted_at = datetime(2026, 7, 19, tzinfo=UTC)
+    runs = [
+        SimpleNamespace(
+            run_id=f"queue-{index}",
+            started_at=submitted_at,
+            processing_started_at=(
+                None if index == 0 else submitted_at + timedelta(seconds=1 + index / 100)
+            ),
+        )
+        for index in range(shape.queue_burst)
+    ]
+    queue_timing = harness._queue_timing_evidence(
+        runs,
+        expected_count=shape.queue_burst,
+        cohort_size=harness.DEFAULT_WORKER_BATCH_SIZE,
+    )
+    assert queue_timing["sample_count"] == shape.queue_burst
+    assert queue_timing["complete"] is False
+    wait_p95 = queue_timing["wait_seconds"]["p95"]
+    record["queue"]["timing_evidence"] = queue_timing
+    record["queue"]["wait_p95_seconds"] = wait_p95
+    record["integrity"]["queue_timing_evidence"] = queue_timing
+    record["integrity"]["queue_wait_p95_seconds"] = wait_p95
+    _mark_record_failed(record, "queue_timing_evidence_complete")
+
+
+def _formal_rss_insufficient_record(harness: ModuleType, record: dict) -> None:
+    measured_samples = [
+        SimpleNamespace(
+            elapsed_seconds=float(index * 5),
+            api_rss_bytes=1_000_000,
+            worker_rss_bytes=2_000_000,
+        )
+        for index in range(2)
+    ]
+    resources = record["resources"]
+    resources.update(
+        sample_count=2,
+        measured_sample_count=2,
+        measured_sample_count_passed=False,
+        idle_recovery_sample_count=0,
+        idle_recovery_sample_span_seconds=0.0,
+        idle_recovery_samples_complete=False,
+        sample_count_passed=False,
+        process_cohort_evidence=_valid_process_cohort(harness, sample_count=2),
+    )
+    for service in ("api", "worker"):
+        resources[f"{service}_rss_growth"] = harness._rss_growth_evidence(
+            measured_samples,
+            [],
+            formal=True,
+            rss_attribute=f"{service}_rss_bytes",
+        )
+        assert resources[f"{service}_rss_growth"]["evaluated"] is False
+        assert resources[f"{service}_rss_growth"]["idle_confirmation"]["status"] == (
+            "insufficient_samples"
+        )
+    for trend_name, level in (
+        ("api_fd_trend", 10.0),
+        ("worker_fd_trend", 20.0),
+        ("postgres_connection_trend", 3.0),
+    ):
+        resources[trend_name] = _valid_resource_trend(
+            harness,
+            formal=True,
+            measured_count=2,
+            idle_count=0,
+            idle_span=0.0,
+            idle_complete=False,
+            level=level,
+        )
+    _mark_record_failed(record, "rss_growth", "resource_samples_complete")
 
 
 def _write_records(path: Path, records: list[dict]) -> None:
@@ -172,7 +776,7 @@ def _formal_rss_evidence(
     assert idle_count == len(idle_worker_rss) == 12
     sample_count = active_count + idle_count
     api_process_counts = api_process_counts or [3] * sample_count
-    worker_process_counts = worker_process_counts or [1] * sample_count
+    worker_process_counts = worker_process_counts or [2] * sample_count
     api_process_identities = api_process_identities or [API_PROCESS_IDENTITY_SHA256] * sample_count
     worker_process_identities = (
         worker_process_identities or [WORKER_PROCESS_IDENTITY_SHA256] * sample_count
@@ -210,13 +814,21 @@ def _formal_rss_evidence(
             )
         )
     _write_resource_rows(path, harness, rows)
-    return harness._resource_evidence(
+    evidence = harness._resource_evidence(
         path,
         harness.Shape("formal", 600, 0, 8, 8.0, 64),
-        warmup_finished_seconds=0,
-        load_finished_seconds=595,
-        idle_finished_seconds=655,
+        warmup_finished_seconds=0.0,
+        load_finished_seconds=595.0,
+        idle_finished_seconds=655.0,
     )
+    for service in ("api", "worker"):
+        assert harness._rss_growth_valid(
+            evidence[f"{service}_rss_growth"],
+            formal=True,
+            expected_measured_sample_count=evidence["measured_sample_count"],
+            expected_idle_sample_count=evidence["idle_recovery_sample_count"],
+        )
+    return evidence
 
 
 def test_external_topology_replaces_all_old_in_process_seams() -> None:
@@ -238,6 +850,12 @@ def test_external_topology_replaces_all_old_in_process_seams() -> None:
     assert "proof-worker:" in compose
     assert "app.workers.runtime_queue" in compose
     assert "proof-provider:" in compose
+    assert re.search(r"--keep-alive\s+- \"10\"", compose)
+    worker_service = re.search(
+        r"^  proof-worker:\n(.*?)(?=^  [a-z]|\Z)", compose, re.MULTILINE | re.DOTALL
+    )
+    assert worker_service is not None
+    assert re.search(r"^    deploy:\n      replicas: 2$", worker_service.group(1), re.MULTILINE)
     assert 'NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: "30"' in compose
     api_url = re.search(r"P5_B4_PROOF_API_URL:\s*(\S+)", compose)
     trusted_hosts = re.search(r"NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST:\s*(\S+)", compose)
@@ -248,7 +866,7 @@ def test_external_topology_replaces_all_old_in_process_seams() -> None:
 
 
 def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) -> None:
-    assert harness.CONTRACT_ID == "p5_b4_external_runtime_load_soak_proof.v4"
+    assert harness.CONTRACT_ID == "p5_b4_external_runtime_load_soak_proof.v5"
     assert harness.FORMAL_RECORDS == 3
     assert harness.FORMAL_DURATION_SECONDS == 600
     assert harness.FORMAL_WARMUP_SECONDS == 30
@@ -257,6 +875,7 @@ def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) ->
     assert harness.FORMAL_QUEUE_BURST == 64
     assert harness.DEFAULT_WORKER_POLL_SECONDS == 5
     assert harness.DEFAULT_WORKER_BATCH_SIZE == 8
+    assert harness.FORMAL_WORKER_REPLICAS == 2
     assert harness.FORMAL_RESOURCE_IDLE_RECOVERY_SECONDS == 60
     assert harness.FORMAL_RESOURCE_IDLE_MIN_SAMPLES == 12
     assert harness.FORMAL_RESOURCE_IDLE_MIN_SPAN_SECONDS == 55.0
@@ -265,6 +884,29 @@ def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) ->
     assert harness.FORMAL_RSS_IDLE_BLOCK_COUNT == 4
     assert harness.SITE_COUNT == 8
     assert harness.PROOF_MAX_AI_CREDITS_PER_SITE_PERIOD == 10_000.0
+    assert len(harness.RECORD_CHECK_IDS) == 29
+    assert len(set(harness.RECORD_CHECK_IDS)) == 29
+    assert "transport_http_failures_zero" in harness.RECORD_CHECK_IDS
+    source = _source(HARNESS)
+    tree = ast.parse(source)
+    run_record = next(
+        node
+        for node in tree.body
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "_run_record"
+    )
+    checks_assignment = next(
+        node
+        for node in ast.walk(run_record)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "checks" for target in node.targets)
+    )
+    assert isinstance(checks_assignment.value, ast.Dict)
+    check_ids = tuple(ast.literal_eval(key) for key in checks_assignment.value.keys)
+    assert check_ids == harness.RECORD_CHECK_IDS
+    assert "max_connections=shape.concurrency" in source
+    assert "max_keepalive_connections=shape.concurrency" in source
+    assert "keepalive_expiry=5.0" in source
+    assert "retries=" not in source
     parser = harness._parser()
     assert parser.parse_args(["--confirm-disposable", "serve-provider"]).command == (
         "serve-provider"
@@ -276,7 +918,7 @@ def test_formal_shape_and_subcommand_contract_are_frozen(harness: ModuleType) ->
     )
 
 
-def test_dataset_attribution_requires_v4(
+def test_dataset_attribution_requires_v5(
     harness: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dataset = json.loads(json.dumps(harness.EXPECTED_DATASET_CONFIG))
@@ -297,21 +939,28 @@ def test_dataset_attribution_requires_v4(
         ).hexdigest()
     )
 
-    set_dataset({**dataset, "contract": "p5_b4_runtime_dataset.v3"})
+    set_dataset({**dataset, "contract": "p5_b4_runtime_dataset.v4"})
     with pytest.raises(harness.ProofFailure, match="configuration.dataset_contract_invalid"):
         harness._dataset_attribution()
 
     set_dataset(dataset)
-    monkeypatch.setenv("P5_B4_DATASET_ID", "p5_b4_runtime_8_sites_v3")
+    monkeypatch.setenv("P5_B4_DATASET_ID", "p5_b4_runtime_8_sites_v4")
     with pytest.raises(harness.ProofFailure, match="configuration.dataset_id_invalid"):
         harness._dataset_attribution()
 
 
 @pytest.mark.parametrize(
     "mutation",
-    ["missing_threshold", "changed_window", "float_window", "boolean_baselines"],
+    [
+        "missing_threshold",
+        "changed_window",
+        "float_window",
+        "boolean_baselines",
+        "float_worker_replicas",
+        "boolean_worker_replicas",
+    ],
 )
-def test_dataset_attribution_rejects_incomplete_or_mutated_v4_identity(
+def test_dataset_attribution_rejects_incomplete_or_mutated_v5_identity(
     harness: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
@@ -325,10 +974,14 @@ def test_dataset_attribution_rejects_incomplete_or_mutated_v4_identity(
         formal["rss_endpoint_window_sample_count"] = 11
     elif mutation == "float_window":
         formal["rss_endpoint_window_sample_count"] = 12.0
-    else:
+    elif mutation == "boolean_baselines":
         quick = dataset["quick"]
         assert isinstance(quick, dict)
         quick["baselines"] = True
+    else:
+        worker = dataset["worker"]
+        assert isinstance(worker, dict)
+        worker["replicas"] = 2.0 if mutation == "float_worker_replicas" else True
     raw = json.dumps(dataset, sort_keys=True, separators=(",", ":"))
     monkeypatch.setenv("P5_B4_DATASET_ID", harness.EXPECTED_DATASET_ID)
     monkeypatch.setenv("P5_B4_DATASET_CONFIG", raw)
@@ -388,27 +1041,249 @@ def test_formal_aggregate_locks_first_record_and_keeps_receipts(
 
     records[2]["contract"] = "unexpected-contract"
     _write_records(tmp_path, [records[2]])
-    rejected, rejected_ok = harness._aggregate(
-        SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3)
-    )
-    assert rejected_ok is False
-    assert rejected["record_contracts_match"] is False
+    with pytest.raises(harness.ProofFailure, match="aggregate.record_schema_invalid"):
+        harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
 
+    records[2] = _record(harness, 3)
     records[2]["observation_diagnostics"]["by_phase"]["raw-dynamic-phase"] = 1
     _write_records(tmp_path, [records[2]])
-    with pytest.raises(
-        harness.ProofFailure,
-        match="aggregate.observation_diagnostics_invalid",
-    ):
+    with pytest.raises(harness.ProofFailure, match="aggregate.record_schema_invalid"):
         harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
 
 
-def test_formal_aggregate_rejects_legacy_v3_record(
+def test_formal_aggregate_rejects_v4_record(
     harness: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
     records = [_record(harness, index) for index in range(1, 4)]
-    records[1]["contract"] = "p5_b4_external_runtime_load_soak_proof.v3"
+    records[1]["contract"] = "p5_b4_external_runtime_load_soak_proof.v4"
+    _write_records(tmp_path, records)
+
+    with pytest.raises(harness.ProofFailure, match="aggregate.record_schema_invalid"):
+        harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
+
+    records[1]["observation_diagnostics"]["schema_version"] = "p5_b4_observation_diagnostics.v1"
+    del records[1]["observation_diagnostics"]["by_phase_and_error_code"]
+    _write_records(tmp_path, [records[1]])
+    with pytest.raises(harness.ProofFailure, match="aggregate.record_schema_invalid"):
+        harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
+
+
+@pytest.mark.parametrize("drift", ["configuration_int_to_float", "identity_bool_to_int"])
+def test_formal_aggregate_rejects_json_type_drift(
+    harness: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
+    records = [_record(harness, index) for index in range(1, 4)]
+    if drift == "configuration_int_to_float":
+        for record in records:
+            record["configuration"]["worker_replicas"] = 2.0
+    else:
+        for record in records:
+            record["identity"]["git_dirty"] = 0
+    _write_records(tmp_path, records)
+
+    with pytest.raises(harness.ProofFailure, match="aggregate.record_schema_invalid"):
+        harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["empty_checks", "empty_resources", "missing_field", "inconsistent_false_resource"],
+)
+def test_aggregate_rejects_three_equally_malformed_records(
+    harness: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
+    records = [_record(harness, index) for index in range(1, 4)]
+    for record in records:
+        if mutation == "empty_checks":
+            record["checks"] = {}
+        elif mutation == "empty_resources":
+            record["resources"] = {}
+        elif mutation == "missing_field":
+            del record["queue"]
+        else:
+            record["resources"]["services_survived_all_samples"] = False
+    _write_records(tmp_path, records)
+
+    with pytest.raises(harness.ProofFailure, match="aggregate.record_schema_invalid"):
+        harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "negative_control_matrix_absent",
+        "boundary_bool_to_int",
+        "redaction_bool_to_float",
+        "trend_reduced_to_summary",
+        "trend_sample_count_type_drift",
+    ],
+)
+def test_formal_aggregate_rejects_three_equal_strict_schema_bypasses(
+    harness: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
+    records = [_record(harness, index) for index in range(1, 4)]
+    for record in records:
+        if mutation == "negative_control_matrix_absent":
+            diagnostics = record["observation_diagnostics"]
+            diagnostics["by_error_code"]["auth.site_mismatch"] -= 1
+            diagnostics["by_error_code"]["none"] += 1
+            diagnostics["by_phase_and_error_code"]["cross_site"]["auth.site_mismatch"] -= 1
+            diagnostics["by_phase_and_error_code"]["cross_site"]["none"] += 1
+        elif mutation == "boundary_bool_to_int":
+            record["boundary"]["new_runtime_infrastructure"] = 0
+        elif mutation == "redaction_bool_to_float":
+            record["redaction"]["secret_fields_emitted"] = 0.0
+        elif mutation == "trend_reduced_to_summary":
+            record["resources"]["api_fd_trend"] = {"sustained_growth": False}
+        else:
+            record["resources"]["api_fd_trend"]["sample_count"] = "120"
+        assert harness._record_schema_valid(record, expected_mode="formal") is False
+    _write_records(tmp_path, records)
+
+    with pytest.raises(harness.ProofFailure, match="aggregate.record_schema_invalid"):
+        harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "diagnostics_transport_cross_dimension",
+        "diagnostics_5xx_exceeds_request_count",
+        "diagnostics_accepted_runtime_mismatch",
+        "timing_percentiles_out_of_order",
+        "timing_distribution_sample_mismatch",
+        "queue_wait_p95_mismatch",
+        "queue_complete_not_recomputed",
+        "latency_sample_exceeds_accepted",
+        "latency_missing_count_mismatch",
+        "latency_complete_mismatch",
+        "identifier_exact_count_mismatch",
+        "provider_invocation_set_not_gated",
+        "provider_usage_key_set_not_gated",
+        "run_usage_key_set_not_gated",
+        "provider_meter_set_not_gated",
+        "provider_meter_mismatch_not_gated",
+        "provider_contract_violation_not_gated",
+        "provider_invocation_count_not_gated",
+        "provider_succeeded_exceeds_calls",
+        "provider_calls_exceed_database",
+        "resource_trend_summary_mismatch",
+        "resource_sample_summary_mismatch",
+        "rss_within_budget_not_recomputed",
+    ],
+)
+def test_formal_aggregate_rejects_three_equal_review_reproduction_mutations(
+    harness: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
+    records = [_record(harness, index) for index in range(1, 4)]
+    for record in records:
+        diagnostics = record["observation_diagnostics"]
+        timing = record["queue"]["timing_evidence"]
+        latency = record["latency"]
+        integrity = record["integrity"]
+        resources = record["resources"]
+        if mutation == "diagnostics_transport_cross_dimension":
+            diagnostics["by_error_code"]["none"] -= 1
+            diagnostics["by_error_code"]["transport.read_error"] += 1
+            diagnostics["by_phase_and_error_code"]["soak"]["none"] -= 1
+            diagnostics["by_phase_and_error_code"]["soak"]["transport.read_error"] += 1
+        elif mutation == "diagnostics_5xx_exceeds_request_count":
+            diagnostics["by_http_status"]["200"] -= 1
+            diagnostics["by_http_status"]["5xx"] += 1
+        elif mutation == "diagnostics_accepted_runtime_mismatch":
+            diagnostics["by_runtime_status"]["succeeded"] -= 1
+            diagnostics["by_runtime_status"]["failed"] += 1
+        elif mutation == "timing_percentiles_out_of_order":
+            timing["wait_seconds"]["p50"] = timing["wait_seconds"]["max"] + 1.0
+        elif mutation == "timing_distribution_sample_mismatch":
+            timing["wait_seconds"]["sample_count"] -= 1
+        elif mutation == "queue_wait_p95_mismatch":
+            timing["wait_seconds"]["p95"] = 999.0
+            timing["wait_seconds"]["p99"] = 999.0
+            timing["wait_seconds"]["max"] = 999.0
+        elif mutation == "queue_complete_not_recomputed":
+            timing["complete"] = False
+            _mark_record_failed(record, "queue_timing_evidence_complete")
+        elif mutation == "latency_sample_exceeds_accepted":
+            latency["sample_count"] = latency["accepted_sample_count"] + 1
+        elif mutation == "latency_missing_count_mismatch":
+            latency["missing_persistent_evidence_count"] = 1
+        elif mutation == "latency_complete_mismatch":
+            latency["all_accepted_samples_have_persistent_provider_evidence"] = False
+        elif mutation == "identifier_exact_count_mismatch":
+            integrity["observed_records"] -= 1
+        elif mutation.endswith("_set_not_gated"):
+            integrity[
+                {
+                    "provider_invocation_set_not_gated": "provider_invocation_set_exact",
+                    "provider_usage_key_set_not_gated": "provider_usage_key_set_exact",
+                    "run_usage_key_set_not_gated": "run_usage_key_set_exact",
+                    "provider_meter_set_not_gated": "provider_meter_set_exact",
+                }[mutation]
+            ] = False
+        elif mutation == "provider_meter_mismatch_not_gated":
+            integrity["provider_meter_mismatches"] = 1
+        elif mutation == "provider_contract_violation_not_gated":
+            integrity["usage_event_contract_violations"] = 1
+        elif mutation == "provider_invocation_count_not_gated":
+            integrity["provider_invocations"] -= 1
+        elif mutation == "provider_succeeded_exceeds_calls":
+            integrity["provider_call_records"] -= 1
+            integrity["provider_invocations"] -= 1
+        elif mutation == "provider_calls_exceed_database":
+            integrity["provider_call_records"] += 1
+            integrity["provider_invocations"] += 1
+        elif mutation == "resource_trend_summary_mismatch":
+            resources["api_fd_trend"]["sustained_growth"] = True
+        elif mutation == "resource_sample_summary_mismatch":
+            resources["measured_sample_count_passed"] = False
+        else:
+            for service in ("api", "worker"):
+                resources[f"{service}_rss_growth"]["within_budget"] = False
+            _mark_record_failed(record, "rss_growth")
+    _write_records(tmp_path, records)
+
+    with pytest.raises(harness.ProofFailure, match="aggregate.record_schema_invalid"):
+        harness._aggregate(SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3))
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["zero_accepted", "incomplete_queue", "formal_rss_insufficient"],
+)
+def test_structurally_valid_failure_evidence_aggregates_as_non_acceptance(
+    harness: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+) -> None:
+    monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
+    records = [_record(harness, index) for index in range(1, 4)]
+    modifier = {
+        "zero_accepted": _zero_accepted_record,
+        "incomplete_queue": _incomplete_queue_record,
+        "formal_rss_insufficient": _formal_rss_insufficient_record,
+    }[scenario]
+    for record in records:
+        modifier(harness, record)
+        assert harness._record_schema_valid(record, expected_mode="formal") is True
     _write_records(tmp_path, records)
 
     report, ok = harness._aggregate(
@@ -417,7 +1292,132 @@ def test_formal_aggregate_rejects_legacy_v3_record(
 
     assert ok is False
     assert report["formal_acceptance"] is False
-    assert report["record_contracts_match"] is False
+    assert report["records_passed"] is False
+
+
+def test_structurally_valid_failed_record_aggregates_as_non_acceptance(
+    harness: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
+    records = [_record(harness, index) for index in range(1, 4)]
+    failed = records[1]
+    failed["resources"]["services_survived_all_samples"] = False
+    failed["checks"]["services_survived"] = False
+    failed["record_thresholds_passed"] = False
+    failed["verdict"] = "record_failed"
+    assert harness._record_schema_valid(failed, expected_mode="formal") is True
+    _write_records(tmp_path, records)
+
+    report, ok = harness._aggregate(
+        SimpleNamespace(mode="formal", input_dir=tmp_path, baseline_count=3)
+    )
+
+    assert ok is False
+    assert report["formal_acceptance"] is False
+    assert report["records_passed"] is False
+
+
+def test_real_resource_helper_records_round_trip_success_and_failures(
+    harness: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("P5_B4_TOPOLOGY_VERIFIED", "true")
+    success_resources = _formal_rss_evidence(
+        harness,
+        tmp_path / "roundtrip-success.tsv",
+        active_api_rss=[1_000_000] * 108 + [1_100_000] * 12,
+        active_worker_rss=[2_000_000] * 108 + [2_200_000] * 12,
+        idle_api_rss=[1_100_000] * 12,
+        idle_worker_rss=[2_200_000] * 12,
+    )
+    success_records = [_record(harness, index) for index in range(1, 4)]
+    for record in success_records:
+        record["resources"] = json.loads(json.dumps(success_resources))
+        assert harness._record_schema_valid(record, expected_mode="formal") is True
+    success_dir = tmp_path / "success-records"
+    success_dir.mkdir()
+    _write_records(success_dir, success_records)
+    success_report, success = harness._aggregate(
+        SimpleNamespace(mode="formal", input_dir=success_dir, baseline_count=3)
+    )
+    assert success is True
+    assert success_report["formal_acceptance"] is True
+
+    overbudget_resources = _formal_rss_evidence(
+        harness,
+        tmp_path / "roundtrip-overbudget.tsv",
+        active_api_rss=[1_000_000] * 108 + [1_100_001] * 12,
+        active_worker_rss=[2_000_000] * 120,
+        idle_api_rss=[1_000_000] * 12,
+        idle_worker_rss=[2_000_000] * 12,
+    )
+    overbudget_records = [_record(harness, index) for index in range(1, 4)]
+    for record in overbudget_records:
+        record["resources"] = json.loads(json.dumps(overbudget_resources))
+        _mark_record_failed(record, "rss_growth")
+        assert harness._record_schema_valid(record, expected_mode="formal") is True
+    overbudget_dir = tmp_path / "overbudget-records"
+    overbudget_dir.mkdir()
+    _write_records(overbudget_dir, overbudget_records)
+    overbudget_report, overbudget = harness._aggregate(
+        SimpleNamespace(mode="formal", input_dir=overbudget_dir, baseline_count=3)
+    )
+    assert overbudget is False
+    assert overbudget_report["formal_acceptance"] is False
+    assert overbudget_report["records_passed"] is False
+
+    quick_resource = tmp_path / "roundtrip-quick.tsv"
+    _write_resource_rows(
+        quick_resource,
+        harness,
+        [
+            _resource_row(0.0, 1_000_000, 10, 2_000_000, 20, 3),
+            _resource_row(5.0, 1_000_000, 10, 2_000_000, 20, 3),
+        ],
+    )
+    quick_resources = harness._resource_evidence(
+        quick_resource,
+        harness.Shape("quick", 5, 3, 2, 2.0, 8),
+        warmup_finished_seconds=0.0,
+        load_finished_seconds=5.0,
+        idle_finished_seconds=5.0,
+    )
+    quick_record = _record(harness, 1, mode="quick")
+    quick_record["resources"] = quick_resources
+    assert harness._record_schema_valid(quick_record, expected_mode="quick") is True
+
+    insufficient_resource = tmp_path / "roundtrip-insufficient.tsv"
+    _write_resource_rows(
+        insufficient_resource,
+        harness,
+        [
+            _resource_row(0.0, 1_000_000, 10, 2_000_000, 20, 3),
+            _resource_row(5.0, 1_000_000, 10, 2_000_000, 20, 3),
+        ],
+    )
+    insufficient_resources = harness._resource_evidence(
+        insufficient_resource,
+        harness.Shape("formal", 600, 30, 8, 8.0, 64),
+        warmup_finished_seconds=0.0,
+        load_finished_seconds=5.0,
+        idle_finished_seconds=5.0,
+    )
+    insufficient_record = _record(harness, 1)
+    insufficient_record["resources"] = insufficient_resources
+    _mark_record_failed(insufficient_record, "rss_growth", "resource_samples_complete")
+    assert harness._record_schema_valid(insufficient_record, expected_mode="formal") is True
+
+
+def test_record_schema_accepts_finite_negative_rss_growth(harness: ModuleType) -> None:
+    record = _record(harness, 1)
+    for service in ("api", "worker"):
+        growth = record["resources"][f"{service}_rss_growth"]
+        growth["growth_percent"] = -14.8
+        growth["growth_percent_rounded"] = -14.8
+        growth["terminal_window"]["median_rss_bytes"] = 852_000.0
+
+    assert harness._record_schema_valid(record, expected_mode="formal") is True
 
 
 def test_regression_requires_both_absolute_and_relative_thresholds(harness: ModuleType) -> None:
@@ -580,6 +1580,11 @@ def test_diagnostics_are_bounded_redacted_and_require_run_identifier(
     assert set(summary["by_error_code"]) == set(harness.DIAGNOSTIC_ERROR_BUCKETS)
     assert set(summary["by_runtime_status"]) == set(harness.DIAGNOSTIC_RUNTIME_BUCKETS)
     assert set(summary["by_phase"]) == set(harness.DIAGNOSTIC_PHASE_BUCKETS)
+    assert set(summary["by_phase_and_error_code"]) == set(harness.DIAGNOSTIC_PHASE_BUCKETS)
+    assert all(
+        set(counts) == set(harness.DIAGNOSTIC_ERROR_BUCKETS)
+        for counts in summary["by_phase_and_error_code"].values()
+    )
     assert summary["by_http_status"]["200"] == 2
     assert summary["by_http_status"]["400"] == 1
     assert summary["by_http_status"]["422"] == 1
@@ -587,6 +1592,10 @@ def test_diagnostics_are_bounded_redacted_and_require_run_identifier(
     assert summary["by_error_code"]["other"] == 1
     assert summary["by_runtime_status"]["other"] == 1
     assert summary["by_phase"]["other"] == 1
+    assert summary["by_phase_and_error_code"]["cross_site"]["auth.site_mismatch"] == 1
+    assert summary["by_phase_and_error_code"]["warmup"]["none"] == 1
+    assert summary["by_phase_and_error_code"]["soak"]["none"] == 1
+    assert summary["by_phase_and_error_code"]["other"]["other"] == 1
     assert summary["response_shape_violation_count"] == 2
     assert summary["other_count"] == 3
     assert summary["complete"] is False
@@ -712,6 +1721,22 @@ def test_diagnostics_validation_rejects_missing_dynamic_and_inconsistent_fields(
     inconsistent["by_http_status"]["200"] += 1
     assert harness._diagnostics_valid(inconsistent) is False
 
+    dynamic_matrix = json.loads(json.dumps(valid))
+    dynamic_matrix["by_phase_and_error_code"]["soak"]["raw.dynamic.code"] = 1
+    assert harness._diagnostics_valid(dynamic_matrix) is False
+
+    inconsistent_matrix = json.loads(json.dumps(valid))
+    inconsistent_matrix["by_phase_and_error_code"]["soak"]["none"] += 1
+    assert harness._diagnostics_valid(inconsistent_matrix) is False
+
+    boolean_count = json.loads(json.dumps(valid))
+    boolean_count["by_phase_and_error_code"]["soak"]["none"] = True
+    assert harness._diagnostics_valid(boolean_count) is False
+
+    float_count = json.loads(json.dumps(valid))
+    float_count["by_phase_and_error_code"]["soak"]["none"] = 1.0
+    assert harness._diagnostics_valid(float_count) is False
+
 
 def test_transport_timeout_is_safely_classified_without_exception_text(
     harness: ModuleType,
@@ -734,9 +1759,42 @@ def test_transport_timeout_is_safely_classified_without_exception_text(
     serialized = json.dumps(summary, sort_keys=True)
     assert summary["by_http_status"]["transport"] == 1
     assert summary["by_error_code"]["transport.timeout"] == 1
+    assert summary["by_phase_and_error_code"]["soak"]["transport.timeout"] == 1
     assert summary["negative_control_included"] is False
     assert summary["complete"] is False
     assert "secret transport detail" not in serialized
+
+
+def test_transport_http_bucket_is_an_explicit_hard_gate(harness: ModuleType) -> None:
+    clean = _valid_diagnostics(harness)
+    assert harness._transport_http_failures_zero(clean) is True
+
+    observations = [
+        harness.Observation(
+            request_hash="a" * 64,
+            run_id="",
+            http_status=400,
+            runtime_status="",
+            error_code="auth.site_mismatch",
+            elapsed_ms=1.0,
+            phase="cross_site",
+        ),
+        harness.Observation(
+            request_hash="b" * 64,
+            run_id="",
+            http_status=0,
+            runtime_status="",
+            error_code="transport.connect_error",
+            elapsed_ms=1.0,
+            phase="soak",
+        ),
+    ]
+    transport = harness._diagnostic_summary(observations)
+    assert harness._diagnostics_valid(transport) is True
+    assert transport["by_http_status"]["transport"] == 1
+    assert harness._transport_http_failures_zero(transport) is False
+    source = _source(HARNESS)
+    assert '"transport_http_failures_zero": _transport_http_failures_zero(diagnostics)' in source
 
 
 def test_transport_subtype_and_accepted_latency_denominator_are_precise(
@@ -825,7 +1883,7 @@ def test_usage_meter_closed_set_enforces_structural_references(harness: ModuleTy
     ) == {"provider_calls": 1.0, "cost": 0.25}
 
 
-def test_resource_sampler_v4_schema_is_exact_and_fail_closed(
+def test_resource_sampler_v5_aggregate_schema_is_exact_and_fail_closed(
     harness: ModuleType, tmp_path: Path
 ) -> None:
     assert harness.RESOURCE_HEADER.split("\t") == [
@@ -844,7 +1902,7 @@ def test_resource_sampler_v4_schema_is_exact_and_fail_closed(
         "api_process_identity_sha256",
         "worker_process_identity_sha256",
     ]
-    resource = tmp_path / "resources-invalid-v4.tsv"
+    resource = tmp_path / "resources-invalid-v5.tsv"
     old_v3_row = "0\t100\t10\t100\t20\t3\t0\t0\t1\t1"
     _write_resource_rows(resource, harness, [old_v3_row])
     with pytest.raises(harness.ProofFailure, match="resources.row_invalid"):
@@ -857,7 +1915,12 @@ def test_resource_sampler_v4_schema_is_exact_and_fail_closed(
         )
 
     valid = _resource_row(0, 100, 10, 100, 20, 3).split("\t")
-    for column, invalid in ((10, "3.0"), (12, "not-a-sha256")):
+    for column, invalid in (
+        (9, "2.0"),
+        (9, "3"),
+        (10, "3.0"),
+        (12, "not-a-sha256"),
+    ):
         invalid_row = valid.copy()
         invalid_row[column] = invalid
         _write_resource_rows(resource, harness, ["\t".join(invalid_row)])
@@ -1135,38 +2198,96 @@ def test_rss_samples_outside_explicit_boundaries_do_not_affect_growth(
     assert evidence["worker_rss_growth"]["within_budget"] is True
 
 
-@pytest.mark.parametrize("mutation", ["process_count", "identity_sha256"])
+@pytest.mark.parametrize(
+    ("service", "mutation"),
+    [
+        ("api", "process_count"),
+        ("api", "identity_sha256"),
+        ("worker", "process_count"),
+        ("worker", "identity_sha256"),
+    ],
+)
 def test_resource_process_cohort_changes_fail_closed(
-    harness: ModuleType, tmp_path: Path, mutation: str
+    harness: ModuleType, tmp_path: Path, service: str, mutation: str
 ) -> None:
     sample_count = 132
     api_counts = [3] * sample_count
+    worker_counts = [2] * sample_count
     api_identities = [API_PROCESS_IDENTITY_SHA256] * sample_count
+    worker_identities = [WORKER_PROCESS_IDENTITY_SHA256] * sample_count
     if mutation == "process_count":
-        api_counts[60] = 4
+        if service == "api":
+            api_counts[60] = 4
+        else:
+            worker_counts[60] = 1
     else:
-        api_identities[60] = "e" * 64
+        if service == "api":
+            api_identities[60] = "e" * 64
+        else:
+            worker_identities[60] = "f" * 64
     evidence = _formal_rss_evidence(
         harness,
-        tmp_path / f"rss-cohort-{mutation}.tsv",
+        tmp_path / f"rss-cohort-{service}-{mutation}.tsv",
         active_api_rss=[1_000_000] * 120,
         active_worker_rss=[1_000_000] * 120,
         idle_api_rss=[1_000_000] * 12,
         idle_worker_rss=[1_000_000] * 12,
         api_process_counts=api_counts,
+        worker_process_counts=worker_counts,
         api_process_identities=api_identities,
+        worker_process_identities=worker_identities,
     )
     cohort = evidence["process_cohort_evidence"]
     assert cohort["evaluated"] is True
     assert cohort["all_valid"] is False
-    assert cohort["api"]["passed"] is False
+    assert cohort[service]["passed"] is False
     if mutation == "process_count":
-        assert cohort["api"]["process_count_stable"] is False
+        assert cohort[service]["process_count_stable"] is False
     else:
-        assert cohort["api"]["identity_sha256_unique"] is False
-    assert cohort["worker"]["passed"] is True
+        assert cohort[service]["identity_sha256_unique"] is False
+    other_service = "worker" if service == "api" else "api"
+    assert cohort[other_service]["passed"] is True
     source = _source(HARNESS)
     assert '"process_cohort_stable": process_cohort_evidence["all_valid"] is True' in source
+
+
+def test_dual_worker_aggregate_identity_and_survival_are_frozen(
+    harness: ModuleType, tmp_path: Path
+) -> None:
+    evidence = _formal_rss_evidence(
+        harness,
+        tmp_path / "rss-dual-worker-stable.tsv",
+        active_api_rss=[1_000_000] * 120,
+        active_worker_rss=[2_000_000] * 120,
+        idle_api_rss=[1_000_000] * 12,
+        idle_worker_rss=[2_000_000] * 12,
+    )
+    worker = evidence["process_cohort_evidence"]["worker"]
+    assert worker["minimum_process_count"] == 2
+    assert worker["process_counts"] == [2]
+    assert worker["identity_sha256_values"] == [WORKER_PROCESS_IDENTITY_SHA256]
+    assert worker["passed"] is True
+    assert evidence["services_survived_all_samples"] is True
+
+    row = _resource_row(
+        0,
+        1_000_000,
+        10,
+        2_000_000,
+        20,
+        3,
+        worker_running=1,
+    )
+    resource = tmp_path / "rss-one-worker-down.tsv"
+    _write_resource_rows(resource, harness, [row])
+    degraded = harness._resource_evidence(
+        resource,
+        harness.Shape("quick", 5, 1, 2, 2.0, 8),
+        warmup_finished_seconds=0,
+        load_finished_seconds=0,
+        idle_finished_seconds=0,
+    )
+    assert degraded["services_survived_all_samples"] is False
 
 
 def test_resource_gate_detects_restart_downtime_and_per_service_growth(
@@ -1314,6 +2435,15 @@ def test_resource_gate_detects_repeated_or_late_growth(
     assert trend["candidate_growth"] is True
     assert trend["idle_recovery"]["status"] == "retained"
     assert trend["sustained_growth"] is True
+    assert harness._resource_trend_valid(
+        trend,
+        formal=True,
+        expected_measured_sample_count=evidence["measured_sample_count"],
+        expected_minimum_sample_count=evidence["minimum_sample_count"],
+        expected_idle_sample_count=evidence["idle_recovery_sample_count"],
+        expected_idle_span_seconds=evidence["idle_recovery_sample_span_seconds"],
+        expected_idle_samples_complete=evidence["idle_recovery_samples_complete"],
+    )
 
 
 def test_resource_gate_transient_active_growth_recovers_during_idle(
@@ -1343,6 +2473,15 @@ def test_resource_gate_transient_active_growth_recovers_during_idle(
     assert trend["global_sustained_growth"] is False
     assert trend["confirmed_sustained_growth"] is False
     assert trend["sustained_growth"] is False
+    assert harness._resource_trend_valid(
+        trend,
+        formal=True,
+        expected_measured_sample_count=evidence["measured_sample_count"],
+        expected_minimum_sample_count=evidence["minimum_sample_count"],
+        expected_idle_sample_count=evidence["idle_recovery_sample_count"],
+        expected_idle_span_seconds=evidence["idle_recovery_sample_span_seconds"],
+        expected_idle_samples_complete=evidence["idle_recovery_samples_complete"],
+    )
 
 
 def test_resource_gate_excludes_samples_after_idle_end_boundary(
@@ -1419,6 +2558,15 @@ def test_resource_gate_fails_closed_when_idle_samples_are_insufficient(
     assert trend["candidate_growth"] is True
     assert trend["idle_recovery"]["status"] == "insufficient_samples"
     assert trend["sustained_growth"] is True
+    assert harness._resource_trend_valid(
+        trend,
+        formal=True,
+        expected_measured_sample_count=evidence["measured_sample_count"],
+        expected_minimum_sample_count=evidence["minimum_sample_count"],
+        expected_idle_sample_count=evidence["idle_recovery_sample_count"],
+        expected_idle_span_seconds=evidence["idle_recovery_sample_span_seconds"],
+        expected_idle_samples_complete=evidence["idle_recovery_samples_complete"],
+    )
 
 
 def test_resource_gate_treats_mixed_idle_floor_as_inconclusive(
@@ -1619,6 +2767,141 @@ def test_provider_and_database_safety_contracts_are_fail_closed() -> None:
     assert "prepare.commercial_baseline_incomplete" in source
 
 
+def test_wrapper_output_path_and_cleanup_guards_are_fail_closed() -> None:
+    source = _source(WRAPPER)
+
+    for function_name in (
+        "canonicalize_path",
+        "canonicalize_existing_directory",
+        "path_is_equal_or_within",
+    ):
+        assert re.search(rf"^{function_name}\(\) \{{", source, re.MULTILINE)
+    absolute_git_dir = source.index("git rev-parse --absolute-git-dir")
+    common_git_dir = source.index("git rev-parse --git-common-dir")
+    docker_probe = source.index("docker info >/dev/null 2>&1")
+    assert absolute_git_dir < common_git_dir < docker_probe
+    assert 'canonicalize_existing_directory "${WORKTREE_GIT_DIR_RAW}"' in source
+    assert 'canonicalize_existing_directory "${GIT_COMMON_DIR_RAW}"' in source
+    for protected_root in ("ROOT_DIR", "WORKTREE_GIT_DIR", "GIT_COMMON_DIR"):
+        assert f'path_is_equal_or_within "${{OUTPUT_PATH}}" "${{{protected_root}}}"' in source
+
+    assert '[ ! -L "${OUTPUT_CANDIDATE}" ] || fail' in source
+    non_regular_guard = re.search(
+        r'if \[ -e "\$\{OUTPUT_PATH\}" \] && \[ ! -f "\$\{OUTPUT_PATH\}" \]; then\n'
+        r"\s*fail 'existing output path must be a regular file'\nfi",
+        source,
+    )
+    assert non_regular_guard is not None
+    assert '[ -e "${OUTPUT_PATH}" ] && [ -f "${OUTPUT_PATH}" ]' not in source
+
+    cleanup_assignments = re.findall(r"^DOCKER_CLEANUP_REQUIRED=([01])$", source, re.MULTILINE)
+    assert cleanup_assignments == ["0", "1"]
+    cleanup_arm = source.index("DOCKER_CLEANUP_REQUIRED=1")
+    assert cleanup_arm < source.index("docker build", cleanup_arm)
+    on_exit = re.search(r"^on_exit\(\) \{(.*?)^\}$", source, re.MULTILINE | re.DOTALL)
+    assert on_exit is not None
+    assert 'if [ "${DOCKER_CLEANUP_REQUIRED}" -eq 1 ]; then' in on_exit.group(1)
+
+
+def test_sampler_job_state_excludes_done_but_keeps_running_and_stopped() -> None:
+    active_function = _shell_function(_source(WRAPPER), "sampler_job_is_active")
+    script = f"""
+set -u
+{active_function}
+
+job_state=done
+jobs() {{
+    case "${{job_state}}:$1" in
+    done:-p|running:-p|stopped:-p)
+        printf '%s\n' 4242
+        ;;
+    running:-pr|stopped:-ps)
+        printf '%s\n' 4242
+        ;;
+    done:-pr|done:-ps|running:-ps|stopped:-pr|missing:-pr|missing:-ps)
+        return 0
+        ;;
+    *)
+        return 91
+        ;;
+    esac
+}}
+
+sampler_job_is_active 4242 && exit 10
+job_state=running
+sampler_job_is_active 4242 || exit 11
+job_state=stopped
+sampler_job_is_active 4242 || exit 12
+job_state=missing
+sampler_job_is_active 4242 && exit 13
+exit 0
+"""
+    completed = subprocess.run(
+        ["/bin/bash"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_stop_sampler_reaps_success_and_propagates_nonzero_exit() -> None:
+    source = _source(WRAPPER)
+    functions = "\n\n".join(
+        _shell_function(source, name)
+        for name in (
+            "sampler_job_is_active",
+            "wait_for_sampler_exit",
+            "stop_sampler",
+        )
+    )
+    script = f"""
+set -u
+{functions}
+
+scratch="$(mktemp -d)" || exit 20
+trap 'rm -rf -- "${{scratch}}"' EXIT
+SAMPLER_PID=""
+SAMPLER_STOP_FILE="${{scratch}}/success-stop"
+successful_sampler() {{
+    while [ ! -e "${{SAMPLER_STOP_FILE}}" ]; do
+        sleep 0.01 || return 21
+    done
+    return 0
+}}
+successful_sampler &
+SAMPLER_PID=$!
+stop_sampler || exit 22
+[ -z "${{SAMPLER_PID}}" ] || exit 23
+[ -z "$(jobs -p)" ] || exit 24
+
+SAMPLER_STOP_FILE="${{scratch}}/failure-stop"
+failing_sampler() {{
+    while [ ! -e "${{SAMPLER_STOP_FILE}}" ]; do
+        sleep 0.01 || return 25
+    done
+    return 7
+}}
+failing_sampler &
+SAMPLER_PID=$!
+stop_sampler && exit 26
+[ -z "${{SAMPLER_PID}}" ] || exit 27
+[ -z "$(jobs -p)" ] || exit 28
+exit 0
+"""
+    completed = subprocess.run(
+        ["/bin/bash"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
 def test_wrapper_has_fresh_baselines_cleanup_and_no_quick_acceptance_claim(
     harness: ModuleType,
 ) -> None:
@@ -1636,17 +2919,21 @@ def test_wrapper_has_fresh_baselines_cleanup_and_no_quick_acceptance_claim(
         sort_keys=True,
         separators=(",", ":"),
     )
-    assert dataset["contract"] == "p5_b4_runtime_dataset.v4"
+    assert dataset["contract"] == "p5_b4_runtime_dataset.v5"
     assert dataset["commercial"] == {"max_ai_credits_per_site_period": 10_000.0}
     assert dataset["formal"]["resource_idle_recovery_seconds"] == 60
     assert dataset["formal"]["resource_idle_minimum_sample_count"] == 12
     assert dataset["formal"]["resource_idle_minimum_span_seconds"] == 55
-    assert dataset["formal"]["resource_process_scope"] == "pid1_service_tree_stable_cohort_v2"
+    assert (
+        dataset["formal"]["resource_process_scope"]
+        == "pid1_service_trees_aggregate_stable_cohort_v3"
+    )
     assert dataset["formal"]["rss_endpoint_window_sample_count"] == 12
     assert dataset["formal"]["rss_endpoint_window_min_span_seconds"] == 55
     assert dataset["formal"]["rss_growth_method"] == "steady_endpoint_window_median_v1"
     assert dataset["formal"]["rss_growth_percent_max"] == 10
     assert dataset["formal"]["rss_idle_method"] == "four_block_budget_confirmation_v1"
+    assert dataset["worker"]["replicas"] == 2
 
     assert "NON-ACCEPTANCE" in source
     assert "--volumes" in source
@@ -1665,6 +2952,75 @@ def test_wrapper_has_fresh_baselines_cleanup_and_no_quick_acceptance_claim(
     assert "service process tree changed during measurement" in source
     assert 'container_process_metrics "${api_container}" 3' in source
     assert 'container_process_metrics "${worker_container}" 1' in source
+    assert "project_container_inventory()" in source
+    assert "capture_proof_topology()" in source
+    assert "topology_is_running_and_unrestarted()" in source
+    assert "verify_topology_snapshot()" in source
+    assert "verify_source_snapshot()" in source
+    assert "require_source_snapshot()" in source
+    for checkpoint in (
+        "require_source_snapshot 'after proof image build'",
+        'require_source_snapshot "before baseline ${baseline_index}"',
+        'require_source_snapshot "after baseline ${baseline_index}"',
+        "require_source_snapshot 'before aggregate'",
+        "require_source_snapshot 'after aggregate'",
+        "require_source_snapshot 'immediately before publish_output'",
+    ):
+        assert checkpoint in source
+    assert source.index("docker build") < source.index(
+        "require_source_snapshot 'after proof image build'"
+    )
+    assert source.index("require_source_snapshot 'after aggregate'") < source.index(
+        'publish_output "${OUTPUT_PATH}"'
+    )
+    assert "proof-api proof-worker proof-provider proof-postgres proof-redis" in source
+    assert 'container_ids_have_count "${worker_containers}" 2' in source
+    assert '[ "${current_topology}" = "${expected_topology}" ]' in source
+    assert 'docker exec "${postgres_container}"' in source
+    assert '[ "${worker_container_running}" -eq 1 ]' in source
+    assert '[ "${worker_container_restarts}" -eq 0 ]' in source
+    assert "worker_rss=$((worker_rss + worker_container_rss))" in source
+    assert "worker_fds=$((worker_fds + worker_container_fds))" in source
+    assert (
+        "worker_process_count=$((worker_process_count + worker_container_process_count))" in source
+    )
+    assert "worker_identity_material" in source
+    assert '"${worker_container}"' in source
+    assert "expected_worker_process_identity_sha256" in source
+    assert "proof-worker topology does not contain exactly two containers" in source
+    assert "real API/two-worker/provider/Postgres/Redis topology is not healthy" in source
+    topology_health = re.search(
+        r"topology_is_running_and_unrestarted\(\) \{(.*?)\n\}\n\nverify_topology_snapshot",
+        source,
+        re.DOTALL,
+    )
+    assert topology_health is not None
+    topology_health_body = topology_health.group(1)
+    assert re.search(r"proof-worker\)\s*;;", topology_health_body)
+    assert "proof-api|proof-provider|proof-postgres|proof-redis)" in topology_health_body
+    assert 'health_status="$(container_health_status "${container_id}")"' in topology_health_body
+    assert '[ "${health_status}" = "healthy" ] || return 1' in topology_health_body
+    assert 'topology_is_running_and_unrestarted "${current_topology}" || return 1' in source
+    assert "sampler_job_is_active()" in source
+    assert "wait_for_sampler_exit()" in source
+    sampler_active = _shell_function(source, "sampler_job_is_active")
+    assert 'active_jobs="$({ jobs -pr; jobs -ps; })"' in sampler_active
+    assert re.search(r"\bjobs -p\b", sampler_active) is None
+    assert 'kill -TERM "${sampler_pid}"' in source
+    assert 'kill -KILL "${sampler_pid}"' in source
+    assert 'wait_for_sampler_exit "${sampler_pid}" 150' in source
+    assert 'wait_for_sampler_exit "${sampler_pid}" 50' in source
+    assert 'wait_for_sampler_exit "${sampler_pid}" 20' in source
+    assert (
+        'docker ps --all --quiet --filter "label=com.docker.compose.project=${project}"' in source
+    )
+    assert (
+        'docker volume ls --quiet --filter "label=com.docker.compose.project=${project}"' in source
+    )
+    assert (
+        'docker network ls --quiet --filter "label=com.docker.compose.project=${project}"' in source
+    )
+    assert 'if ! all_image_ids="$(docker image ls --all --quiet --no-trunc)"' in source
     assert "api_process_count" in source
     assert "worker_process_count" in source
     assert "api_process_identity_sha256" in source
