@@ -271,8 +271,15 @@ Current status (2026-07-19):
 - This is engineering evidence for the proof topology, not a production SLO or
   production-release authorization. The proof-only dual-worker topology does
   not change the production single-worker default.
+- P5-B6 production-topology contraction has passed engineering acceptance at
+  revision `fb58e354`; evidence:
+  [P5-B6 production topology contraction closeout](p5-b6-production-topology-contraction-closeout-2026-07-19.md).
+- P5-B6 removes bundled Caddy, Jaeger, and the OTel Collector, pins the
+  external-Edge/NGINX/Gunicorn trust chain, and closes the two independent P1
+  migration findings. It does not supply the clean-tree image scan/bundle or
+  production Edge evidence.
 - P5-B5 remains pending, global P5 remains incomplete, and no production
-  promotion or deployment is authorized by the P5-B4 result.
+  promotion or deployment is authorized by the P5-B4 or P5-B6 result.
 
 Deliverables:
 

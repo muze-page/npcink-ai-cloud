@@ -139,3 +139,14 @@ still requires a clean committed-tree run, an empty/classic-daemon
 save-load-alias rehearsal, `docker compose --pull never --no-build`, the full
 release scan, and recorded revision/tree/outer SHA-256. A real CVE gate failure
 must remain failed; it must not be bypassed to manufacture release evidence.
+
+## Current Engineering Status — 2026-07-19
+
+The production-topology precondition passed at implementation revision
+`fb58e354`; see
+[P5-B6 Production Topology Contraction Closeout](p5-b6-production-topology-contraction-closeout-2026-07-19.md).
+Caddy, Jaeger, and the OpenTelemetry Collector are no longer active bundle
+inputs. This does not close this exact-bundle contract: the clean-tree platform
+scan, governed resolution of the current API-image CVE failure, archive build,
+verification, save/load/alias replay, and recorded revision/tree/outer digest
+remain required.

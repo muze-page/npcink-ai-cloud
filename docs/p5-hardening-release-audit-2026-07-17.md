@@ -308,3 +308,23 @@ resolution during the proof also exposed that the Dockerfile does not strictly
 consume the repository lock file; that supply-chain issue is transferred to
 P5-B5 for explicit closure rather than being hidden by the successful runtime
 result.
+
+### P5-B6 Production Topology Contraction
+
+P5-B6 engineering acceptance passed at revision `fb58e354`. The evidence and
+remaining operator boundaries are recorded in
+[P5-B6 Production Topology Contraction Closeout](p5-b6-production-topology-contraction-closeout-2026-07-19.md).
+
+The default release bundle no longer includes Caddy, Jaeger, or an
+OpenTelemetry Collector. The external TLS Edge, loopback bundled NGINX, and
+Gunicorn trust chain is explicit; the loader removes orphans and fails before
+public health on any retired release-project service. Independent review's two
+P1 findings were closed by a two-stage, rollback-aware Edge migration and a
+private-key path that rejects permissive local modes and uploads only through a
+random remote `0700` directory.
+
+This closes the P5-B6 topology precondition only. The actual clean-tree image
+scan/exact bundle, any governed CVE exception, WordPress text/media replay,
+restore rehearsal, clean six-repository matrix, production operator evidence,
+and final P0-P5 audit remain P5-B7/P5-B8 work. Global P5 and production release
+authorization remain incomplete.
