@@ -113,7 +113,13 @@ def test_production_dockerfile_consumes_the_locked_hashed_runtime_graph() -> Non
         "./scripts/verify-production-python-lock.py" in dockerfile
     )
     assert 'UV_VERSION="0.11.29"' in dockerfile
-    assert '"uv==${UV_VERSION}"' in dockerfile
+    assert re.search(
+        r"^FROM ghcr[.]io/astral-sh/uv:0[.]11[.]29@sha256:[0-9a-f]{64} AS uv$",
+        dockerfile,
+        re.MULTILINE,
+    )
+    assert "COPY --from=uv /uv /usr/local/bin/uv" in dockerfile
+    assert '"uv==${UV_VERSION}"' not in dockerfile
     assert "uv export" in dockerfile
     assert "--locked" in dockerfile
     assert "--no-dev" in dockerfile
@@ -299,8 +305,8 @@ def test_bundle_passes_optional_pip_indexes_only_as_buildkit_secrets() -> None:
         assert f'id={secret_id},env={env_name}' in bundle_script
         assert f'--build-arg "{env_name}=' not in bundle_script
         assert f'--build-arg "{env_name.removeprefix("NPCINK_CLOUD_")}=' not in bundle_script
-    assert '--build-arg "PACKAGE_EXTRAS=${NPCINK_CLOUD_PACKAGE_EXTRAS:-}"' in bundle_script
-    assert "\tdocker build " in bundle_script
+    assert 'BUILD_ARGS=(--build-arg "PACKAGE_EXTRAS=${PACKAGE_EXTRAS}")' in bundle_script
+    assert 'docker buildx build --platform "${MANIFEST_IMAGE_PLATFORM}"' in bundle_script
     unsafe_compose_build = (
         'docker compose -f "${CLOUD_DIR}/docker-compose.prod.yml" '
         'build "${BUILD_ARGS[@]}"'

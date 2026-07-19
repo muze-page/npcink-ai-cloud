@@ -804,6 +804,33 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert '"secret_exposure": "none"' in provider_matrix_smoke
 
 
+def test_remote_deploy_keeps_env_file_private_end_to_end() -> None:
+    deploy_script = (
+        _cloud_root() / "deploy" / "deploy-to-ssh-host.sh"
+    ).read_text()
+
+    assert 'chmod 0700 $(remote_shell_arg "${REMOTE_INCOMING_DIR}")' in deploy_script
+    upload_marker = 'scp "${SCP_ARGS[@]}" "${ENV_FILE}" "${SSH_TARGET}:${REMOTE_ENV_PATH}"'
+    restrict_marker = 'chmod 0600 $(remote_shell_arg "${REMOTE_ENV_PATH}")'
+    assert upload_marker in deploy_script
+    assert restrict_marker in deploy_script
+    assert deploy_script.index(upload_marker) < deploy_script.index(restrict_marker)
+    assert (
+        r'''test \"\$(stat -c '%a' $(remote_shell_arg "${REMOTE_ENV_PATH}"))\" = 600'''
+        in deploy_script
+    )
+    assert (
+        'install -m 600 "${REMOTE_ENV_PATH}" '
+        '"${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"' in deploy_script
+    )
+    assert (
+        'install -m 600 "${CURRENT_LINK}/${REMOTE_ENV_BASENAME}" '
+        '"${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"' in deploy_script
+    )
+    assert 'ENV_FILE_MODE="$(stat -c \'%a\' "${NPCINK_CLOUD_ENV_FILE}")"' in deploy_script
+    assert 'if [ "${ENV_FILE_MODE}" != "600" ]; then' in deploy_script
+
+
 def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
     cloud_root = _cloud_root()
     ci_workflow = (cloud_root / ".github" / "workflows" / "ci.yml").read_text()
@@ -828,12 +855,19 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     nginx_prod_conf = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
     caddy_prod_conf = (cloud_root / "deploy" / "Caddyfile.prod").read_text()
 
-    assert "packageManager" in package_json
-    assert "pnpm@10.33.0" in package_json
+    package_manager = json.loads(package_json)["packageManager"]
+    assert package_manager == (
+        "pnpm@10.33.0+sha512."
+        "10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544"
+        "c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
+    )
     assert "context: ." in compose_text
     assert "dockerfile: frontend/Dockerfile" in compose_text
     assert "COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./" in frontend_dockerfile
-    assert "corepack prepare pnpm@10.33.0 --activate" in frontend_dockerfile
+    assert (
+        'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate'
+        in frontend_dockerfile
+    )
     assert "pnpm install --frozen-lockfile --filter frontend..." in frontend_dockerfile
 
     assert "CLOUD_API_BASE_URL: process.env.CLOUD_API_BASE_URL" not in next_config
@@ -874,7 +908,9 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "header_up X-Forwarded-Host {host}" in caddy_prod_conf
     assert "header_up X-Forwarded-Proto {scheme}" in caddy_prod_conf
     assert "./site:/usr/share/nginx/html/npcink-site:ro" in runtime_compose_text
-    assert "-C \"${CLOUD_DIR}\" site" in bundle_script
+    assert 'git -C "${CLOUD_DIR}" archive HEAD --' in bundle_script
+    archive_paths_block = bundle_script.split("ARCHIVE_PATHS=(", 1)[1].split("\n)", 1)[0]
+    assert "\n\tsite\n" in archive_paths_block
     assert "location = /terms" in nginx_prod_conf
     assert "try_files /terms/index.html =404;" in nginx_prod_conf
     assert "location /terms/" in nginx_prod_conf
@@ -887,13 +923,13 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "--skip-terms-checks" in remote_smoke_script
     assert "Npcink Cloud Legal Documents" in remote_smoke_script
     assert "data.result.images" in remote_smoke_script
-    assert 'INCLUDE_EXTERNAL_IMAGES="${NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES:-0}"' in (
+    assert 'INCLUDE_EXTERNAL_IMAGES="${NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES:-1}"' in (
         bundle_script
     )
-    assert 'if [ "${INCLUDE_EXTERNAL_IMAGES}" = "1" ]; then' in bundle_script
-    assert "postgres.tar.gz" in bundle_script
-    assert "otel-collector.tar.gz" in bundle_script
-    assert "jaeger.tar.gz" in bundle_script
+    assert "must include every locked external image" in bundle_script
+    assert 'IMAGE_LOCK="deploy/image-lock/production-images.json"' in bundle_script
+    assert "external-plan" in bundle_script
+    assert '"external_${key}"' in bundle_script
     assert "otel-collector:" in runtime_compose_text
     assert "jaeger:" in runtime_compose_text
     jaeger_localhost_port = (
@@ -940,24 +976,32 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert build_cache_to in bundle_script
     assert "set_build_cache_args api" in bundle_script
     assert "set_build_cache_args frontend" in bundle_script
-    assert 'gzip "-${GZIP_LEVEL}" > "${output}"' in bundle_script
-    assert 'gzip "-${GZIP_LEVEL}" > "${DIST_DIR}/deploy-bundle.tgz"' in bundle_script
+    assert 'gzip -n "-${GZIP_LEVEL}" -c "${archive_path}"' in bundle_script
+    assert "docker save" not in bundle_script
+    assert 'python3 "${MANIFEST_HELPER}" pack' in bundle_script
+    assert '--output "${DIST_DIR}/deploy-bundle.tgz"' in bundle_script
     assert "actions: write" in ci_workflow
-    external_images_default = (
-        "NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "
-        "${{ vars.PROD_INCLUDE_EXTERNAL_IMAGES || '0' }}"
-    )
+    external_images_default = 'NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"'
     assert external_images_default in ci_workflow
     assert external_images_default in deploy_workflow
+    assert "PROD_INCLUDE_EXTERNAL_IMAGES" not in ci_workflow
+    assert "PROD_INCLUDE_EXTERNAL_IMAGES" not in deploy_workflow
     assert "deploy_required:" in ci_workflow
     assert "needs.classify.outputs.deploy_required == 'true'" in ci_workflow
     assert ".github/workflows/ci.yml|.github/workflows/deploy-production.yml" in (
         ci_workflow
     )
-    assert "docker-compose*.yml|Dockerfile|deploy/*.sh" in ci_workflow
-    assert "docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-worker:prod" in remote_load_script
-    assert "otel-collector.tar.gz" in remote_load_script
-    assert "jaeger.tar.gz" in remote_load_script
+    assert "docker-compose*.yml|Dockerfile*|*/Dockerfile*|deploy/*.sh" in ci_workflow
+    assert "needs: [classify, backend-scope]" in ci_workflow
+    assert "needs['backend-scope'].outputs.requires_full_backend == '1'" in ci_workflow
+    assert "should be skipped for a targeted PR" in ci_workflow
+    backend_gate = (cloud_root / "scripts" / "check-pr-backend-gate.sh").read_text()
+    assert "deploy/image-lock/*|deploy/image-lock/**/*" in backend_gate
+    assert "scripts/production-python-extras-smoke.sh" in backend_gate
+    assert "scripts/production-image-supply.py|scripts/scan-production-images.sh" in backend_gate
+    assert 'docker tag "${source_reference}" "${alias_reference}"' in remote_load_script
+    assert "load-plan" in remote_load_script
+    assert "verify loaded image IDs" in remote_load_script
     assert "static_terms_only" in ci_workflow
     assert "site/terms/*" in ci_workflow
     assert "needs: [secret-scan, classify, backend, frontend, static-terms]" in ci_workflow

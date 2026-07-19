@@ -2,17 +2,28 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REMOTE_DOCKER_HOST=""
-if [[ "${DOCKER_HOST:-}" == ssh://* ]]; then
-	REMOTE_DOCKER_HOST="${DOCKER_HOST#ssh://}"
-fi
-if [[ -n "${REMOTE_DOCKER_HOST}" ]]; then
-	SHARED_TMP_ROOT="${NPCINK_CLOUD_DEPLOY_SMOKE_SHARED_TMP_ROOT:-${ROOT_DIR}/.tmp/cloud-deploy-smoke}"
-	mkdir -p "${SHARED_TMP_ROOT}"
-	TMP_DIR="$(mktemp -d "${SHARED_TMP_ROOT}/run.XXXXXX")"
-else
-	TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/npcink-ai-cloud-deploy-smoke.XXXXXX")"
-fi
+
+fail() {
+	echo "[fail] $*" >&2
+	exit 1
+}
+
+ok() {
+	echo "[ok] $*"
+}
+
+require_cmd() {
+	local cmd="$1"
+	command -v "${cmd}" >/dev/null 2>&1 || fail "Missing required command: ${cmd}"
+}
+
+# Formal images are built and scanned against one local Unix Docker daemon.
+# Remote deployment is exercised by deploy/deploy-to-ssh-host.sh, which uploads
+# the already verified bundle instead of redirecting this build through SSH.
+[ -z "${DOCKER_HOST:-}" ] || fail "deploy-bundle smoke forbids DOCKER_HOST; build and replay locally"
+[ -z "${DOCKER_CONTEXT:-}" ] || fail "deploy-bundle smoke forbids DOCKER_CONTEXT overrides"
+
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/npcink-ai-cloud-deploy-smoke.XXXXXX")"
 PROJECT_NAME="npcink-ai-cloud-deploy-smoke-$(date +%s)"
 PORT="${NPCINK_CLOUD_DEPLOY_SMOKE_PORT:-8110}"
 BASE_URL="${NPCINK_CLOUD_DEPLOY_SMOKE_BASE_URL:-http://127.0.0.1:${PORT}}"
@@ -39,113 +50,49 @@ export NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID="${NPCINK_CLOUD_RUNTIME_DATA_
 export NPCINK_CLOUD_PORTAL_JWT_SECRET="${NPCINK_CLOUD_PORTAL_JWT_SECRET:-npcink-cloud-deploy-portal-jwt-secret-32b}"
 export NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST="${NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST:-${BASE_URL}}"
 export NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST="${NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST:-${BASE_HOST},127.0.0.1,localhost}"
-
-fail() {
-	echo "[fail] $*" >&2
-	exit 1
-}
-
-ok() {
-	echo "[ok] $*"
-}
-
-require_cmd() {
-	local cmd="$1"
-	command -v "${cmd}" >/dev/null 2>&1 || fail "Missing required command: ${cmd}"
-}
+export NPCINK_CLOUD_SKIP_FRONTEND_IMAGE="${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
+export NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES="${NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES:-1}"
 
 cleanup() {
 	if [ "${NPCINK_CLOUD_DEPLOY_SMOKE_KEEP:-0}" = "1" ]; then
 		return 0
 	fi
-	if [ -n "${REMOTE_DOCKER_HOST}" ]; then
-		ssh "${REMOTE_DOCKER_HOST}" "if [ -f $(printf '%q' "${TMP_DIR}/docker-compose.prod.yml") ]; then cd $(printf '%q' "${TMP_DIR}") && COMPOSE_PROJECT_NAME=$(printf '%q' "${PROJECT_NAME}") NPCINK_CLOUD_PORT=$(printf '%q' "${PORT}") docker compose -f docker-compose.prod.yml down -v --remove-orphans >/dev/null 2>&1 || true; fi" >/dev/null 2>&1 || true
-	elif [ -f "${TMP_DIR}/docker-compose.prod.yml" ]; then
+	if [ -f "${TMP_DIR}/docker-compose.prod.yml" ]; then
 		COMPOSE_PROJECT_NAME="${PROJECT_NAME}" \
 		NPCINK_CLOUD_PORT="${PORT}" \
-		docker compose -f "${TMP_DIR}/docker-compose.prod.yml" down -v --remove-orphans >/dev/null 2>&1 || true
-	fi
-	if [ -n "${REMOTE_DOCKER_HOST}" ]; then
-		ssh "${REMOTE_DOCKER_HOST}" "rm -rf $(printf '%q' "${TMP_DIR}")" >/dev/null 2>&1 || true
+			docker compose -f "${TMP_DIR}/docker-compose.prod.yml" down -v --remove-orphans >/dev/null 2>&1 || true
 	fi
 	rm -rf "${TMP_DIR}"
 }
-
 trap cleanup EXIT
 
-remote_env_prefix() {
-	local env_names=(
-		POSTGRES_PASSWORD
-		NPCINK_CLOUD_ENVIRONMENT
-		NPCINK_CLOUD_DATABASE_URL
-		NPCINK_CLOUD_INTERNAL_AUTH_TOKEN
-		NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN
-		NPCINK_CLOUD_ADMIN_SESSION_SECRET
-		NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET
-		NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID
-		NPCINK_CLOUD_PORTAL_JWT_SECRET
-		NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST
-		NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST
-		NPCINK_CLOUD_JAEGER_UI_PORT
-		COMPOSE_PROJECT_NAME
-		NPCINK_CLOUD_PORT
-		NPCINK_CLOUD_BASE_URL
-		NPCINK_CLOUD_SITE_ID
-		NPCINK_CLOUD_KEY_ID
-		NPCINK_CLOUD_SECRET
-		NPCINK_CLOUD_SKIP_FRONTEND_IMAGE
-		NPCINK_CLOUD_OPERATIONAL_READY_WAIT_ATTEMPTS
-		NPCINK_CLOUD_OPERATIONAL_READY_WAIT_DELAY_SECONDS
-	)
-	local prefix="env"
-	local name
-	for name in "${env_names[@]}"; do
-		prefix+=" $(printf '%q' "${name}=${!name:-}")"
-	done
-	printf '%s' "${prefix}"
-}
-
 run_deploy_command() {
-	if [ -z "${REMOTE_DOCKER_HOST}" ]; then
-		( cd "${TMP_DIR}" && "$@" )
-		return 0
-	fi
-
-	local quoted_cmd
-	printf -v quoted_cmd ' %q' "$@"
-	ssh "${REMOTE_DOCKER_HOST}" "cd $(printf '%q' "${TMP_DIR}") && $(remote_env_prefix)${quoted_cmd}"
+	( cd "${TMP_DIR}" && "$@" )
 }
 
 require_cmd docker
 require_cmd tar
 require_cmd bash
-if [ -n "${REMOTE_DOCKER_HOST}" ]; then
-	require_cmd rsync
-	require_cmd ssh
-fi
+require_cmd python3
 
 cd "${ROOT_DIR}"
 
-ok "Building deploy bundle"
-if [ "${NPCINK_CLOUD_DEPLOY_SMOKE_SKIP_BUILD:-0}" = "1" ] && [ -f "dist/deploy-bundle.tgz" ]; then
-	ok "Reusing existing deploy bundle"
-elif [ -n "${REMOTE_DOCKER_HOST}" ]; then
-	ok "Syncing deploy scripts to ${REMOTE_DOCKER_HOST}"
-	ssh "${REMOTE_DOCKER_HOST}" "mkdir -p $(printf '%q' "${ROOT_DIR}/deploy") $(printf '%q' "${ROOT_DIR}/dist")"
-	rsync -az --delete "${ROOT_DIR}/deploy/" "${REMOTE_DOCKER_HOST}:${ROOT_DIR}/deploy/"
-	rsync -az "${ROOT_DIR}/docker-compose.prod.yml" "${REMOTE_DOCKER_HOST}:${ROOT_DIR}/docker-compose.prod.yml"
-	NPCINK_CLOUD_REMOTE_BUNDLE_ONLY=1 bash deploy/bundle-images.sh
+ok "Preparing one exact deploy bundle"
+if [ "${NPCINK_CLOUD_DEPLOY_SMOKE_SKIP_BUILD:-0}" = "1" ]; then
+	[ -f "dist/deploy-bundle.tgz" ] && [ -f "dist/deploy-bundle.tgz.sha256" ] || \
+		fail "Exact deploy bundle/checksum is missing; skip-build never rebuilds implicitly"
+	ok "Reusing existing deploy bundle without rebuilding"
 else
 	bash deploy/bundle-images.sh
 fi
 
+ok "Verifying exact bundle before extraction"
+bash deploy/verify-release-bundle.sh --archive \
+	dist/deploy-bundle.tgz dist/deploy-bundle.tgz.sha256
+BUNDLE_RECEIPT="$(cat dist/deploy-bundle.tgz.sha256)"
+
 ok "Extracting deploy bundle to ${TMP_DIR}"
-if [ -n "${REMOTE_DOCKER_HOST}" ]; then
-	ssh "${REMOTE_DOCKER_HOST}" "mkdir -p $(printf '%q' "${TMP_DIR}")"
-	ssh "${REMOTE_DOCKER_HOST}" "tar xzf $(printf '%q' "${ROOT_DIR}/dist/deploy-bundle.tgz") -C $(printf '%q' "${TMP_DIR}")"
-else
-	tar xzf dist/deploy-bundle.tgz -C "${TMP_DIR}"
-fi
+tar xzf dist/deploy-bundle.tgz -C "${TMP_DIR}"
 
 export COMPOSE_PROJECT_NAME="${PROJECT_NAME}"
 export NPCINK_CLOUD_PORT="${PORT}"
@@ -154,16 +101,26 @@ export NPCINK_CLOUD_SITE_ID="${SITE_ID}"
 export NPCINK_CLOUD_KEY_ID="${KEY_ID}"
 export NPCINK_CLOUD_SECRET="${SECRET}"
 
-ok "Replaying remote load/up"
+ok "Replaying bundle load/up"
 run_deploy_command bash deploy/remote-load-and-up.sh
 
-ok "Replaying remote migrate"
+ok "Replaying the same verified bundle a second time (no build)"
+run_deploy_command bash deploy/remote-load-and-up.sh
+
+ok "Proving the exact bundle archive was not replaced during replay"
+bash deploy/verify-release-bundle.sh --archive \
+	dist/deploy-bundle.tgz dist/deploy-bundle.tgz.sha256
+FINAL_BUNDLE_RECEIPT="$(cat dist/deploy-bundle.tgz.sha256)"
+[ "${FINAL_BUNDLE_RECEIPT}" = "${BUNDLE_RECEIPT}" ] || fail "Deploy bundle receipt changed during smoke replay"
+ok "The same exact bundle receipt was reused: ${BUNDLE_RECEIPT%%  *}"
+
+ok "Replaying migrate"
 run_deploy_command bash deploy/remote-migrate.sh
 
-ok "Replaying remote seed"
+ok "Replaying seed"
 run_deploy_command bash deploy/remote-seed-runtime.sh --site-id "${SITE_ID}" --key-id "${KEY_ID}" --secret "${SECRET}"
 
-ok "Running remote smoke"
+ok "Running smoke"
 run_deploy_command bash deploy/remote-smoke.sh --base-url "${BASE_URL}" --site-id "${SITE_ID}" --key-id "${KEY_ID}" --secret "${SECRET}"
 
 ok "Cloud deploy bundle smoke completed successfully."

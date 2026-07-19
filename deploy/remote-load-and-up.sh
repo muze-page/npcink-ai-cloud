@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 DIST_DIR="${ROOT_DIR}/dist"
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 SKIP_FRONTEND_IMAGE="${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
+MANIFEST_HELPER="${ROOT_DIR}/scripts/verify-release-bundle-manifest.py"
+RELEASE_VERIFIER="${ROOT_DIR}/deploy/verify-release-bundle.sh"
 
 # Shared compose/env helpers for deploy scripts.
 . "${ROOT_DIR}/deploy/common.sh"
@@ -60,43 +62,35 @@ service_exists() {
 	npcink_ai_cloud_compose "${ROOT_DIR}" config --services | grep -qx "${service_name}"
 }
 
-if [ -f "${DIST_DIR}/api.tar.gz" ]; then
-	npcink_ai_cloud_run_timed "load api image" bash -c 'gzip -dc "$1" | docker load' _ "${DIST_DIR}/api.tar.gz"
-fi
+[ -x "${RELEASE_VERIFIER}" ] || {
+	echo "[fail] Exact release-bundle verifier is missing or not executable." >&2
+	exit 1
+}
+[ -f "${MANIFEST_HELPER}" ] || {
+	echo "[fail] Exact release-bundle manifest helper is missing." >&2
+	exit 1
+}
 
-if docker image inspect npcink-ai-cloud-api:prod >/dev/null 2>&1; then
-  docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-worker:prod
-  docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-callback-worker:prod
-  docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-ops-worker:prod
-fi
+# This is deliberately before the first docker load and before compose up.
+npcink_ai_cloud_run_timed "verify exact bundle before load" \
+	bash "${RELEASE_VERIFIER}" --pre-load "${ROOT_DIR}"
 
-if [ -f "${DIST_DIR}/worker.tar.gz" ]; then
-	npcink_ai_cloud_run_timed "load worker image" bash -c 'gzip -dc "$1" | docker load' _ "${DIST_DIR}/worker.tar.gz"
-fi
+while IFS=$'\t' read -r image_archive image_role image_reference; do
+	[ -n "${image_archive}" ] || continue
+	npcink_ai_cloud_run_timed "load ${image_role} image archive" \
+		bash -c 'gzip -dc "$1" | docker load' _ "${ROOT_DIR}/${image_archive}"
+done < <(python3 "${MANIFEST_HELPER}" load-plan --root "${ROOT_DIR}")
 
-if [ -f "${DIST_DIR}/callback-worker.tar.gz" ]; then
-	npcink_ai_cloud_run_timed "load callback worker image" bash -c 'gzip -dc "$1" | docker load' _ "${DIST_DIR}/callback-worker.tar.gz"
-fi
+# Worker/callback/ops roles are aliases of the one API image archive. The
+# manifest controls the aliases; no role may silently rebuild or load another
+# archive.
+while IFS=$'\t' read -r source_reference alias_reference; do
+	[ -n "${source_reference}" ] || continue
+	docker tag "${source_reference}" "${alias_reference}"
+done < <(python3 "${MANIFEST_HELPER}" alias-plan --root "${ROOT_DIR}")
 
-if [ -f "${DIST_DIR}/ops-worker.tar.gz" ]; then
-	npcink_ai_cloud_run_timed "load ops worker image" bash -c 'gzip -dc "$1" | docker load' _ "${DIST_DIR}/ops-worker.tar.gz"
-fi
-
-for image_archive in \
-	postgres.tar.gz \
-	redis.tar.gz \
-	nginx.tar.gz \
-	otel-collector.tar.gz \
-	jaeger.tar.gz
-do
-	if [ -f "${DIST_DIR}/${image_archive}" ]; then
-		npcink_ai_cloud_run_timed "load ${image_archive}" bash -c 'gzip -dc "$1" | docker load' _ "${DIST_DIR}/${image_archive}"
-	fi
-done
-
-if [ -f "${DIST_DIR}/frontend.tar.gz" ]; then
-	npcink_ai_cloud_run_timed "load frontend image" bash -c 'gzip -dc "$1" | docker load' _ "${DIST_DIR}/frontend.tar.gz"
-fi
+npcink_ai_cloud_run_timed "verify loaded image IDs" \
+	bash "${RELEASE_VERIFIER}" --post-load "${ROOT_DIR}"
 
 SERVICES=(postgres redis)
 if service_exists otel-collector; then
@@ -116,7 +110,7 @@ fi
 
 echo "[info] Starting services: ${SERVICES[*]}"
 npcink_ai_cloud_run_timed "compose up services" \
-	npcink_ai_cloud_compose "${ROOT_DIR}" up -d "${SERVICES[@]}"
+	npcink_ai_cloud_compose "${ROOT_DIR}" up -d --pull never --no-build "${SERVICES[@]}"
 
 if ! npcink_ai_cloud_run_timed "wait for live health" npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	echo "[fail] Cloud API did not become ready at ${BASE_URL}" >&2

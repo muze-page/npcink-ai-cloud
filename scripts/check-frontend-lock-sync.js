@@ -28,9 +28,11 @@ if (fs.existsSync(frontendLockPath)) {
 
 const rootPackage = fs.existsSync(rootPackagePath) ? readJson(rootPackagePath) : {};
 const packageManager = String(rootPackage.packageManager || '');
-const packageManagerMatch = /^pnpm@(\d+\.\d+\.\d+)(?:\+.*)?$/.exec(packageManager);
+const packageManagerMatch = /^pnpm@(\d+\.\d+\.\d+)\+sha512\.([0-9a-f]{128})$/.exec(
+	packageManager
+);
 if (!packageManagerMatch) {
-	problems.push('package.json packageManager must pin an exact pnpm version');
+	problems.push('package.json packageManager must pin pnpm with an exact sha512 integrity');
 }
 
 if (problems.length > 0) {

@@ -85,7 +85,13 @@ requires_full_backend=0
 while IFS= read -r path; do
 	[ -n "${path}" ] || continue
 	case "${path}" in
-		pyproject.toml|uv.lock|Makefile|docker-compose*.yml|Dockerfile)
+		pyproject.toml|uv.lock|Makefile|docker-compose*.yml|Dockerfile*|*/Dockerfile*)
+			requires_full_backend=1
+			;;
+		deploy/image-lock/*|deploy/image-lock/**/*|scripts/production-python-extras-smoke.sh|scripts/verify-production-python-lock.py)
+			requires_full_backend=1
+			;;
+		scripts/production-image-supply.py|scripts/scan-production-images.sh|scripts/verify-production-images.sh)
 			requires_full_backend=1
 			;;
 		.github/workflows/ci.yml|tests/conftest.py|tests/fixtures/*|migrations/*|migrations/**/*)

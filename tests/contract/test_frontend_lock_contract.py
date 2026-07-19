@@ -15,7 +15,11 @@ def test_frontend_has_one_root_workspace_lock() -> None:
     frontend_package = json.loads(_read("frontend/package.json"))
     root_lock = ROOT / "pnpm-lock.yaml"
 
-    assert root_package["packageManager"] == "pnpm@10.33.0"
+    assert root_package["packageManager"] == (
+        "pnpm@10.33.0+sha512."
+        "10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1"
+        "491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
+    )
     assert "pnpm" not in frontend_package
     assert root_lock.is_file()
     assert not (ROOT / "frontend/pnpm-lock.yaml").exists()
@@ -27,7 +31,8 @@ def test_lock_gate_uses_the_pinned_pnpm_and_real_frozen_install() -> None:
 
     assert "path.resolve(__dirname, '..')" in gate
     assert "frontend/pnpm-lock.yaml must not exist" in gate
-    assert "packageManager must pin an exact pnpm version" in gate
+    assert "packageManager must pin pnpm with an exact sha512 integrity" in gate
+    assert "[0-9a-f]{128}" in gate
     assert "['install', '--frozen-lockfile', '--lockfile-only', '--ignore-scripts']" in gate
     assert "CI: 'true'" in gate
     assert "refresh both lockfiles" not in gate

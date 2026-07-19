@@ -134,6 +134,19 @@ require_marker "docs/cloud-production-release-policy-v1.md" 'pass each old key I
 require_marker "docs/cloud-production-release-policy-v1.md" "Normal runtime has no legacy or dual-read path"
 require_marker "docs/cloud-production-release-policy-v1.md" "old database"
 require_marker ".github/dependabot.yml" "open-pull-requests-limit: 0"
+require_marker ".github/workflows/ci.yml" "production-python-image-smoke:"
+require_marker ".github/workflows/ci.yml" "bash scripts/production-python-extras-smoke.sh"
+require_marker ".github/workflows/ci.yml" "PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT"
+require_marker ".github/workflows/ci.yml" "Python 3.14 Alpine production image smoke did not pass"
+require_marker ".github/workflows/ci.yml" "Dockerfile*|*/Dockerfile*"
+require_marker ".github/workflows/ci.yml" 'NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"'
+require_marker ".github/workflows/deploy-production.yml" 'NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"'
+reject_marker ".github/workflows/ci.yml" "PROD_INCLUDE_EXTERNAL_IMAGES"
+reject_marker ".github/workflows/deploy-production.yml" "PROD_INCLUDE_EXTERNAL_IMAGES"
+require_marker "scripts/production-python-extras-smoke.sh" 'PYTHON_VERSION="3.14"'
+require_marker "scripts/production-python-extras-smoke.sh" "--import-app"
+require_marker "scripts/production-python-extras-smoke.sh" "--check-manifest"
+require_marker "scripts/check-pr-backend-gate.sh" "Dockerfile*|*/Dockerfile*"
 
 require_marker ".github/pull_request_template.md" "Focused module:"
 require_marker ".github/pull_request_template.md" "Cloud boundary impact:"
@@ -207,7 +220,7 @@ for compose_file in docker-compose.dev.yml docker-compose.prod.yml docker-compos
 	reject_service_marker "${compose_file}" "frontend" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
 	reject_service_marker "${compose_file}" "frontend" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"
 done
-require_marker "deploy/bundle-images.sh" "-C \"\${CLOUD_DIR}\" site"
+require_marker "deploy/bundle-images.sh" 'git -C "${CLOUD_DIR}" archive HEAD'
 require_marker "deploy/deploy-static-terms-to-ssh-host.sh" "CURRENT_LINK=\"\${REMOTE_DIR}/current\""
 require_marker "deploy/deploy-static-terms-to-ssh-host.sh" "assert_public_static_page \"/terms\""
 require_marker "deploy/deploy-static-terms-to-ssh-host.sh" "Static terms deploy completed"

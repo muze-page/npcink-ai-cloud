@@ -1,6 +1,9 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: npcink-ai-cloud-postgres:prod
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-npcink_ai_cloud}
@@ -15,7 +18,7 @@ services:
       - cloud-postgres-prod:/var/lib/postgresql/data
 
   redis:
-    image: redis:7-alpine
+    image: npcink-ai-cloud-external-redis:prod
     restart: unless-stopped
     command: redis-server --appendonly yes
     healthcheck:
@@ -27,7 +30,7 @@ services:
       - cloud-redis-prod:/data
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.104.0
+    image: npcink-ai-cloud-external-otel-collector:prod
     restart: unless-stopped
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     environment:
@@ -36,7 +39,7 @@ services:
       - ./deploy/otel-collector.config.yml:/etc/otelcol-contrib/config.yaml:ro
 
   jaeger:
-    image: jaegertracing/all-in-one:1.59
+    image: npcink-ai-cloud-external-jaeger:prod
     restart: unless-stopped
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
@@ -44,7 +47,7 @@ services:
       - "${NPCINK_CLOUD_JAEGER_BIND_HOST:-127.0.0.1}:${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}:16686"
 
   proxy:
-    image: nginx:1.27-alpine
+    image: npcink-ai-cloud-external-nginx:prod
     restart: unless-stopped
     depends_on:
       api:

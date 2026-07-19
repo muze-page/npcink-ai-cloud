@@ -52,14 +52,22 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
 	printf '[restore-drill:error] run make bootstrap-dev or set NPCINK_RESTORE_DRILL_PYTHON\n' >&2
 	exit 69
 fi
+if [[ -n "${DOCKER_HOST:-}" ]]; then
+	DOCKER_ENDPOINT="${DOCKER_HOST}"
+	case "${DOCKER_ENDPOINT}" in
+		unix:///*) ;;
+		*)
+			printf '[restore-drill:error] refusing non-local Docker endpoint: only a Unix socket is allowed\n' >&2
+			exit 64
+			;;
+	esac
+fi
 if ! command -v docker >/dev/null 2>&1; then
 	printf '[restore-drill:error] Docker is required\n' >&2
 	exit 69
 fi
 
-if [[ -n "${DOCKER_HOST:-}" ]]; then
-	DOCKER_ENDPOINT="${DOCKER_HOST}"
-else
+if [[ -z "${DOCKER_HOST:-}" ]]; then
 	DOCKER_ENDPOINT="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || {
 		printf '[restore-drill:error] active Docker context cannot be inspected\n' >&2
 		exit 69

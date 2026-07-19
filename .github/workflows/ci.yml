@@ -56,7 +56,7 @@ jobs:
                   static_terms_only="false"
                 fi
                 case "${changed_file}" in
-                  .github/workflows/ci.yml|.github/workflows/deploy-production.yml|docker-compose*.yml|Dockerfile|deploy/*.sh)
+                  .github/workflows/ci.yml|.github/workflows/deploy-production.yml|docker-compose*.yml|Dockerfile*|*/Dockerfile*|deploy/*.sh)
                     deploy_required="true"
                     ;;
                   .github/*|.github/workflows/*|docs/*|docs/**/*|tests/*|tests/**/*|deploy/RELEASE_CHECKLIST.md)
@@ -112,6 +112,29 @@ jobs:
 
       - name: Audit locked production Python dependencies
         run: bash scripts/check-python-dependency-audit.sh
+
+  production-python-image-smoke:
+    name: Python 3.14 Alpine production image smoke
+    needs: [classify, backend-scope]
+    if: github.event_name == 'pull_request' && needs.classify.outputs.static_terms_only != 'true' && needs['backend-scope'].outputs.requires_full_backend == '1'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python for pinned uvx
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Install pinned uv
+        run: python -m pip install uv==0.11.29
+
+      - name: Build and verify Python 3.14 Alpine production images
+        run: bash scripts/production-python-extras-smoke.sh
 
   backend-targeted:
     needs: [classify, backend-scope]
@@ -274,7 +297,7 @@ jobs:
 
   backend:
     name: backend
-    needs: [classify, backend-scope, python-dependency-audit, backend-targeted, backend-static, backend-pytest]
+    needs: [classify, backend-scope, python-dependency-audit, production-python-image-smoke, backend-targeted, backend-static, backend-pytest]
     if: always() && needs.classify.outputs.static_terms_only != 'true'
     runs-on: ubuntu-latest
     steps:
@@ -282,6 +305,8 @@ jobs:
         env:
           BACKEND_SCOPE_RESULT: ${{ needs['backend-scope'].result }}
           PYTHON_DEPENDENCY_AUDIT_RESULT: ${{ needs['python-dependency-audit'].result }}
+          PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT: ${{ needs['production-python-image-smoke'].result }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           BACKEND_TARGETED_RESULT: ${{ needs['backend-targeted'].result }}
           BACKEND_STATIC_RESULT: ${{ needs['backend-static'].result }}
           BACKEND_PYTEST_RESULT: ${{ needs['backend-pytest'].result }}
@@ -290,6 +315,7 @@ jobs:
           set -euo pipefail
           echo "scope=${BACKEND_SCOPE_RESULT}"
           echo "python_dependency_audit=${PYTHON_DEPENDENCY_AUDIT_RESULT}"
+          echo "production_python_image_smoke=${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}"
           echo "targeted=${BACKEND_TARGETED_RESULT}"
           echo "static=${BACKEND_STATIC_RESULT}"
           echo "pytest=${BACKEND_PYTEST_RESULT}"
@@ -302,6 +328,21 @@ jobs:
 
           if [ "${PYTHON_DEPENDENCY_AUDIT_RESULT}" != "success" ]; then
             echo "python dependency audit did not pass" >&2
+            exit 1
+          fi
+
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ "${REQUIRES_FULL_BACKEND}" = "1" ]; then
+            if [ "${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}" != "success" ]; then
+              echo "Python 3.14 Alpine production image smoke did not pass" >&2
+              exit 1
+            fi
+          elif [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            if [ "${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}" != "skipped" ]; then
+              echo "Python 3.14 Alpine production image smoke should be skipped for a targeted PR" >&2
+              exit 1
+            fi
+          elif [ "${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}" != "skipped" ] && [ "${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}" != "success" ]; then
+            echo "Python 3.14 Alpine production image smoke ended unexpectedly" >&2
             exit 1
           fi
 
@@ -407,7 +448,7 @@ jobs:
           NPCINK_CLOUD_DEPLOY_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
           NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
           NPCINK_CLOUD_REMOTE_COMPOSE_FILE: docker-compose.runtime.yml
-          NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: ${{ vars.PROD_INCLUDE_EXTERNAL_IMAGES || '0' }}
+          NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"
           NPCINK_CLOUD_REFRESH_PROVIDERS: "1"
           NPCINK_CLOUD_WITH_OPERATIONAL_READY: "1"
         run: |

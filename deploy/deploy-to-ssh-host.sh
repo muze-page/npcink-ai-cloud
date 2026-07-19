@@ -8,6 +8,7 @@ npcink_ai_cloud_require_cmd bash
 npcink_ai_cloud_require_cmd ssh
 npcink_ai_cloud_require_cmd scp
 npcink_ai_cloud_require_cmd tar
+npcink_ai_cloud_require_cmd python3
 
 SSH_HOST="${NPCINK_CLOUD_DEPLOY_SSH_HOST:-}"
 SSH_USER="${NPCINK_CLOUD_DEPLOY_SSH_USER:-}"
@@ -173,6 +174,21 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
+# The checksum is a sidecar of the final CLI-selected bundle path. Deriving it
+# before argument parsing would silently verify/upload the wrong receipt.
+BUNDLE_CHECKSUM_PATH="${BUNDLE_PATH}.sha256"
+
+if [ "${REMOTE_DIR}" = "/" ] || [[ ! "${REMOTE_DIR}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+	echo "[fail] Remote deploy directory must be a non-root absolute path using only A-Z, a-z, 0-9, dot, underscore, dash, and slash." >&2
+	exit 1
+fi
+case "/${REMOTE_DIR#/}/" in
+	*//*|*/./*|*/../*)
+		echo "[fail] Remote deploy directory must use canonical path segments." >&2
+		exit 1
+		;;
+esac
+
 if [ -z "${SSH_HOST}" ]; then
 	echo "[fail] Missing --ssh-host or NPCINK_CLOUD_DEPLOY_SSH_HOST" >&2
 	exit 1
@@ -236,24 +252,27 @@ remote_shell_arg() {
 
 npcink_ai_cloud_start_timing_summary "Deploy Step Timing"
 
-if [ -z "${IMAGE_PLATFORM}" ]; then
-	if ! npcink_ai_cloud_run_timed "ssh reachability check" ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "true" >/dev/null 2>&1; then
-		echo "[fail] SSH target is not reachable: ${SSH_TARGET}:${SSH_PORT}" >&2
-		echo "[fail] Check NPCINK_CLOUD_DEPLOY_IDENTITY_FILE, firewall/security group, and sshd." >&2
-		exit 1
-	fi
-	REMOTE_ARCH_STARTED_AT="$(date +%s)"
-	REMOTE_ARCH="$(ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "uname -m")"
-	REMOTE_ARCH_DURATION_SECONDS=$(($(date +%s) - REMOTE_ARCH_STARTED_AT))
-	echo "[timing] resolve remote architecture: ${REMOTE_ARCH_DURATION_SECONDS}s"
-	npcink_ai_cloud_append_timing_summary "resolve remote architecture" "${REMOTE_ARCH_DURATION_SECONDS}"
-	IMAGE_PLATFORM="$(resolve_remote_platform "${REMOTE_ARCH}")"
-	if [ -z "${IMAGE_PLATFORM}" ]; then
-		echo "[fail] Unsupported remote architecture: ${REMOTE_ARCH}" >&2
-		exit 1
-	fi
-	echo "[info] Remote architecture ${REMOTE_ARCH}; selected image platform ${IMAGE_PLATFORM}"
+if ! npcink_ai_cloud_run_timed "ssh reachability check" ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "true" >/dev/null 2>&1; then
+	echo "[fail] SSH target is not reachable: ${SSH_TARGET}:${SSH_PORT}" >&2
+	echo "[fail] Check NPCINK_CLOUD_DEPLOY_IDENTITY_FILE, firewall/security group, and sshd." >&2
+	exit 1
 fi
+REMOTE_ARCH_STARTED_AT="$(date +%s)"
+REMOTE_ARCH="$(ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "uname -m")"
+REMOTE_ARCH_DURATION_SECONDS=$(($(date +%s) - REMOTE_ARCH_STARTED_AT))
+echo "[timing] resolve remote architecture: ${REMOTE_ARCH_DURATION_SECONDS}s"
+npcink_ai_cloud_append_timing_summary "resolve remote architecture" "${REMOTE_ARCH_DURATION_SECONDS}"
+REMOTE_PLATFORM="$(resolve_remote_platform "${REMOTE_ARCH}")"
+if [ -z "${REMOTE_PLATFORM}" ]; then
+	echo "[fail] Unsupported remote architecture: ${REMOTE_ARCH}" >&2
+	exit 1
+fi
+if [ -n "${IMAGE_PLATFORM}" ] && [ "${IMAGE_PLATFORM}" != "${REMOTE_PLATFORM}" ]; then
+	echo "[fail] Requested image platform ${IMAGE_PLATFORM} does not match remote architecture ${REMOTE_ARCH} (${REMOTE_PLATFORM})." >&2
+	exit 1
+fi
+IMAGE_PLATFORM="${REMOTE_PLATFORM}"
+echo "[info] Remote architecture ${REMOTE_ARCH}; selected image platform ${IMAGE_PLATFORM}"
 
 if [ "${SKIP_BUNDLE_BUILD}" -eq 0 ]; then
 	echo "[info] Building deploy bundle"
@@ -268,25 +287,67 @@ if [ ! -f "${BUNDLE_PATH}" ]; then
 	echo "[fail] Deploy bundle not found: ${BUNDLE_PATH}" >&2
 	exit 1
 fi
+if [ ! -f "${BUNDLE_CHECKSUM_PATH}" ]; then
+	echo "[fail] Deploy bundle checksum not found: ${BUNDLE_CHECKSUM_PATH}" >&2
+	exit 1
+fi
+npcink_ai_cloud_run_timed "verify local deploy bundle archive" \
+	bash "${ROOT_DIR}/deploy/verify-release-bundle.sh" --archive \
+	"${BUNDLE_PATH}" "${BUNDLE_CHECKSUM_PATH}"
+BUNDLE_PLATFORM="$(
+	python3 "${ROOT_DIR}/scripts/verify-release-bundle-manifest.py" archive-platform \
+		--bundle "${BUNDLE_PATH}" --checksum "${BUNDLE_CHECKSUM_PATH}"
+)"
+if [ "${BUNDLE_PLATFORM}" != "${IMAGE_PLATFORM}" ]; then
+	echo "[fail] Deploy bundle platform ${BUNDLE_PLATFORM} does not match target platform ${IMAGE_PLATFORM}." >&2
+	exit 1
+fi
 
-RELEASE_NAME="release-$(date -u +%Y%m%d%H%M%S)"
-REMOTE_BUNDLE_PATH="${REMOTE_DIR}/deploy-bundle.tgz"
+BUNDLE_CHECKSUM_LINE="$(cat "${BUNDLE_CHECKSUM_PATH}")"
+BUNDLE_SHA256="${BUNDLE_CHECKSUM_LINE%% *}"
+if [[ ! "${BUNDLE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+	echo "[fail] Deploy bundle checksum receipt is invalid." >&2
+	exit 1
+fi
+UPLOAD_ID="${BUNDLE_SHA256:0:16}-$(date -u +%Y%m%d%H%M%S)-$$"
+RELEASE_NAME="release-${UPLOAD_ID}"
+REMOTE_INCOMING_DIR="${REMOTE_DIR}/.incoming/${UPLOAD_ID}"
+REMOTE_BUNDLE_PATH="${REMOTE_INCOMING_DIR}/deploy-bundle.tgz"
+REMOTE_BUNDLE_CHECKSUM_PATH="${REMOTE_BUNDLE_PATH}.sha256"
+REMOTE_PREFLIGHT_DIR="${REMOTE_INCOMING_DIR}/preflight"
 REMOTE_ENV_BASENAME=".env.deploy"
 REMOTE_ENV_PATH=""
 
 echo "[info] Preparing remote directory ${SSH_TARGET}:${REMOTE_DIR}"
 npcink_ai_cloud_run_timed "prepare remote directory" \
-	ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "mkdir -p '${REMOTE_DIR}'"
+	ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" \
+		"mkdir -p $(remote_shell_arg "${REMOTE_DIR}") $(remote_shell_arg "${REMOTE_PREFLIGHT_DIR}/deploy") $(remote_shell_arg "${REMOTE_PREFLIGHT_DIR}/scripts") && chmod 0700 $(remote_shell_arg "${REMOTE_INCOMING_DIR}")"
 
 echo "[info] Uploading deploy bundle"
 npcink_ai_cloud_run_timed "upload deploy bundle" \
 	scp "${SCP_ARGS[@]}" "${BUNDLE_PATH}" "${SSH_TARGET}:${REMOTE_BUNDLE_PATH}"
+npcink_ai_cloud_run_timed "upload deploy bundle checksum" \
+	scp "${SCP_ARGS[@]}" "${BUNDLE_CHECKSUM_PATH}" "${SSH_TARGET}:${REMOTE_BUNDLE_CHECKSUM_PATH}"
+npcink_ai_cloud_run_timed "upload deploy bundle preflight" \
+	scp "${SCP_ARGS[@]}" \
+	"${ROOT_DIR}/deploy/verify-release-bundle.sh" \
+	"${SSH_TARGET}:${REMOTE_PREFLIGHT_DIR}/deploy/verify-release-bundle.sh"
+npcink_ai_cloud_run_timed "upload deploy bundle manifest verifier" \
+	scp "${SCP_ARGS[@]}" \
+	"${ROOT_DIR}/scripts/verify-release-bundle-manifest.py" \
+	"${SSH_TARGET}:${REMOTE_PREFLIGHT_DIR}/scripts/verify-release-bundle-manifest.py"
+npcink_ai_cloud_run_timed "verify remote deploy bundle before extraction" \
+	ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" \
+		"set +e; bash $(remote_shell_arg "${REMOTE_PREFLIGHT_DIR}/deploy/verify-release-bundle.sh") --archive $(remote_shell_arg "${REMOTE_BUNDLE_PATH}") $(remote_shell_arg "${REMOTE_BUNDLE_CHECKSUM_PATH}"); preflight_status=\$?; rm -rf $(remote_shell_arg "${REMOTE_PREFLIGHT_DIR}"); exit \${preflight_status}"
 
 if [ -n "${ENV_FILE}" ]; then
-	REMOTE_ENV_PATH="${REMOTE_DIR}/${REMOTE_ENV_BASENAME}"
+	REMOTE_ENV_PATH="${REMOTE_INCOMING_DIR}/${REMOTE_ENV_BASENAME}"
 	echo "[info] Uploading env file"
 	npcink_ai_cloud_run_timed "upload env file" \
 		scp "${SCP_ARGS[@]}" "${ENV_FILE}" "${SSH_TARGET}:${REMOTE_ENV_PATH}"
+	npcink_ai_cloud_run_timed "restrict uploaded env file" \
+		ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" \
+			"chmod 0600 $(remote_shell_arg "${REMOTE_ENV_PATH}") && test \"\$(stat -c '%a' $(remote_shell_arg "${REMOTE_ENV_PATH}"))\" = 600"
 fi
 
 if [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
@@ -322,7 +383,9 @@ npcink_ai_cloud_run_timed "remote deploy sequence" \
 	"$(remote_shell_arg "${SKIP_FRONTEND_IMAGE}")" \
 	"$(remote_shell_arg "${REMOTE_COMPOSE_FILE}")" \
 	"$(remote_shell_arg "${REFRESH_PROVIDERS}")" \
-	"$(remote_shell_arg "${WITH_OPERATIONAL_READY}")" <<'EOF'
+	"$(remote_shell_arg "${WITH_OPERATIONAL_READY}")" \
+	"$(remote_shell_arg "${REMOTE_BUNDLE_PATH}")" \
+	"$(remote_shell_arg "${REMOTE_INCOMING_DIR}")" <<'EOF'
 set -euo pipefail
 
 REMOTE_DIR="$1"
@@ -350,9 +413,21 @@ SKIP_FRONTEND_IMAGE="${22:-0}"
 REMOTE_COMPOSE_FILE="${23:-}"
 REFRESH_PROVIDERS="${24:-0}"
 WITH_OPERATIONAL_READY="${25:-0}"
+REMOTE_BUNDLE_PATH="${26:-}"
+REMOTE_INCOMING_DIR="${27:-}"
 
 RELEASE_DIR="${REMOTE_DIR}/${RELEASE_NAME}"
 CURRENT_LINK="${REMOTE_DIR}/current"
+DEPLOY_LOCK_DIR="${REMOTE_DIR}/.deploy-lock"
+
+if ! mkdir "${DEPLOY_LOCK_DIR}" 2>/dev/null; then
+	echo "[fail] Another deployment is already active: ${DEPLOY_LOCK_DIR}" >&2
+	exit 1
+fi
+cleanup_deploy_lock() {
+	rmdir "${DEPLOY_LOCK_DIR}" >/dev/null 2>&1 || true
+}
+trap cleanup_deploy_lock EXIT
 
 remote_run_timed() {
 	local label="$1"
@@ -378,15 +453,25 @@ remote_run_timed() {
 	return "${status}"
 }
 
+# Archive integrity, schema, complete payload hashes, and tar paths were checked
+# on the remote host before this extraction. The extracted directory is checked
+# again by remote-load-and-up before the first docker load.
 mkdir -p "${RELEASE_DIR}"
-remote_run_timed "remote extract bundle" tar xzf "${REMOTE_DIR}/deploy-bundle.tgz" -C "${RELEASE_DIR}"
+remote_run_timed "remote extract bundle" tar xzf "${REMOTE_BUNDLE_PATH}" -C "${RELEASE_DIR}"
 
 if [ -n "${REMOTE_ENV_PATH}" ] && [ -f "${REMOTE_ENV_PATH}" ]; then
-	cp "${REMOTE_ENV_PATH}" "${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
+	install -m 600 "${REMOTE_ENV_PATH}" "${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
 	export NPCINK_CLOUD_ENV_FILE="${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
 elif [ -f "${CURRENT_LINK}/${REMOTE_ENV_BASENAME}" ]; then
-	cp "${CURRENT_LINK}/${REMOTE_ENV_BASENAME}" "${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
+	install -m 600 "${CURRENT_LINK}/${REMOTE_ENV_BASENAME}" "${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
 	export NPCINK_CLOUD_ENV_FILE="${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
+fi
+if [ -n "${NPCINK_CLOUD_ENV_FILE:-}" ]; then
+	ENV_FILE_MODE="$(stat -c '%a' "${NPCINK_CLOUD_ENV_FILE}")"
+	if [ "${ENV_FILE_MODE}" != "600" ]; then
+		echo "[fail] Remote env file mode must be 600, got ${ENV_FILE_MODE}." >&2
+		exit 1
+	fi
 fi
 
 export NPCINK_CLOUD_SKIP_FRONTEND_IMAGE="${SKIP_FRONTEND_IMAGE}"
@@ -398,8 +483,6 @@ if [ -n "${REMOTE_COMPOSE_FILE}" ]; then
 	fi
 	echo "[info] Remote compose file: ${NPCINK_CLOUD_COMPOSE_FILE}"
 fi
-
-ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}"
 
 cd "${RELEASE_DIR}"
 remote_run_timed "remote load and up" bash deploy/remote-load-and-up.sh </dev/null
@@ -468,6 +551,8 @@ if [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
 	echo "[ok] Remote operational readiness gate passed"
 fi
 
+ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}"
+rm -rf "${REMOTE_INCOMING_DIR}"
 echo "[ok] Remote release ready at ${RELEASE_DIR}"
 EOF
 

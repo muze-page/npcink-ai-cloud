@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_TAG="${NPCINK_CLOUD_PROD_EXTRAS_DEFAULT_TAG:-npcink-ai-cloud-api:prod-extra-smoke-default}"
 ZILLIZ_TAG="${NPCINK_CLOUD_PROD_EXTRAS_ZILLIZ_TAG:-npcink-ai-cloud-api:prod-extra-smoke-zilliz}"
 UV_VERSION="0.11.29"
+PYTHON_VERSION="3.14"
 UVX_BIN="${UVX_BIN:-uvx}"
 LOCK_ROOT="/usr/local/share/npcink-ai-cloud"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/npcink-python-lock-smoke.XXXXXX")"
@@ -41,7 +42,7 @@ export_locked_requirements() {
 	local -a export_args=(
 		export
 		--quiet
-		--python 3.12
+		--python "${PYTHON_VERSION}"
 		--locked
 		--no-dev
 		--no-emit-project
@@ -91,6 +92,15 @@ verify_image() {
 	esac
 
 	ok "Verifying ${tag} against an independent uv.lock export for PACKAGE_EXTRAS=${expected_package_extras:-<empty>}"
+	[ "$(docker image inspect --format '{{.Config.User}}' "${tag}")" = "app" ] || \
+		fail "${tag} must run as the named app user"
+	docker run --rm "${tag}" sh -eu -c '
+		[ "$(id -u)" = "999" ]
+		[ "$(id -g)" = "999" ]
+		[ "$(getent passwd app | cut -d: -f3-4)" = "999:999" ]
+		[ "$(getent group app | cut -d: -f3)" = "999" ]
+		[ "$(stat -c "%u:%g" /var/lib/npcink-ai-cloud/artifacts)" = "999:999" ]
+	'
 	docker run --rm -i \
 		--env PYTHONPATH=/app \
 		-v "${expected_requirements}:/tmp/expected-requirements.txt:ro" \

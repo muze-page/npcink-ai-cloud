@@ -1,6 +1,8 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM python:3.12-slim AS builder
+FROM ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc AS uv
+
+FROM python:3.14-alpine@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92 AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -23,6 +25,7 @@ RUN case "${PACKAGE_EXTRAS}" in \
 
 COPY pyproject.toml uv.lock README.md alembic.ini ./
 COPY scripts/verify-production-python-lock.py ./scripts/verify-production-python-lock.py
+COPY --from=uv /uv /usr/local/bin/uv
 
 RUN --mount=type=secret,id=pip_index_url,required=false \
     --mount=type=secret,id=pip_extra_index_url,required=false \
@@ -37,13 +40,6 @@ RUN --mount=type=secret,id=pip_index_url,required=false \
     if [ -s /run/secrets/pip_trusted_host ]; then \
         PIP_TRUSTED_HOST="$(cat /run/secrets/pip_trusted_host)"; export PIP_TRUSTED_HOST; \
     fi; \
-    python -m pip install \
-        --no-cache-dir \
-        --no-deps \
-        --only-binary=:all: \
-        --retries 10 \
-        --timeout 60 \
-        "uv==${UV_VERSION}"; \
     set -- $(uv --version); \
     test "$1" = "uv"; \
     test "$2" = "${UV_VERSION}"; \
@@ -99,7 +95,7 @@ RUN --mount=type=secret,id=pip_index_url,required=false \
         --uv-version "${UV_VERSION}" \
         --write-manifest /tmp/production-python-lock.json
 
-FROM python:3.12-slim
+FROM python:3.14-alpine@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92
 
 ARG PACKAGE_EXTRAS=
 
@@ -110,11 +106,23 @@ ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 WORKDIR /app
 
-RUN groupadd --system app \
-    && useradd --system --gid app --create-home --home-dir /home/app app \
-    && mkdir -p /app/.runtime /var/lib/npcink-ai-cloud/artifacts \
-        /usr/local/share/npcink-ai-cloud \
-    && chown -R app:app /app/.runtime /home/app /var/lib/npcink-ai-cloud/artifacts
+# The pinned Alpine base reserves GID 999 as an empty `ping` group. Fail closed on
+# that exact base state, then rename it so artifact volumes keep stable 999:999 ownership.
+RUN set -eu; \
+    test "$(getent group 999)" = "ping:x:999:"; \
+    test -z "$(getent passwd 999 || true)"; \
+    test -z "$(awk -F: '$4 == 999 { print $1 }' /etc/passwd)"; \
+    sed -i 's/^ping:x:999:$/app:x:999:/' /etc/group; \
+    adduser --system --disabled-password --uid 999 --ingroup app --home /home/app app; \
+    sed -i 's/^app:x:999:app$/app:x:999:/' /etc/group; \
+    test "$(getent passwd app | cut -d: -f3-4)" = "999:999"; \
+    test "$(getent group app | cut -d: -f3)" = "999"; \
+    test "$(awk -F: '$3 == 999 { count++ } END { print count + 0 }' /etc/passwd)" = "1"; \
+    test "$(awk -F: '$3 == 999 { count++ } END { print count + 0 }' /etc/group)" = "1"; \
+    mkdir -p /app/.runtime /var/lib/npcink-ai-cloud/artifacts \
+        /usr/local/share/npcink-ai-cloud; \
+    chown -R app:app /app/.runtime /home/app /var/lib/npcink-ai-cloud/artifacts; \
+    test "$(stat -c '%u:%g' /var/lib/npcink-ai-cloud/artifacts)" = "999:999"
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /tmp/production-python-requirements.txt /usr/local/share/npcink-ai-cloud/requirements.lock.txt
