@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,7 +47,11 @@ def test_restore_drill_has_unique_disposable_postgres_16_resources_and_cleanup()
     assert "server_version_num" in source
     assert "SOURCE_POSTGRES_VERSION < 160000" in source
     assert "SOURCE_POSTGRES_VERSION >= 170000" in source
-    assert "trap on_exit EXIT INT TERM HUP" in source
+    assert "trap on_exit EXIT" in source
+    assert "trap 'on_signal hangup 129' HUP" in source
+    assert "trap 'on_signal interrupt 130' INT" in source
+    assert "trap 'on_signal terminated 143' TERM" in source
+    assert "trap on_exit EXIT INT TERM HUP" not in source
     assert 'remove_container "${SOURCE_CONTAINER}"' in source
     assert 'remove_container "${RESTORE_CONTAINER}"' in source
     assert 'remove_volume "${SOURCE_VOLUME}"' in source
@@ -80,6 +85,28 @@ def test_restore_drill_does_not_load_configured_or_production_environment() -> N
     assert source.count(".env.deploy") == 1
     assert "cloud.npc.ink" not in source
     assert "DATABASE_URL:-" not in source
+    assert "docker context inspect --format '{{.Endpoints.docker.Host}}'" in source
+    assert "unix:///*)" in source
+    assert "refusing non-local Docker endpoint" in source
+
+
+def test_restore_drill_rejects_remote_docker_host_before_contact() -> None:
+    completed = subprocess.run(
+        [str(SCRIPT)],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "DOCKER_HOST": "ssh://production.example.invalid",
+            "NPCINK_RESTORE_DRILL_PYTHON": sys.executable,
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 64
+    assert "refusing non-local Docker endpoint" in completed.stderr
+    assert "production.example.invalid" not in completed.stderr
 
 
 def test_restore_drill_binds_relational_rows_to_real_artifact_store_bytes() -> None:
@@ -148,7 +175,13 @@ def test_restore_drill_emits_fail_closed_machine_readable_evidence() -> None:
     assert '"failed_stage": stage' in source
     assert '"status": "passed"' in source
     assert '"docker_resources_removed": True' in source
-    assert '"temporary_directory_removed_on_exit": True' in source
+    assert '"temporary_directory_removed": True' in source
+    assert 'rm -rf -- "${TMP_DIR}" || die "temporary directory cleanup failed"' in source
+    assert '[[ ! -e "${TMP_DIR}" ]]' in source
+    assert source.index('[[ ! -e "${TMP_DIR}" ]]') < source.index(
+        "printf '%s\\n' \"${SUMMARY_JSON}\""
+    )
+    assert '"local_docker_unix_socket_verified": True' in source
     assert source.count('"production_contacted": False') == 2
 
 

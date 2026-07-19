@@ -56,6 +56,28 @@ if ! command -v docker >/dev/null 2>&1; then
 	printf '[restore-drill:error] Docker is required\n' >&2
 	exit 69
 fi
+
+if [[ -n "${DOCKER_HOST:-}" ]]; then
+	DOCKER_ENDPOINT="${DOCKER_HOST}"
+else
+	DOCKER_ENDPOINT="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || {
+		printf '[restore-drill:error] active Docker context cannot be inspected\n' >&2
+		exit 69
+	}
+fi
+case "${DOCKER_ENDPOINT}" in
+	unix:///*)
+		DOCKER_SOCKET_PATH="${DOCKER_ENDPOINT#unix://}"
+		;;
+	*)
+		printf '[restore-drill:error] refusing non-local Docker endpoint: only a Unix socket is allowed\n' >&2
+		exit 64
+		;;
+esac
+if [[ ! -S "${DOCKER_SOCKET_PATH}" ]]; then
+	printf '[restore-drill:error] local Docker Unix socket is unavailable\n' >&2
+	exit 69
+fi
 if ! docker info >/dev/null 2>&1; then
 	printf '[restore-drill:error] Docker daemon is unavailable\n' >&2
 	exit 69
@@ -169,7 +191,18 @@ on_exit() {
 	rm -rf -- "${TMP_DIR}"
 	exit "${exit_code}"
 }
-trap on_exit EXIT INT TERM HUP
+
+on_signal() {
+	local signal_name="$1"
+	local exit_code="$2"
+	CURRENT_STAGE="signal-${signal_name}"
+	exit "${exit_code}"
+}
+
+trap on_exit EXIT
+trap 'on_signal hangup 129' HUP
+trap 'on_signal interrupt 130' INT
+trap 'on_signal terminated 143' TERM
 
 isolated_python() (
 	cd "${ISOLATED_CWD}"
@@ -710,7 +743,7 @@ DURATION_SECONDS=$((FINISHED_EPOCH - STARTED_EPOCH))
 POSTGRES_IMAGE_ID="$(docker image inspect "${POSTGRES_IMAGE}" --format '{{.Id}}')"
 
 CURRENT_STAGE="evidence-summary"
-isolated_python - \
+SUMMARY_JSON="$(isolated_python - \
 	"${CONTRACT}" "${STARTED_AT}" "${FINISHED_AT}" "${DURATION_SECONDS}" \
 	"${RESOURCE_PREFIX}" "${POSTGRES_IMAGE}" "${POSTGRES_IMAGE_ID}" \
 	"${SOURCE_POSTGRES_VERSION}" "${ALEMBIC_HEAD}" "${DB_DUMP_SHA256}" \
@@ -770,10 +803,17 @@ payload = {
     },
     "cleanup": {
         "docker_resources_removed": True,
-        "temporary_directory_removed_on_exit": True,
+        "temporary_directory_removed": True,
     },
+    "local_docker_unix_socket_verified": True,
     "production_contacted": False,
 }
 print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 PY
+)"
+CURRENT_STAGE="temporary-directory-cleanup"
+rm -rf -- "${TMP_DIR}" || die "temporary directory cleanup failed"
+[[ ! -e "${TMP_DIR}" ]] || die "temporary directory remains"
+CURRENT_STAGE="evidence-summary"
+printf '%s\n' "${SUMMARY_JSON}"
 SUMMARY_EMITTED=1

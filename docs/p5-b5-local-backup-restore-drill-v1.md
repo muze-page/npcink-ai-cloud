@@ -51,6 +51,9 @@ Every run must:
 - create a source PostgreSQL 16 container and named volume, then destroy both
   before creating the restore container and fresh restore volume;
 - publish PostgreSQL only on a Docker-selected loopback port;
+- resolve the active Docker endpoint before `docker info`, require a local Unix
+  socket, and reject SSH, TCP, and other remote Docker transports before any
+  resource can be created;
 - run Alembic from an empty temporary working directory through `env -i`, with
   only a generated local database URL and non-secret process settings;
 - never source or copy `.env`, `.env.local`, `.env.deploy`, Compose
@@ -149,7 +152,13 @@ Success writes one JSON object using contract
 - both required failure-injection results;
 - database and ArtifactStore manifest equality plus relationship count;
 - verified Docker cleanup posture;
+- verified local Docker Unix-socket posture;
 - `production_contacted: false`.
+
+The success object is buffered in memory, the temporary working directory is
+removed and verified absent, and only then is the object written to stdout.
+Signal handlers convert `HUP`, `INT`, and `TERM` into nonzero exits before the
+single `EXIT` cleanup path emits failure evidence.
 
 Failure exits non-zero and writes a smaller JSON object with the failed stage,
 exit code, resource prefix, and `production_contacted: false`. Logs go to
