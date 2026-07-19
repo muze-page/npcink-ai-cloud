@@ -260,6 +260,20 @@ Exit criteria:
 
 ### P5 — Hardening, Matrix, And Release Closure
 
+Current status (2026-07-19):
+
+- P5-B4 has passed bounded engineering acceptance at revision `dff31baf`;
+  evidence: [P5-B4 runtime load/soak closeout](p5-b4-runtime-load-soak-closeout-2026-07-19.md).
+- The formal dual-worker proof completed three independent baselines with all
+  29 checks passing in each baseline. Queue p95 was `4.6318s`, `5.0296s`, and
+  `4.7298s`; transport errors and HTTP 5xx responses remained zero. The formal
+  hot-query proof and current-revision media replay also passed.
+- This is engineering evidence for the proof topology, not a production SLO or
+  production-release authorization. The proof-only dual-worker topology does
+  not change the production single-worker default.
+- P5-B5 remains pending, global P5 remains incomplete, and no production
+  promotion or deployment is authorized by the P5-B4 result.
+
 Deliverables:
 
 - remaining obsolete-code deletion and dependency/security review;

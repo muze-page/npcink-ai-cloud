@@ -276,3 +276,35 @@ P5-B3 closes only the current WordPress text contract/UI/write-loop acceptance
 on its recorded revisions and package hashes. Its provider-quality limitation
 is retained rather than rerun away; P5-B4 load/soak and P5-B5 release closure
 remain pending, so global P5 is still incomplete.
+
+## Current Resolution — 2026-07-19
+
+This is an append-only current-status update. It does not revise the original
+`22eff1e0f455` audit snapshot, its then-pending findings, or its historical risk
+statements.
+
+P5-B4 engineering acceptance passed at revision
+`dff31baf942542d12860b82f6a65a47dd2129d91`. The complete evidence and
+limitations are recorded in
+[P5-B4 Runtime Load/Soak Closeout](p5-b4-runtime-load-soak-closeout-2026-07-19.md).
+The formal runtime proof completed three independent fresh baselines, with all
+`29/29` record gates passing in every baseline. Queue-wait p95 was `4.6318`,
+`5.0296`, and `4.7298` seconds; transport failures and unexpected HTTP 5xx were
+zero throughout. The formal high-cardinality hot-query proof and the current
+media performance and representative-corpus replays also passed.
+
+The earlier v4 single-worker result remains part of the evidence history: its
+third baseline recorded a `10.0267`-second queue-wait p95 and failed the
+10-second candidate threshold. That failure was not rerun away, and the
+threshold was not lowered. The accepted proof instead used two proof-only
+worker replicas to establish bounded queue capacity. Production and runtime
+Compose defaults remain single-worker because multi-worker media concurrency
+and heartbeat safety are not closed by this proof.
+
+P5-B4 is engineering evidence only. It grants no production deployment or
+release authorization. P5-B5 remains pending, global P5 release closure remains
+incomplete, and no production release occurred. Temporary Docker dependency
+resolution during the proof also exposed that the Dockerfile does not strictly
+consume the repository lock file; that supply-chain issue is transferred to
+P5-B5 for explicit closure rather than being hidden by the successful runtime
+result.
