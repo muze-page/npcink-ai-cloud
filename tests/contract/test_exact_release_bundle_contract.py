@@ -994,6 +994,14 @@ def test_release_scripts_enforce_pre_and_post_load_and_same_bundle_replay() -> N
     scan_index = bundle.index('bash "${CLOUD_DIR}/scripts/scan-production-images.sh"')
     first_package = bundle.index("package_scanned_image api dist/api.tar.gz")
     assert scan_index < first_package
+    assert (
+        'local key="$1" relative_output="$2" archive_path\n'
+        '\tarchive_path="${LOCAL_SCAN_DIR}/${key}.image.tar"'
+    ) in bundle
+    assert (
+        'local key="$1" relative_output="$2" '
+        'archive_path="${LOCAL_SCAN_DIR}/${key}.image.tar"'
+    ) not in bundle
     assert "docker save" not in bundle
     assert 'gzip -n "-${GZIP_LEVEL}" -c "${archive_path}"' in bundle
 

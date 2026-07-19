@@ -209,7 +209,8 @@ append_image_record() {
 }
 
 package_scanned_image() {
-	local key="$1" relative_output="$2" archive_path="${LOCAL_SCAN_DIR}/${key}.image.tar"
+	local key="$1" relative_output="$2" archive_path
+	archive_path="${LOCAL_SCAN_DIR}/${key}.image.tar"
 	[ -f "${archive_path}" ] || fail "release scanner did not retain the governed archive for ${key}"
 	echo "[info] Packaging the exact scanned ${key} archive as ${relative_output}"
 	gzip -n "-${GZIP_LEVEL}" -c "${archive_path}" >"${LOCAL_STAGE}/${relative_output}"
