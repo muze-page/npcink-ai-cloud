@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import socket
 from datetime import UTC, datetime, timedelta
@@ -11,10 +12,13 @@ from sqlalchemy import select
 os.environ["NPCINK_CLOUD_INTERNAL_AUTH_TOKEN"] = "npcink-cloud-internal-test-token-32b"
 os.environ["NPCINK_CLOUD_ADMIN_SESSION_SECRET"] = "npcink-cloud-ops-session-secret-32b"
 os.environ["NPCINK_CLOUD_PORTAL_JWT_SECRET"] = "npcink-cloud-portal-jwt-secret-32b"
-os.environ["NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"] = "npcink-cloud-service-settings-secret-32b"
-os.environ["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"] = (
-    "npcink-cloud-runtime-data-encryption-secret-32b"
-)
+os.environ["NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"] = base64.urlsafe_b64encode(
+    b"S" * 32
+).decode()
+os.environ["NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"] = "test-service-settings-key"
+os.environ["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"] = base64.urlsafe_b64encode(
+    b"R" * 32
+).decode()
 os.environ["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"] = "test-runtime-data-key"
 for _provider_env_name in (
     "NPCINK_CLOUD_OPENAI_API_KEY",

@@ -6,10 +6,14 @@ umask 077
 CONTRACT="p1_e06_runtime_data_encryption_cutover.v1"
 EXPECTED_SOURCE_REVISION="20260710_0058"
 EXPECTED_TARGET_REVISION="20260717_0068"
-EXPECTED_LEGACY_TOTAL=18
+EXPECTED_RUNTIME_LEGACY_TOTAL=18
+EXPECTED_SERVICE_LEGACY_TOTAL=12
+EXPECTED_LEGACY_TOTAL=$((EXPECTED_RUNTIME_LEGACY_TOTAL + EXPECTED_SERVICE_LEGACY_TOTAL))
+EXPECTED_RUNTIME_ROW_IDENTIFIERS_SHA256="675cce444dbbf801bc8ab7fb35b717888c878e062097e5fb7f2f5f110e5a764c"
+EXPECTED_SERVICE_ROW_IDENTIFIERS_SHA256="e5010d2b0a2afe22b7729c4c2395c91001a078e282abee87f03a5f0289aa0bf6"
 OFF_HOST_RECEIPT_CONTRACT="p1_e06_off_host_backup_receipt.v1"
 OFF_HOST_ACK="I_ACKNOWLEDGE_THE_BACKUP_COPY_IS_OFF_HOST_AND_INDEPENDENT"
-RESTORE_ACK="I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_AND_OLD_KEY_TOGETHER"
+RESTORE_ACK="I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_ENV_AND_BOTH_OLD_ROOTS_TOGETHER"
 CUTOVER_ACK="I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER"
 
 usage() {
@@ -23,16 +27,19 @@ Usage: deploy/runtime-data-encryption-cutover.sh \
   --host-python /usr/bin/python3.11 \
   [--off-host-receipt-timeout-seconds 900] \
   --confirm-off-host-handoff I_ACKNOWLEDGE_THE_BACKUP_COPY_IS_OFF_HOST_AND_INDEPENDENT \
-  --confirm-whole-database-restore I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_AND_OLD_KEY_TOGETHER \
+  --confirm-whole-database-restore I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_ENV_AND_BOTH_OLD_ROOTS_TOGETHER \
   --confirm-production-cutover I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER
 
-Run the one-time, fail-closed P1-E06 runtime-data encryption cutover on the
+Run the one-time, fail-closed P1-E06 encryption cutover on the
 production Docker host. The staged release must be an already extracted exact
 release bundle. The maintenance env must be mode 0600 and contain exactly:
 
   NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=<target-root>
   NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=<target-key-id>
   NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root>
+  NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=<target-root>
+  NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=<target-key-id>
+  NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-root>
 
 After the fresh backup is published, the script writes a mode-0600 handoff
 marker and waits for an operator-created receipt that did not exist at startup.
@@ -48,7 +55,7 @@ validated receipt.
 The script never accepts a secret value as an argument. It keeps evidence mode
 0600, retains .deploy-lock after every failure, never restarts old code after
 migration starts, and requires recovery from the matched whole-database dump,
-old release, and old key.
+previous release, previous external env, and both old roots.
 EOF
 }
 
@@ -250,6 +257,8 @@ MAINTENANCE_ENV_SOURCE_PROOF="$(
 	"${HOST_PYTHON}" - "${MAINTENANCE_ENV}" <<'PY'
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import os
 import re
@@ -278,6 +287,9 @@ allowed = {
     "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
     "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
     "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
 }
 values: dict[str, str] = {}
 for raw_line in text.splitlines():
@@ -292,19 +304,59 @@ for raw_line in text.splitlines():
     values[key] = value
 if set(values) != allowed:
     raise SystemExit(1)
+def require_target_root(name: str) -> None:
+    value = values[name]
+    try:
+        decoded = base64.b64decode(value, altchars=b"-_", validate=True)
+    except (binascii.Error, ValueError):
+        raise SystemExit(1) from None
+    if len(decoded) != 32:
+        raise SystemExit(1)
+    if base64.urlsafe_b64encode(decoded).decode("ascii") != value:
+        raise SystemExit(1)
+
+
+for target_name in (
+    "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+):
+    require_target_root(target_name)
+
 secret_pattern = re.compile(r"[A-Za-z0-9._~+/=-]{32,}")
-if not secret_pattern.fullmatch(values["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"]):
-    raise SystemExit(1)
-if not secret_pattern.fullmatch(values["NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"]):
-    raise SystemExit(1)
+for old_name in (
+    "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
+):
+    if not secret_pattern.fullmatch(values[old_name]):
+        raise SystemExit(1)
+
+target_names = (
+    "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+)
+old_names = (
+    "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
+)
+for target_name in target_names:
+    for old_name in old_names:
+        if values[target_name] == values[old_name]:
+            raise SystemExit(1)
+
+key_id_pattern = re.compile(r"[A-Za-z0-9_-]{1,64}")
+for key_id_name in (
+    "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
+):
+    if not key_id_pattern.fullmatch(values[key_id_name]):
+        raise SystemExit(1)
 if values["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"] == values[
-    "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
+    "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"
 ]:
     raise SystemExit(1)
-if not re.fullmatch(
-    r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
-    values["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"],
-):
+if values["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"] == values[
+    "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"
+]:
     raise SystemExit(1)
 print(
     f"{hashlib.sha256(raw).hexdigest()}\t{metadata.st_dev}\t{metadata.st_ino}"
@@ -525,7 +577,7 @@ while IFS= read -r maintenance_line || [ -n "${maintenance_line}" ]; do
 	maintenance_key="${maintenance_line%%=*}"
 	maintenance_value="${maintenance_line#*=}"
 	case "${maintenance_key}" in
-		NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET|NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID|NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET)
+		NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET|NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID|NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET|NPCINK_CLOUD_SERVICE_SETTINGS_SECRET|NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID|NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET)
 			printf -v "${maintenance_key}" '%s' "${maintenance_value}"
 			export "${maintenance_key}"
 			;;
@@ -648,6 +700,11 @@ write_failure_marker() {
 		printf 'previous_runtime_restored=%s\n' "${PREVIOUS_RUNTIME_RESTORED}"
 		printf 'post_migration_writer_stop_proved=%s\n' "${POST_MIGRATION_WRITER_STOP_PROVED}"
 		printf 'activation_committed=%s\n' "${ACTIVATION_COMMITTED}"
+		if [ "${MIGRATION_STARTED}" = "1" ]; then
+			printf 'previous_external_env=%s\n' "${CURRENT_ENV_FILE}"
+			printf 'required_old_root_env_names=%s\n' \
+				'NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET,NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET'
+		fi
 		if [ "${BACKUP_PUBLISHED}" = "1" ]; then
 			printf 'database_recovery_point=%s\n' "${BACKUP_PATH}"
 		fi
@@ -704,11 +761,11 @@ release_helper() {
 compose_maintenance() (
 	# Keep secret values exclusively in the child environment, never argv, but
 	# drop every ambient host override before Compose interpolation. Callers
-	# deliberately unset OLD_ROOT for Alembic/inventory/verify.
+	# deliberately unset both OLD_ROOT values for Alembic/inventory/verify.
 	local exported_name=""
 	while IFS= read -r exported_name; do
 		case "${exported_name}" in
-			PATH|HOME|USER|LOGNAME|TMPDIR|XDG_CONFIG_HOME|XDG_RUNTIME_DIR|SSH_AUTH_SOCK|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|DOCKER_CERT_PATH|DOCKER_TLS_VERIFY|DOCKER_API_VERSION|NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET|NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID|NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET|NPCINK_CLOUD_DATABASE_URL)
+			PATH|HOME|USER|LOGNAME|TMPDIR|XDG_CONFIG_HOME|XDG_RUNTIME_DIR|SSH_AUTH_SOCK|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|DOCKER_CERT_PATH|DOCKER_TLS_VERIFY|DOCKER_API_VERSION|NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET|NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID|NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET|NPCINK_CLOUD_SERVICE_SETTINGS_SECRET|NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID|NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET|NPCINK_CLOUD_DATABASE_URL)
 				;;
 			*) unset "${exported_name}" ;;
 		esac
@@ -1062,7 +1119,7 @@ on_exit() {
 			# labelled or old/new-image writer and require matched whole-DB recovery.
 			stop_expected_services_and_verify || recovery_failed=1
 			outcome="full_database_restore_required"
-			recovery="restore_whole_database_previous_release_and_old_key_together"
+			recovery="restore_whole_database_previous_release_external_env_and_both_old_roots_together"
 		else
 			if [ "${IMAGE_PREPARE_STARTED}" = "1" ]; then
 				restore_release_image_tags || recovery_failed=1
@@ -1104,7 +1161,7 @@ on_exit() {
 			recovery_failed=1
 		fi
 		if [ "${MIGRATION_STARTED}" = "1" ]; then
-			printf '[p1-e06:fail] migration started; lock retained. Verify writer-stop proof, then restore the matched whole database, old release, and old key.\n' >&2
+			printf '[p1-e06:fail] migration started; lock retained. Verify writer-stop proof, then restore the matched whole database, previous release, previous external env, and both old roots.\n' >&2
 		else
 			printf '[p1-e06:fail] pre-migration recovery attempted; deployment lock retained.\n' >&2
 		fi
@@ -1150,11 +1207,14 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-legacy_key = "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
+legacy_keys = {
+    "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
+}
 kept = [
     line
     for line in path.read_text(encoding="utf-8").splitlines()
-    if (line.split("=", 1)[0] if "=" in line else "") != legacy_key
+    if (line.split("=", 1)[0] if "=" in line else "") not in legacy_keys
 ]
 temporary = path.with_name(f".{path.name}.sanitize.{os.getpid()}")
 with temporary.open("x", encoding="utf-8") as handle:
@@ -1481,16 +1541,46 @@ assert_backup_integrity || fail "backup changed after the off-host receipt was v
 validate_report() {
 	local report_path="$1"
 	local expected_mode="$2"
-	"${HOST_PYTHON}" - "${report_path}" "${expected_mode}" "${EXPECTED_LEGACY_TOTAL}" <<'PY'
+	local family="$3"
+	local expected_total=""
+	local expected_identifiers_sha256=""
+	case "${family}" in
+		runtime)
+			expected_total="${EXPECTED_RUNTIME_LEGACY_TOTAL}"
+			expected_identifiers_sha256="${EXPECTED_RUNTIME_ROW_IDENTIFIERS_SHA256}"
+			;;
+		service)
+			expected_total="${EXPECTED_SERVICE_LEGACY_TOTAL}"
+			expected_identifiers_sha256="${EXPECTED_SERVICE_ROW_IDENTIFIERS_SHA256}"
+			;;
+		*) return 1 ;;
+	esac
+	"${HOST_PYTHON}" - \
+		"${report_path}" "${expected_mode}" "${family}" "${expected_total}" \
+		"${expected_identifiers_sha256}" <<'PY'
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 mode = sys.argv[2]
-expected_total = int(sys.argv[3])
+family = sys.argv[3]
+expected_total = int(sys.argv[4])
+expected_identifiers_sha256 = sys.argv[5]
+if not isinstance(report, dict) or set(report) != {
+    "mode",
+    "total",
+    "legacy",
+    "current",
+    "migrated",
+    "would_migrate",
+    "counts_by_kind",
+    "row_identifiers",
+}:
+    raise SystemExit(1)
 expected = {
     "inventory": (expected_total, expected_total, 0, 0, expected_total),
     "dry-run": (expected_total, expected_total, 0, 0, expected_total),
@@ -1506,22 +1596,41 @@ if report.get("mode") != mode or actual != expected:
 counts = report.get("counts_by_kind")
 if not isinstance(counts, dict):
     raise SystemExit(1)
-expected_kinds = {
-    "site_api_key": 17,
-    "site_runtime_callback": 0,
-    "addon_connection_payload": 1,
-    "portal_idempotency_response": 0,
-    "runtime_execution_input": 0,
+expected_kinds_by_family = {
+    "runtime": {
+        "site_api_key": 17,
+        "site_runtime_callback": 0,
+        "addon_connection_payload": 1,
+        "portal_idempotency_response": 0,
+        "runtime_execution_input": 0,
+    },
+    "service": {
+        "provider_connection_secret": 8,
+        "service_setting_secret": 4,
+    },
 }
+expected_kinds = expected_kinds_by_family.get(family)
+if expected_kinds is None:
+    raise SystemExit(1)
 if set(counts) != set(expected_kinds):
     raise SystemExit(1)
 for kind, total in expected_kinds.items():
-    if int(counts[kind].get("total", -1)) != total:
+    kind_counts = counts[kind]
+    if not isinstance(kind_counts, dict):
+        raise SystemExit(1)
+    if int(kind_counts.get("total", -1)) != total:
         raise SystemExit(1)
 identifiers = report.get("row_identifiers")
 if not isinstance(identifiers, list) or len(identifiers) != expected_total:
     raise SystemExit(1)
 if len(set(identifiers)) != expected_total:
+    raise SystemExit(1)
+canonical_identifiers = json.dumps(
+    sorted(identifiers),
+    ensure_ascii=True,
+    separators=(",", ":"),
+).encode("utf-8")
+if hashlib.sha256(canonical_identifiers).hexdigest() != expected_identifiers_sha256:
     raise SystemExit(1)
 PY
 }
@@ -1654,9 +1763,13 @@ run_api_evidence() {
 	local env_flags=(
 		-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET
 		-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID
+		-e NPCINK_CLOUD_SERVICE_SETTINGS_SECRET
+		-e NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID
 	)
 	local old_root_was_set=0
 	local old_root_value=""
+	local service_old_root_was_set=0
+	local service_old_root_value=""
 	local run_status=0
 	case "${mode}" in
 		dry-run|apply) env_flags+=(-e NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET) ;;
@@ -1673,6 +1786,11 @@ run_api_evidence() {
 		old_root_was_set=1
 		old_root_value="${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET}"
 	fi
+	if [ -n "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET+x}" ]; then
+		service_old_root_was_set=1
+		service_old_root_value="${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET}"
+	fi
+	unset NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
 	if [ "${mode}" != "dry-run" ] && [ "${mode}" != "apply" ]; then
 		unset NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
 	fi
@@ -1688,10 +1806,80 @@ run_api_evidence() {
 	else
 		unset NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
 	fi
+	if [ "${service_old_root_was_set}" = "1" ]; then
+		export NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET="${service_old_root_value}"
+	else
+		unset NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
+	fi
 	if [ "${run_status}" -ne 0 ]; then
 		fail "runtime-data ${mode} phase failed"
 	fi
-	validate_report "${output}" "${mode}" || fail "runtime-data ${mode} evidence did not match the frozen 18-row inventory"
+	validate_report "${output}" "${mode}" runtime || \
+		fail "runtime-data ${mode} evidence did not match the frozen 18-row inventory"
+}
+
+run_service_api_evidence() {
+	local prefix="$1"
+	local mode="$2"
+	shift 2
+	local output="${EVIDENCE_DIR}/${prefix}-service-${mode}.json"
+	local errors="${EVIDENCE_DIR}/${prefix}-service-${mode}.stderr"
+	local env_flags=(
+		-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET
+		-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID
+		-e NPCINK_CLOUD_SERVICE_SETTINGS_SECRET
+		-e NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID
+	)
+	local runtime_old_root_was_set=0
+	local runtime_old_root_value=""
+	local old_root_was_set=0
+	local old_root_value=""
+	local run_status=0
+	case "${mode}" in
+		dry-run|apply) env_flags+=(-e NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET) ;;
+		inventory|verify) ;;
+		*) fail "unsupported service-secret evidence mode" ;;
+	esac
+	if [ -n "${NPCINK_CLOUD_DATABASE_URL+x}" ]; then
+		env_flags+=(-e NPCINK_CLOUD_DATABASE_URL)
+	fi
+	: >"${output}"
+	: >"${errors}"
+	chmod 0600 "${output}" "${errors}"
+	if [ -n "${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET+x}" ]; then
+		runtime_old_root_was_set=1
+		runtime_old_root_value="${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET}"
+	fi
+	if [ -n "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET+x}" ]; then
+		old_root_was_set=1
+		old_root_value="${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET}"
+	fi
+	unset NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+	if [ "${mode}" != "dry-run" ] && [ "${mode}" != "apply" ]; then
+		unset NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
+	fi
+	if run_exact_api_one_off "${env_flags[@]}" -- \
+		python -m app.dev.reencrypt_service_secrets "$@" \
+		>"${output}" 2>"${errors}"; then
+		run_status=0
+	else
+		run_status=$?
+	fi
+	if [ "${runtime_old_root_was_set}" = "1" ]; then
+		export NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET="${runtime_old_root_value}"
+	else
+		unset NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+	fi
+	if [ "${old_root_was_set}" = "1" ]; then
+		export NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET="${old_root_value}"
+	else
+		unset NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
+	fi
+	if [ "${run_status}" -ne 0 ]; then
+		fail "service-secret ${mode} phase failed"
+	fi
+	validate_report "${output}" "${mode}" service || \
+		fail "service-secret ${mode} evidence did not match the frozen 12-row inventory"
 }
 
 run_api_command_evidence() {
@@ -1702,9 +1890,13 @@ run_api_command_evidence() {
 	local env_flags=(
 		-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET
 		-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID
+		-e NPCINK_CLOUD_SERVICE_SETTINGS_SECRET
+		-e NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID
 	)
-	local old_root_was_set=0
-	local old_root_value=""
+	local runtime_old_root_was_set=0
+	local runtime_old_root_value=""
+	local service_old_root_was_set=0
+	local service_old_root_value=""
 	local run_status=0
 	if [ -n "${NPCINK_CLOUD_DATABASE_URL+x}" ]; then
 		env_flags+=(-e NPCINK_CLOUD_DATABASE_URL)
@@ -1713,20 +1905,30 @@ run_api_command_evidence() {
 	: >"${errors}"
 	chmod 0600 "${output}" "${errors}"
 	if [ -n "${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET+x}" ]; then
-		old_root_was_set=1
-		old_root_value="${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET}"
+		runtime_old_root_was_set=1
+		runtime_old_root_value="${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET}"
+	fi
+	if [ -n "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET+x}" ]; then
+		service_old_root_was_set=1
+		service_old_root_value="${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET}"
 	fi
 	unset NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+	unset NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
 	if run_exact_api_one_off "${env_flags[@]}" -- "$@" \
 		>"${output}" 2>"${errors}"; then
 		run_status=0
 	else
 		run_status=$?
 	fi
-	if [ "${old_root_was_set}" = "1" ]; then
-		export NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET="${old_root_value}"
+	if [ "${runtime_old_root_was_set}" = "1" ]; then
+		export NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET="${runtime_old_root_value}"
 	else
 		unset NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+	fi
+	if [ "${service_old_root_was_set}" = "1" ]; then
+		export NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET="${service_old_root_value}"
+	else
+		unset NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
 	fi
 	if [ "${run_status}" -ne 0 ]; then
 		fail "${label} failed"
@@ -1813,12 +2015,19 @@ RESTORED_TARGET_REVISION="$(docker exec "${RESTORE_CONTAINER}" sh -c \
 
 CURRENT_STAGE="independent-restore-encryption-rehearsal"
 run_api_evidence restore inventory inventory
+run_service_api_evidence restore inventory inventory
 run_api_evidence restore dry-run dry-run \
 	--old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+run_service_api_evidence restore dry-run dry-run \
+	--old-root-env NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
 run_api_evidence restore apply apply \
 	--confirm-maintenance-window \
 	--old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+run_service_api_evidence restore apply apply \
+	--confirm-maintenance-window \
+	--old-root-env NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
 run_api_evidence restore verify verify
+run_service_api_evidence restore verify verify
 "${HOST_PYTHON}" - "${EVIDENCE_DIR}/restore-proof.json" "${BACKUP_SHA256}" <<'PY'
 import json
 import os
@@ -1831,7 +2040,9 @@ payload = {
     "postgres_major": 16,
     "source_revision": "20260710_0058",
     "target_revision": "20260717_0068",
-    "legacy_rows": 18,
+    "runtime_legacy_rows": 18,
+    "service_legacy_rows": 12,
+    "legacy_rows": 30,
     "backup_sha256": sys.argv[2],
     "plaintext_included": False,
     "ciphertext_included": False,
@@ -1883,10 +2094,13 @@ CURRENT_STAGE="production-encryption-inventory"
 assert_no_running_writers || fail "a labelled or old/new-image writer appeared after migration"
 assert_database_clients_quiesced
 run_api_evidence production inventory inventory
+run_service_api_evidence production inventory inventory
 
 CURRENT_STAGE="production-encryption-dry-run"
 run_api_evidence production dry-run dry-run \
 	--old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+run_service_api_evidence production dry-run dry-run \
+	--old-root-env NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
 
 CURRENT_STAGE="production-encryption-apply"
 assert_no_running_writers || fail "a labelled or old/new-image writer appeared before encryption apply"
@@ -1894,9 +2108,13 @@ assert_database_clients_quiesced
 run_api_evidence production apply apply \
 	--confirm-maintenance-window \
 	--old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
+run_service_api_evidence production apply apply \
+	--confirm-maintenance-window \
+	--old-root-env NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET
 
 CURRENT_STAGE="production-encryption-new-key-only-verify"
 run_api_evidence production verify verify
+run_service_api_evidence production verify verify
 
 CURRENT_STAGE="recheck-maintenance-env-before-activation"
 assert_maintenance_env_source_unchanged || \
@@ -1915,8 +2133,13 @@ maintenance_path = Path(sys.argv[2])
 target_keys = {
     "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
     "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
 }
-removed_keys = target_keys | {"NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"}
+removed_keys = target_keys | {
+    "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
+}
 selected: dict[str, str] = {}
 for line in maintenance_path.read_text(encoding="utf-8").splitlines():
     if "=" not in line:
@@ -1950,13 +2173,16 @@ PY
 import sys
 from pathlib import Path
 
-legacy_key = "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
+legacy_keys = {
+    "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
+}
 keys = {
     line.split("=", 1)[0]
     for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
     if "=" in line
 }
-print("absent" if legacy_key not in keys else "present")
+print("absent" if legacy_keys.isdisjoint(keys) else "present")
 PY
 )" = "absent" ] || fail "active staged env retained the legacy root secret"
 [ "$(sha256sum "${CURRENT_ENV_FILE}" | awk '{print $1}')" = "${CURRENT_ENV_SHA256}" ] || fail "previous release env changed during cutover"
@@ -2032,7 +2258,9 @@ payload = {
     "status": "passed",
     "source_revision": "20260710_0058",
     "target_revision": "20260717_0068",
-    "legacy_rows_migrated": 18,
+    "runtime_legacy_rows_migrated": 18,
+    "service_legacy_rows_migrated": 12,
+    "legacy_rows_migrated": 30,
     "backup_sha256": sys.argv[2],
     "previous_release": sys.argv[3],
     "active_release": sys.argv[4],
@@ -2088,7 +2316,9 @@ payload = {
     "status": "committed",
     "active_release": active_release,
     "database_revision": "20260717_0068",
-    "legacy_rows_migrated": 18,
+    "runtime_legacy_rows_migrated": 18,
+    "service_legacy_rows_migrated": 12,
+    "legacy_rows_migrated": 30,
     "backup_sha256": backup_sha256,
     "off_host_receipt_sha256": receipt_sha256,
 }
@@ -2117,6 +2347,7 @@ discard_rollback_image_tags_and_map || fail "rollback image tag/map cleanup fail
 CURRENT_STAGE="publish-terminal-success-evidence"
 publish_fresh_file "${FINAL_RESULT_TMP}" "${PASSED_RESULT}"
 FINAL_RESULT_TMP=""
+fsync_paths_and_parents "${PASSED_RESULT}"
 
 CURRENT_STAGE="publish-global-activation-receipt"
 ACTIVATION_COMMIT_SHA256="$(sha256sum "${ACTIVATION_COMMIT_MARKER}" | awk '{print $1}')"
@@ -2133,6 +2364,8 @@ GLOBAL_ACTIVATION_RECEIPT_TMP="${GLOBAL_ACTIVATION_RECEIPT}.tmp.$$"
 	"${CUTOVER_RESULT_SHA256}" \
 	"${EXPECTED_SOURCE_REVISION}" \
 	"${EXPECTED_TARGET_REVISION}" \
+	"${EXPECTED_RUNTIME_LEGACY_TOTAL}" \
+	"${EXPECTED_SERVICE_LEGACY_TOTAL}" \
 	"${EXPECTED_LEGACY_TOTAL}" <<'PY' || fail "global activation receipt could not be prepared"
 import json
 import os
@@ -2145,6 +2378,8 @@ import sys
     cutover_result_sha256,
     source_revision,
     target_revision,
+    runtime_legacy_rows_migrated,
+    service_legacy_rows_migrated,
     legacy_rows_migrated,
 ) = sys.argv[1:]
 payload = {
@@ -2152,6 +2387,8 @@ payload = {
     "status": "passed",
     "source_revision": source_revision,
     "target_revision": target_revision,
+    "runtime_legacy_rows_migrated": int(runtime_legacy_rows_migrated),
+    "service_legacy_rows_migrated": int(service_legacy_rows_migrated),
     "legacy_rows_migrated": int(legacy_rows_migrated),
     "active_release": active_release,
     "activation_commit_sha256": activation_commit_sha256,

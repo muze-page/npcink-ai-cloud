@@ -46,9 +46,13 @@ Configuration ownership:
 - production must set
   `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.npc.ink` and
   `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.npc.ink`.
-- production must keep `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` and
+- production must keep both
+  `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` /
+  `NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID` and
+  `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` /
   `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` stable across ordinary deploys.
-  They belong only to the four backend writers; the frontend receives neither.
+  Both pairs belong to all four backend writers; the frontend receives none of
+  the four variables.
 - `/admin/service-settings` owns Portal public URL, QQ login, and SMTP sender
   settings. Do not move those service settings back into `.env`.
 
@@ -376,16 +380,26 @@ Manual refresh guidance:
 3. Restart `api` and `frontend`.
 4. Verify stale cookies no longer access `/admin/session` or `/portal/v1/session`.
 
-### Runtime-data encryption key cutover
+### P1-E06 persisted-encryption dual-domain cutover
 
-`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` is not an ordinary rotatable
-configuration value. Never update it or
-`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` through the normal secret-rotation
-or deploy-and-restart path. A direct change can strand persisted ciphertext.
+Neither the Service Settings pair
+`NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` /
+`NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID` nor the Runtime Data pair
+`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` /
+`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` is an ordinary rotatable
+configuration value. Never change either pair through the normal
+secret-rotation or deploy-and-restart path. A direct change can strand
+persisted ciphertext.
 
-The first raw-ciphertext migration is a one-time P1-E06 operation. Use the
-single fail-closed orchestrator; do not reproduce its migration, backup,
-restore, key rewrite, pointer, worker, or cleanup sequence by hand.
+Each target root must be the canonical padded URL-safe Base64 encoding of 32
+random bytes. Each domain has its own valid, non-secret key ID; the two target
+roots and two IDs must be distinct. All four backend services (`api`, `worker`,
+`callback-worker`, and `ops-worker`) own both target pairs. `frontend` owns
+neither pair.
+
+The first raw-ciphertext migration is a one-time P1-E06 dual-domain operation.
+Use the single fail-closed orchestrator; do not reproduce its migration,
+backup, restore, key rewrite, pointer, worker, or cleanup sequence by hand.
 
 1. From the trusted operator workstation, stage the already-built exact bundle
    with `deploy/deploy-to-ssh-host.sh --stage-only`. Set the production host
@@ -420,7 +434,8 @@ restore, key rewrite, pointer, worker, or cleanup sequence by hand.
    later stage-only failure removes its incoming object, partial release, and
    lock before returning nonzero.
 2. Recheck and close the independent Edge hard gate. Record the current
-   release, source database revision `20260710_0058`, old key recovery owner,
+   release, source database revision `20260710_0058`, both old-root recovery
+   owners,
    exact Linux/AMD64 bundle checksum, and rollback owner. The verified staged
    directory may exist already, but do not start the cutover or mutate an image
    until the Edge gate is complete. Normalize the managed root to `root:root`,
@@ -428,14 +443,21 @@ restore, key rewrite, pointer, worker, or cleanup sequence by hand.
    `/var/backups/npcink-ai-cloud` plus `/run/npcink-ai-cloud` as root-owned mode
    `0700` directories before invoking the cutover.
 3. On the production host, create the untracked maintenance env outside the
-   release tree, mode `0600`, with exactly these three keys. Keep values out of
+   release tree, mode `0600`, with exactly these six keys. Keep values out of
    shell history, command arguments, logs, and Git:
 
    ```text
-   NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=<target-secret>
+   NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=<canonical-base64-32-byte-target-root>
    NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=<target-key-id>
-   NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root-secret>
+   NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-runtime-root>
+   NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=<canonical-base64-32-byte-target-root>
+   NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=<target-key-id>
+   NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-service-settings-root>
    ```
+
+   The two `*_OLD_ROOT_SECRET` values are maintenance inputs only. They may be
+   passed to `dry-run` and `apply`, never to `inventory`, new-key-only
+   `verify`, or the activated runtime.
 
 4. Run the one-time orchestrator in the foreground with the three exact
    acknowledgements. It prepares exact images through the governed
@@ -454,7 +476,7 @@ restore, key rewrite, pointer, worker, or cleanup sequence by hand.
      --off-host-receipt /run/npcink-ai-cloud/p1-e06-off-host-receipt.json \
      --off-host-receipt-timeout-seconds 900 \
      --confirm-off-host-handoff I_ACKNOWLEDGE_THE_BACKUP_COPY_IS_OFF_HOST_AND_INDEPENDENT \
-     --confirm-whole-database-restore I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_AND_OLD_KEY_TOGETHER \
+     --confirm-whole-database-restore I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_ENV_AND_BOTH_OLD_ROOTS_TOGETHER \
      --confirm-production-cutover I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER
    ```
 
@@ -484,9 +506,16 @@ restore, key rewrite, pointer, worker, or cleanup sequence by hand.
    receipt SHA-256. The terminal result carries that receipt digest; deleting
    or replacing the transient upload must not erase the validated evidence.
 6. After accepting the receipt, the same process proves an independent
-   PostgreSQL 16 restore, rehearses `0058 -> 0068`, runs count-locked
-   `inventory -> dry-run -> apply -> verify` against the restored copy, removes
-   the disposable restore resources, and only then switches production
+   PostgreSQL 16 restore and rehearses `0058 -> 0068`. Against that restored
+   copy it runs `inventory -> dry-run -> apply -> verify` separately through
+   `python -m app.dev.reencrypt_runtime_data` and
+   `python -m app.dev.reencrypt_service_secrets`. Evidence is count-locked to
+   18 Runtime Data rows (17 site signing secrets plus one Addon connection
+   payload), 12 service-secret ciphertexts (eight provider connections plus
+   four service-setting secret entries), and 30 ciphertexts in total. Each `apply` owns one
+   independent database transaction; completion means that both applies and
+   both new-key-only verifies succeeded. The process then removes
+   the disposable restore resources and only then switches production
    `postgres` and `redis` to the exact target bundle image IDs. It proves both
    container image IDs, both health checks, and that PostgreSQL remains at
    `0058` before production migration begins. Compose v2.27 one-off commands
@@ -494,9 +523,23 @@ restore, key rewrite, pointer, worker, or cleanup sequence by hand.
    option, pass secret values on the command line, or use an env-file run
    option. Runtime Compose `pull_policy: never` plus the staged image-ID proof
    binds every one-off to the exact API image. The first raw-ciphertext cutover
-   intentionally omits `--old-key-id`.
-7. The orchestrator writes the target key only to the staged external env,
-   atomically activates the staged release, verifies API and new worker
+   intentionally omits `--old-key-id`. Production repeats both count-locked
+   four-phase sequences inside the same writer fence and backup/restore window.
+   The Runtime Data sequence ends with
+   `python -m app.dev.reencrypt_runtime_data verify`; the Service Settings
+   sequence ends with `python -m app.dev.reencrypt_service_secrets verify`.
+   Only the matching service `dry-run`/`apply` receives
+   `--old-root-env NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET`.
+   The sorted non-secret row-identifier sets are also frozen by canonical-JSON
+   SHA-256: Runtime Data
+   `675cce444dbbf801bc8ab7fb35b717888c878e062097e5fb7f2f5f110e5a764c`
+   and Service Settings
+   `e5010d2b0a2afe22b7729c4c2395c91001a078e282abee87f03a5f0289aa0bf6`.
+   A count-preserving replacement therefore fails closed. If an intentional
+   pre-cutover inventory change occurs, stop and approve a newly reviewed
+   digest instead of bypassing the check.
+7. The orchestrator writes both target roots and key IDs only to the staged
+   external env, atomically activates the staged release, verifies API and new worker
    generation readiness, restores traffic, and validates the active release.
    Immediately after that validation it durably publishes
    `activation-commit.json`; this is the explicit irreversible activation
@@ -520,9 +563,13 @@ Failure recovery has two non-interchangeable boundaries:
 - Once production migration starts, do not downgrade and do not restart old
   code against the new or partially changed schema. Restore the whole fresh
   `0058` database dump, previous application release, previous external env,
-  and old key together. A code-only, env-only, key-only, or database-only
-  rollback is forbidden. Migration `0061` removes legacy media/audio tables,
-  so an Alembic downgrade cannot reconstruct the pre-cutover bytes.
+  and both old roots together. Although the Runtime Data and Service Settings
+  `apply` phases are independent transactions, failure of either phase or any
+  later pre-activation step requires this same whole recovery point; retaining
+  only one committed domain is forbidden. A code-only, env-only, root-only, or
+  database-only rollback is forbidden. Migration `0061` removes legacy
+  media/audio tables, so an Alembic downgrade cannot reconstruct the
+  pre-cutover bytes.
 
 Before the activation commit point, every unrecovered failure leaves
 `/opt/npcink-ai-cloud/.cutover-failed` and retains `.deploy-lock` for operator
@@ -580,8 +627,14 @@ when preflight evidence proves multiple historical envelopes.
 Inventory and new-key-only `verify` do not receive any old root; only
 `dry-run` and `apply` may receive
 `NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET`.
-Normal runtime has no legacy or dual-read path; the migration-only tool remains
-available for controlled rekey operations.
+During the first P1-E06 Service Settings migration, the matching old-root
+exposure rule applies to `NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET` and
+`python -m app.dev.reencrypt_service_secrets`. That tool currently supports
+only raw Fernet to `sse.v1`; it does not accept an old `sse.v1` key ID. Any
+future `sse.v1` rotation requires a separately designed and approved contract.
+Normal runtime has no legacy or dual-read path. It accepts only active `rde.v1`
+and `sse.v1` envelopes and rejects raw Fernet. Migration-only tools remain
+offline maintenance boundaries.
 
 ## Worker Operations
 
@@ -693,9 +746,10 @@ Then verify:
 4. Restart `api`, `worker`, `callback-worker`, and `ops-worker`.
 5. Verify `/health/ready` and `/internal/service/observability/summary`.
 
-For a runtime-data encryption cutover, this general database-only procedure is
-insufficient. Restore the matched old backup, old application revision, and old
-key together as specified in **Runtime-data encryption key cutover**.
+For the P1-E06 dual-domain encryption cutover, this general database-only
+procedure is insufficient. Restore the matched old backup, old application revision,
+old external env, and both old roots together as specified in
+**P1-E06 persisted-encryption dual-domain cutover**.
 
 ## Provider Failover
 

@@ -84,8 +84,9 @@ Before promoting `master` to `production`:
 - rollback path is known before merging;
 - production secrets remain server-side or in GitHub Secrets, not committed.
 - the frontend does not inherit the backend `.env.deploy`; only its reviewed
-  runtime allowlist may be present, and runtime-data encryption secrets must
-  remain backend-only;
+  runtime allowlist may be present. Both Service Settings and Runtime Data
+  target root/key-ID pairs belong to `api`, `worker`, `callback-worker`, and
+  `ops-worker`; all four variables must remain absent from `frontend`;
 - the release payload contains no `.env.deploy`; each managed release resolves
   its backend environment from
   `${REMOTE_DIR}/.release-state/<release-name>/env.deploy`, with both state
@@ -94,9 +95,11 @@ Before promoting `master` to `production`:
   mutation, and the running old writers' actual Compose labels must match that
   project; an ordinary deploy must not silently rename the project and orphan
   old writers;
-- a runtime-data encryption key cutover has count-only inventory/dry-run/apply/
-  verify evidence, a checksum-verified and restore-tested backup, and the
-  matching old code and old key recovery point.
+- a P1-E06 encryption cutover has count-only inventory/dry-run/apply/verify
+  evidence for both domains and exactly 30 legacy rows: Runtime Data
+  `18 = 17 + 1` and Service Settings `12 = 8 + 4`. It also has a
+  checksum-verified and restore-tested backup plus the matching old code,
+  external env, and both old-root recovery point;
 - before P1-E06 starts, the independent production Edge hard gate proves active
   host NGINX, `nginx -t`, exact-host loopback-resolved HTTPS, stopped retired
   Caddy, and persisted `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`; it also records
@@ -225,12 +228,17 @@ second cleanup path.
 Docker Compose v2.27 `run` receives no CLI `--pull` option, and Runtime Compose
 sets `pull_policy: never` for every explicit-image service.
 
-`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` and
+The Service Settings pair
+`NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` /
+`NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID` and the Runtime Data pair
+`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` /
 `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` are exempt from ordinary
-configuration-only rotation. They may change only in a planned maintenance
-window. The first raw-ciphertext migration is executed only by
-`deploy/runtime-data-encryption-cutover.sh`; it must not be reconstructed as a
-manual sequence.
+configuration-only rotation. Each target root must be canonical padded
+URL-safe Base64 decoding to exactly 32 random bytes, and each domain has its own
+valid key ID. The pairs may change only in one planned stopped-writer
+maintenance window. The first dual-domain raw-ciphertext migration is executed
+only by `deploy/runtime-data-encryption-cutover.sh`; it must not be reconstructed
+as a manual sequence.
 
 Prepare the exact Linux/AMD64 archive with
 `deploy/deploy-to-ssh-host.sh --stage-only`. That mode rejects any env input,
@@ -249,9 +257,19 @@ mkdir, upload, or lock, and cleans incoming/partial release/lock artifacts on
 every later failure.
 
 The orchestrator must keep secrets outside the bundle, require a mode-`0600`
-three-key maintenance env, stop and fence public plus all four writer services,
-publish a fresh custom PostgreSQL backup and checksum, and pause in the same
-process for independent off-host acknowledgement. The operator must pull the
+maintenance env containing exactly six keys (two target root/key-ID pairs and
+the two corresponding old roots):
+
+- `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET`;
+- `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID`;
+- `NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET`;
+- `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET`;
+- `NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID`;
+- `NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET`.
+
+It then stops and fences public plus all four writer services, publishes a fresh
+custom PostgreSQL backup and checksum, and pauses in the same process for
+independent off-host acknowledgement. The operator must pull the
 backup and checksum with `scp`, verify SHA-256 on independent storage, then
 atomically publish a new mode-`0600`
 `p1_e06_off_host_backup_receipt.v1` receipt containing the matching checksum.
@@ -261,16 +279,23 @@ receipt SHA-256 in `off-host-receipt-verified.json`; terminal evidence carries
 that digest.
 
 Only after the receipt may the script perform an independent PostgreSQL 16
-restore, rehearse `0058 -> 0068`, and run
-`python -m app.dev.reencrypt_runtime_data` count-locked `inventory`, `dry-run`,
-`apply`, and new-key-only `verify` phases. Before production migration, it then
+restore and rehearse `0058 -> 0068`. In that same restore rehearsal and then in
+production it separately runs count-locked `inventory`, `dry-run`, `apply`, and
+new-key-only `verify` through `python -m app.dev.reencrypt_runtime_data` for 18
+rows and `python -m app.dev.reencrypt_service_secrets` for 12 rows. Each
+`apply` is an independent database transaction, but both applies and both
+verifies are one 30-row activation gate. The gate also freezes each sorted
+non-secret row-identifier set by canonical-JSON SHA-256; matching counts with a
+different identity set must fail closed. An intentional inventory change
+requires a newly reviewed digest, never a bypass. Before production migration, it then
 switches PostgreSQL and Redis to exact target image IDs and proves both healthy
 plus PostgreSQL still at `0058`. Production Docker Compose v2.27 one-off
 commands use `run --rm --no-deps -e VARIABLE_NAME`; they must never include a
 CLI `--pull`, secret values as arguments, or an env-file run option. Runtime
 Compose `pull_policy: never` and exact image-ID proof bind the command to the
-staged image. Inventory and new-key-only `verify` receive no old root; only
-`dry-run` and `apply` do. The first raw-ciphertext cutover omits `--old-key-id`.
+staged image. Inventory and new-key-only `verify` receive no old root; each old
+root is exposed only to its matching `dry-run` and `apply`. The first
+raw-ciphertext cutover omits `--old-key-id`.
 Future `rde.v1`
 rotations remain a separate manually approved procedure: pass each old key ID
 to `inventory`, then positionally pair every old root with the same explicit
@@ -284,8 +309,11 @@ tags, recreates PostgreSQL/Redis, and proves health plus `0058`; otherwise it
 proves the existing dependencies before restoring the old application. Once
 production migration begins and before activation commits, do not downgrade or
 restart old code. Restore the matched whole `0058` database backup, old
-application revision, old external env, and old key together; a database-only,
-code-only, env-only, or key-only rollback is forbidden.
+application revision, old external env, and both old roots together. Failure of
+either independently transactional `apply`, or of any later pre-activation
+step, requires that whole recovery point; retaining only one newly encrypted
+domain is forbidden. A database-only, code-only, env-only, or root-only
+rollback is forbidden.
 
 After activation commits, cleanup, private/global evidence, or unlock failure keeps the
 healthy new runtime and pointer. It must not stop writers, restore tags, or
@@ -296,8 +324,11 @@ mode-`0600` `cutover-result.json` with the persistent receipt digest, publish
 the global activation receipt bound to activation/result digests, release
 `.deploy-lock`, then mark complete. Success evidence must not coexist with
 unresolved failure evidence.
-Normal runtime has no legacy or dual-read path; retain the migration-only tool
-for future controlled rekeys.
+Normal runtime has no legacy or dual-read path. It accepts only active `rde.v1`
+and `sse.v1` envelopes and rejects raw Fernet. The Runtime Data tool supports a
+separately approved future `rde.v1` rotation. The Service Settings tool supports
+only the first raw-Fernet to `sse.v1` cutover; a later `sse.v1` rotation requires
+a new approved old-key-ID contract.
 
 If an exact green `production` revision changes only public static legal/policy
 content under `site/terms/*`, an operator may manually run the static terms fast

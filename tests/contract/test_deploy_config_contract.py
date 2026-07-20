@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -11,6 +12,11 @@ import pytest
 import yaml
 
 from app.core.config import Settings
+
+SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"s" * 32).decode("ascii")
+RUNTIME_DATA_ROOT = base64.urlsafe_b64encode(b"r" * 32).decode("ascii")
+SERVICE_SETTINGS_KEY_ID = "service-settings-v1"
+RUNTIME_DATA_KEY_ID = "runtime-data-v1"
 
 
 def _cloud_root() -> Path:
@@ -26,6 +32,7 @@ def _release_policy_fixture_root(tmp_path: Path, dependabot_text: str) -> Path:
         "AGENTS.md",
         ".env.example",
         "docker-compose.dev.yml",
+        "docker-compose.p5-b4-runtime-proof.yml",
         "docker-compose.prod.yml",
         "docker-compose.runtime.yml",
         "package.json",
@@ -209,6 +216,7 @@ def test_dev_compose_wrapper_layers_local_env_for_frontend_token(
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
         "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
         "NPCINK_CLOUD_PORTAL_JWT_SECRET",
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
@@ -557,17 +565,25 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
 
     encryption_secret = "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
     encryption_key_id = "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"
+    service_secret = "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"
+    service_key_id = "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"
     backend_services = ("api", "worker", "callback-worker", "ops-worker")
 
     assert env_example.count(f"{encryption_secret}=") == 1
     assert env_example.count(f"{encryption_key_id}=") == 1
+    assert env_example.count(f"{service_secret}=") == 1
+    assert env_example.count(f"{service_key_id}=") == 1
     assert deploy_smoke.count(encryption_secret) >= 2
     assert deploy_smoke.count(encryption_key_id) >= 2
+    assert deploy_smoke.count(service_secret) >= 2
+    assert deploy_smoke.count(service_key_id) >= 2
 
     for service in backend_services:
         prod_block = _compose_service_block(prod_compose, service)
         assert encryption_secret in prod_block
         assert encryption_key_id in prod_block
+        assert service_secret in prod_block
+        assert service_key_id in prod_block
 
         runtime_block = _compose_service_block(runtime_compose, service)
         assert "env_file:" in runtime_block
@@ -610,9 +626,10 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
     forbidden_frontend_secrets = (
         encryption_secret,
         encryption_key_id,
+        service_secret,
+        service_key_id,
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
-        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
         "NPCINK_CLOUD_PORTAL_JWT_SECRET",
         "NPCINK_CLOUD_DATABASE_URL",
     )
@@ -627,10 +644,10 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
     assert '- "${NPCINK_CLOUD_PORT:-8010}:8080"' not in prod_compose
 
     maintenance_sections = (
-        playbook.split("### Runtime-data encryption key cutover", 1)[1].split(
+        playbook.split("### P1-E06 persisted-encryption dual-domain cutover", 1)[1].split(
             "## Worker Operations", 1
         )[0],
-        deploy_guide.split("## One-Time Runtime-Data Encryption Maintenance", 1)[1],
+        deploy_guide.split("## One-Time P1-E06 Dual-Domain Encryption Maintenance", 1)[1],
     )
     for maintenance in maintenance_sections:
         normalized_maintenance = " ".join(maintenance.split())
@@ -652,7 +669,12 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         assert "--old-root-env NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" not in maintenance
         assert "first raw-ciphertext cutover" in maintenance.lower()
         assert "`--old-key-id`" in maintenance
-        assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root-secret>" in maintenance
+        assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-runtime-root>" in maintenance
+        assert (
+            "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-service-settings-root>"
+            in maintenance
+        )
+        assert "python -m app.dev.reencrypt_service_secrets" in maintenance
         assert "remote-load-and-up.sh" in maintenance
         assert "prepare-only" in maintenance
         assert ".deploy-lock" in maintenance
@@ -660,7 +682,7 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         assert "cutover-result.json" in maintenance
         assert "Migration `0061`" in maintenance
         assert "Normal runtime has no legacy or dual-read path" in maintenance
-        assert "migration-only" in maintenance
+        assert "migration-only" in maintenance.lower()
 
     assert '--stage-only)' in deploy_to_ssh
     assert '--host-python)' in deploy_to_ssh
@@ -705,6 +727,9 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
         "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
         "NPCINK_CLOUD_DATABASE_URL",
     ):
         assert f"-e {name}" in cutover
@@ -727,7 +752,9 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
     positions = [cutover.index(marker) for marker in ordered_cutover_markers]
     assert positions == sorted(positions)
 
-    assert "normal deploy/secret rotation must not directly rotate" in checklist
+    assert "normal deploy/secret rotation must not directly rotate" in " ".join(
+        checklist.split()
+    )
     assert "stage-only upload/verification was allowed to precede this gate" in checklist
     assert "operator-owned external Edge and TLS" in checklist
     assert 'Runtime Compose sets `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`' in checklist
@@ -735,7 +762,8 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
     assert "/usr/bin/python3.11" in checklist
     assert "supplies old key IDs" in checklist
     assert "normal runtime has no legacy/dual-read path" in checklist
-    assert "migration-only tool remains available" in checklist
+    assert "accepts only active `rde.v1` and `sse.v1` envelopes" in checklist
+    assert "rejects raw Fernet" in checklist
     assert encryption_secret in release_policy
     assert "application revision" in release_policy
     assert "run --rm --no-deps -e VARIABLE_NAME" in release_policy
@@ -872,13 +900,17 @@ def test_env_example_production_payload_validates_with_canonical_names(
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=": "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=" + ("b" * 32),
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET=": "NPCINK_CLOUD_ADMIN_SESSION_SECRET=" + ("a" * 32),
         "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=": (
-            "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=" + ("s" * 32)
+            "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=" + SERVICE_SETTINGS_ROOT
+        ),
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=": (
+            "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID="
+            + SERVICE_SETTINGS_KEY_ID
         ),
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=": (
-            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=" + ("r" * 32)
+            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=" + RUNTIME_DATA_ROOT
         ),
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=": (
-            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=runtime-data-v1"
+            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=" + RUNTIME_DATA_KEY_ID
         ),
         "NPCINK_CLOUD_PORTAL_JWT_SECRET=": "NPCINK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
         "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=": (
@@ -899,8 +931,10 @@ def test_env_example_production_payload_validates_with_canonical_names(
     assert settings.environment == "production"
     assert settings.admin_bootstrap_token == "b" * 32
     assert settings.admin_session_secret == "a" * 32
-    assert settings.runtime_data_encryption_secret == "r" * 32
-    assert settings.runtime_data_encryption_key_id == "runtime-data-v1"
+    assert settings.service_settings_secret == SERVICE_SETTINGS_ROOT
+    assert settings.service_settings_encryption_key_id == SERVICE_SETTINGS_KEY_ID
+    assert settings.runtime_data_encryption_secret == RUNTIME_DATA_ROOT
+    assert settings.runtime_data_encryption_key_id == RUNTIME_DATA_KEY_ID
     assert settings.portal_jwt_issuer == "npcink-ai-cloud"
     assert settings.portal_jwt_audience == "npcink-ai-cloud-portal"
     assert settings.ops_cadence_poll_seconds == 30
@@ -935,9 +969,13 @@ def test_settings_ignore_retired_admin_and_openai_aliases(monkeypatch) -> None:
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", "s" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", "r" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", "runtime-data-v1")
+    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", SERVICE_SETTINGS_ROOT)
+    monkeypatch.setenv(
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
+        SERVICE_SETTINGS_KEY_ID,
+    )
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", RUNTIME_DATA_ROOT)
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", RUNTIME_DATA_KEY_ID)
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
     monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")
@@ -962,9 +1000,13 @@ def test_retired_ops_secret_does_not_satisfy_production_config(monkeypatch) -> N
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
     monkeypatch.delenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", raising=False)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", "s" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", "r" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", "runtime-data-v1")
+    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", SERVICE_SETTINGS_ROOT)
+    monkeypatch.setenv(
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
+        SERVICE_SETTINGS_KEY_ID,
+    )
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", RUNTIME_DATA_ROOT)
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", RUNTIME_DATA_KEY_ID)
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
     monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")

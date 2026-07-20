@@ -145,6 +145,7 @@ require_file "deploy/remote-operational-ready.sh"
 require_file ".env.example"
 require_file "docker-compose.dev.yml"
 require_file "docker-compose.prod.yml"
+require_file "docker-compose.p5-b4-runtime-proof.yml"
 require_file "docker-compose.runtime.yml"
 require_file "scripts/cloud-deploy-bundle-smoke-flow.sh"
 require_file "scripts/dev-compose.sh"
@@ -192,6 +193,8 @@ require_marker "docs/cloud-production-release-policy-v1.md" "9aca0dc0"
 require_marker "docs/cloud-production-release-policy-v1.md" "c9f3036b"
 require_marker "docs/cloud-production-release-policy-v1.md" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
 require_marker "docs/cloud-production-release-policy-v1.md" "python -m app.dev.reencrypt_runtime_data"
+require_marker "docs/cloud-production-release-policy-v1.md" "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"
+require_marker "docs/cloud-production-release-policy-v1.md" "python -m app.dev.reencrypt_service_secrets"
 require_marker "docs/cloud-production-release-policy-v1.md" "deploy/runtime-data-encryption-cutover.sh"
 require_marker "docs/cloud-production-release-policy-v1.md" "deploy/deploy-to-ssh-host.sh --stage-only"
 require_marker "docs/cloud-production-release-policy-v1.md" "p1_e06_off_host_backup_receipt.v1"
@@ -253,6 +256,8 @@ require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" "staged_release=/absolute/re
 require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" "p1_e06_off_host_backup_receipt.v1"
 require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" "run --rm --no-deps -e VARIABLE_NAME"
 require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
+require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"
+require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" "python -m app.dev.reencrypt_service_secrets"
 require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" "--old-key-id"
 require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" '/opt/npcink-ai-cloud/.release-state/<release-name>/env.deploy'
 require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" '`--skip-frontend-image` preserves an existing frontend only'
@@ -278,10 +283,12 @@ require_marker "deploy/OPS_PLAYBOOK.md" "deploy/deploy-to-ssh-host.sh --stage-on
 require_marker "deploy/OPS_PLAYBOOK.md" "staged_release=/absolute/release-path"
 require_marker "deploy/OPS_PLAYBOOK.md" "p1_e06_off_host_backup_receipt.v1"
 require_marker "deploy/OPS_PLAYBOOK.md" "python -m app.dev.reencrypt_runtime_data verify"
+require_marker "deploy/OPS_PLAYBOOK.md" "python -m app.dev.reencrypt_service_secrets verify"
 require_marker "deploy/OPS_PLAYBOOK.md" "run --rm --no-deps"
 require_marker "deploy/OPS_PLAYBOOK.md" "-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
 require_marker "deploy/OPS_PLAYBOOK.md" "--confirm-maintenance-window"
 require_marker "deploy/OPS_PLAYBOOK.md" "--old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
+require_marker "deploy/OPS_PLAYBOOK.md" "--old-root-env NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"
 require_marker "deploy/OPS_PLAYBOOK.md" "--old-key-id"
 require_marker "deploy/OPS_PLAYBOOK.md" '.release-state/<release-name>/env.deploy'
 require_marker "deploy/OPS_PLAYBOOK.md" 'isolated process'
@@ -302,6 +309,8 @@ require_marker "deploy/OPS_PLAYBOOK.md" "activation-commit.json"
 require_marker "deploy/OPS_PLAYBOOK.md" "activation_committed_terminalization_incomplete"
 require_marker "deploy/OPS_PLAYBOOK.md" 'Pure `--stage-only` upload'
 require_marker "deploy/RELEASE_CHECKLIST.md" "new-key-only \`verify\`"
+require_marker "deploy/RELEASE_CHECKLIST.md" "python -m app.dev.reencrypt_service_secrets"
+require_marker "deploy/RELEASE_CHECKLIST.md" "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"
 require_marker "deploy/RELEASE_CHECKLIST.md" "deploy/runtime-data-encryption-cutover.sh"
 require_marker "deploy/RELEASE_CHECKLIST.md" "deploy/deploy-to-ssh-host.sh --stage-only --skip-bundle-build"
 require_marker "deploy/RELEASE_CHECKLIST.md" "staged_release=/absolute/release-path"
@@ -374,12 +383,26 @@ require_marker "scripts/dev-frontend-recover.sh" "COMPOSE_CMD=(bash scripts/dev-
 reject_marker "scripts/dev-frontend-recover.sh" "docker compose"
 require_marker ".env.example" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET="
 require_marker ".env.example" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID="
+require_marker ".env.example" "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET="
+require_marker ".env.example" "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID="
 require_marker "scripts/cloud-deploy-bundle-smoke-flow.sh" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
 require_marker "scripts/cloud-deploy-bundle-smoke-flow.sh" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"
+require_marker "scripts/cloud-deploy-bundle-smoke-flow.sh" "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"
+require_marker "scripts/cloud-deploy-bundle-smoke-flow.sh" "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"
+for ordinary_runtime_surface in \
+	docker-compose.prod.yml \
+	docker-compose.p5-b4-runtime-proof.yml \
+	.env.example \
+	scripts/cloud-deploy-bundle-smoke-flow.sh; do
+	reject_marker "${ordinary_runtime_surface}" "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
+	reject_marker "${ordinary_runtime_surface}" "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"
+done
 require_marker "docker-compose.prod.yml" '127.0.0.1:${NPCINK_CLOUD_PORT:-8010}:8080'
 for service in api worker callback-worker ops-worker; do
 	require_service_marker "docker-compose.prod.yml" "${service}" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
 	require_service_marker "docker-compose.prod.yml" "${service}" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"
+	require_service_marker "docker-compose.prod.yml" "${service}" "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"
+	require_service_marker "docker-compose.prod.yml" "${service}" "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"
 	require_service_marker "docker-compose.runtime.yml" "${service}" '${NPCINK_CLOUD_BACKEND_ENV_FILE:-.env.deploy}'
 done
 for service in postgres redis api frontend worker callback-worker ops-worker proxy; do
@@ -389,6 +412,8 @@ for compose_file in docker-compose.dev.yml docker-compose.prod.yml docker-compos
 	reject_service_marker "${compose_file}" "frontend" "env_file:"
 	reject_service_marker "${compose_file}" "frontend" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
 	reject_service_marker "${compose_file}" "frontend" "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"
+	reject_service_marker "${compose_file}" "frontend" "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"
+	reject_service_marker "${compose_file}" "frontend" "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"
 done
 
 require_marker "deploy/deploy-to-ssh-host.sh" '--stage-only'
@@ -415,11 +440,15 @@ require_marker_before "deploy/deploy-to-ssh-host.sh" \
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'CONTRACT="p1_e06_runtime_data_encryption_cutover.v1"'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'EXPECTED_SOURCE_REVISION="20260710_0058"'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'EXPECTED_TARGET_REVISION="20260717_0068"'
-require_marker "deploy/runtime-data-encryption-cutover.sh" 'EXPECTED_LEGACY_TOTAL=18'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'EXPECTED_RUNTIME_LEGACY_TOTAL=18'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'EXPECTED_SERVICE_LEGACY_TOTAL=12'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'EXPECTED_LEGACY_TOTAL=$((EXPECTED_RUNTIME_LEGACY_TOTAL + EXPECTED_SERVICE_LEGACY_TOTAL))'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'EXPECTED_RUNTIME_ROW_IDENTIFIERS_SHA256="675cce444dbbf801bc8ab7fb35b717888c878e062097e5fb7f2f5f110e5a764c"'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'EXPECTED_SERVICE_ROW_IDENTIFIERS_SHA256="e5010d2b0a2afe22b7729c4c2395c91001a078e282abee87f03a5f0289aa0bf6"'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'OFF_HOST_RECEIPT_CONTRACT="p1_e06_off_host_backup_receipt.v1"'
 require_marker "deploy/runtime-data-encryption-cutover.sh" '--off-host-receipt-timeout-seconds'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'I_ACKNOWLEDGE_THE_BACKUP_COPY_IS_OFF_HOST_AND_INDEPENDENT'
-require_marker "deploy/runtime-data-encryption-cutover.sh" 'I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_AND_OLD_KEY_TOGETHER'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_ENV_AND_BOTH_OLD_ROOTS_TOGETHER'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'CURRENT_EXTERNAL_EDGE_READY'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'CURRENT_STAGE="verify-certificate-renewal-readiness"'
@@ -434,6 +463,10 @@ require_marker "deploy/runtime-data-encryption-cutover.sh" 'p1_e06_independent_p
 require_marker "deploy/runtime-data-encryption-cutover.sh" '-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET'
 require_marker "deploy/runtime-data-encryption-cutover.sh" '-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID'
 require_marker "deploy/runtime-data-encryption-cutover.sh" '-e NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET'
+require_marker "deploy/runtime-data-encryption-cutover.sh" '-e NPCINK_CLOUD_SERVICE_SETTINGS_SECRET'
+require_marker "deploy/runtime-data-encryption-cutover.sh" '-e NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID'
+require_marker "deploy/runtime-data-encryption-cutover.sh" '-e NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'python -m app.dev.reencrypt_service_secrets'
 require_marker "deploy/runtime-data-encryption-cutover.sh" '-e NPCINK_CLOUD_DATABASE_URL'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'run_exact_api_one_off "${env_flags[@]}" --'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'whole_database_restore_required_for_rollback'

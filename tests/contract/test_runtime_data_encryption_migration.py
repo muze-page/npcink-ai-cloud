@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -39,6 +38,19 @@ from app.domain.runtime.runtime_data_reencryption import (
 
 LEGACY_ROOT = "legacy-admin-session-root-secret-at-least-32b"
 OLD_RDE_KEY_ID = "runtime-key-2026-06"
+CURRENT_ROOT = base64.urlsafe_b64encode(b"r" * 32).decode("ascii")
+LEGACY_FERNET_KEYS_BY_PURPOSE = {
+    SITE_API_KEY_PURPOSE: (
+        "41136455a95d4be5"
+        "2ce1ff60b5932820"
+        "a2e246ad8165864c"
+        "fd2ce663c5276bc1"
+    ),
+    RUNTIME_CALLBACK_PURPOSE: "e0c1db7ee10fe2bc64e43d24cf33997d53d625528463300e97c24eee7b287e9b",
+    ADDON_PAYLOAD_PURPOSE: "ff8272734bf9162fda3dbab73916ad19f2c4dbd04aaf1256b6ef1671a7eb1e69",
+    PORTAL_IDEMPOTENCY_PURPOSE: "ecf7e3828c7c796ffb05850ebce77a452e5a626221726c53b7afacd9fbaa0169",
+    RUN_INPUT_PURPOSE: "9a267e2b97a7b0240c98448894dc0e9336df6108483b917c8adb5fa35b866427",
+}
 
 
 @pytest.fixture
@@ -56,13 +68,13 @@ def _settings(database_url: str) -> Settings:
         _env_file=None,
         environment="test",
         database_url=database_url,
-        runtime_data_encryption_secret="new-runtime-data-root-secret-at-least-32b",
+        runtime_data_encryption_secret=CURRENT_ROOT,
         runtime_data_encryption_key_id="runtime-key-2026-07",
     )
 
 
 def _legacy_ciphertext(plaintext: bytes, *, purpose: str) -> str:
-    derived_key = hashlib.sha256(f"{purpose}:{LEGACY_ROOT}".encode()).digest()
+    derived_key = bytes.fromhex(LEGACY_FERNET_KEYS_BY_PURPOSE[purpose])
     return Fernet(base64.urlsafe_b64encode(derived_key)).encrypt(plaintext).decode("utf-8")
 
 
@@ -434,7 +446,7 @@ def test_verify_rejects_wrong_key_id_and_legacy_ciphertext(migration_database: s
         _env_file=None,
         environment="test",
         database_url=migration_database,
-        runtime_data_encryption_secret="new-runtime-data-root-secret-at-least-32b",
+        runtime_data_encryption_secret=CURRENT_ROOT,
         runtime_data_encryption_key_id="wrong-key-id",
     )
     with pytest.raises(RuntimeDataReencryptionError, match="unsupported runtime data envelope"):
@@ -486,7 +498,7 @@ def test_cli_pairs_old_key_id_with_explicit_old_root_environment(
     monkeypatch.setenv("NPCINK_CLOUD_DATABASE_URL", migration_database)
     monkeypatch.setenv(
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
-        "new-runtime-data-root-secret-at-least-32b",
+        CURRENT_ROOT,
     )
     monkeypatch.setenv(
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",

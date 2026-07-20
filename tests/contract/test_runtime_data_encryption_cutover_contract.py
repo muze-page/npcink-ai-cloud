@@ -17,13 +17,87 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "deploy" / "runtime-data-encryption-cutover.sh"
 
 OFF_HOST_ACK = "I_ACKNOWLEDGE_THE_BACKUP_COPY_IS_OFF_HOST_AND_INDEPENDENT"
-RESTORE_ACK = "I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_AND_OLD_KEY_TOGETHER"
+RESTORE_ACK = (
+    "I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_ENV_"
+    "AND_BOTH_OLD_ROOTS_TOGETHER"
+)
 CUTOVER_ACK = "I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER"
-TARGET_SECRET = "target-root-secret-0123456789-ABCDEFGHIJ"
-OLD_SECRET = "legacy-root-secret-0123456789-ABCDEFGHIJ"  # gitleaks:allow
-REPLACEMENT_TARGET_SECRET = "replacement-root-secret-0123456789-ABCDEFGHIJ"  # gitleaks:allow
-REPLACEMENT_OLD_SECRET = "replacement-old-secret-0123456789-ABCDEFGHIJ"
-REPLACEMENT_KEY_ID = "p1-e06-replacement-b"  # gitleaks:allow
+RUNTIME_TARGET_SECRET = "cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI="  # gitleaks:allow
+SERVICE_TARGET_SECRET = "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M="  # gitleaks:allow
+RUNTIME_TARGET_KEY_ID = "p1-e06-runtime-target"
+SERVICE_TARGET_KEY_ID = "p1-e06-service-target"
+RUNTIME_OLD_SECRET = "legacy-runtime-root-secret-0123456789-ABCDEFGHIJ"  # gitleaks:allow
+SERVICE_OLD_SECRET = "legacy-service-root-secret-0123456789-ABCDEFGHIJ"  # gitleaks:allow
+REPLACEMENT_RUNTIME_TARGET_SECRET = (
+    "dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXU="  # gitleaks:allow
+)
+REPLACEMENT_SERVICE_TARGET_SECRET = (
+    "dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnY="  # gitleaks:allow
+)
+REPLACEMENT_RUNTIME_OLD_SECRET = (
+    "replacement-runtime-old-secret-0123456789-ABCDEFGHIJ"  # gitleaks:allow
+)
+REPLACEMENT_SERVICE_OLD_SECRET = (
+    "replacement-service-old-secret-0123456789-ABCDEFGHIJ"  # gitleaks:allow
+)
+REPLACEMENT_RUNTIME_KEY_ID = "p1-e06-runtime-replacement-b"
+REPLACEMENT_SERVICE_KEY_ID = "p1-e06-service-replacement-b"
+PRODUCTION_RUNTIME_ROW_IDENTIFIERS = tuple(
+    sorted(
+        (
+            "addon_connection_payload:wacs_8239a93ef5ae4eef91959346e2b5f382",
+            "site_api_key:key_00bf64e1bbbe4eb68035b8f7627b54fa",  # gitleaks:allow
+            "site_api_key:key_default",
+            "site_api_key:key_release_cookie_20260711015023",
+            "site_api_key:key_release_final_20260711013147",
+            "site_api_key:key_release_local_20260711012801",
+            "site_api_key:key_release_local_20260711012851",
+            "site_api_key:key_release_smoke_20260708103911",
+            "site_api_key:key_release_smoke_20260710163858",
+            "site_api_key:key_release_smoke_20260710170234",
+            "site_api_key:key_release_smoke_20260710170741",
+            "site_api_key:key_release_smoke_20260710171254",
+            "site_api_key:key_release_smoke_20260710171746",
+            "site_api_key:key_release_smoke_20260710173411",
+            "site_api_key:key_release_smoke_20260710182706",
+            "site_api_key:key_release_smoke_20260711011455",
+            "site_api_key:key_release_validation_1783676489",
+            "site_api_key:key_release_validation_1783676542",
+        )
+    )
+)
+PRODUCTION_RUNTIME_IDENTITY_SHA256 = hashlib.sha256(
+    json.dumps(
+        PRODUCTION_RUNTIME_ROW_IDENTIFIERS,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+).hexdigest()
+PRODUCTION_SERVICE_ROW_IDENTIFIERS = tuple(
+    sorted(
+        (
+            "provider_connection_secret:deepseek",
+            "provider_connection_secret:image_pexels",
+            "provider_connection_secret:image_pixabay",
+            "provider_connection_secret:image_unsplash",
+            "provider_connection_secret:openai_compatible",
+            "provider_connection_secret:search_apify",
+            "provider_connection_secret:search_tavily",
+            "provider_connection_secret:search_zhihu",
+            "service_setting_secret:payment_alipay:private_key",
+            "service_setting_secret:payment_alipay:public_key",
+            "service_setting_secret:portal_email:smtp_password",
+            "service_setting_secret:portal_qq_login:client_secret",
+        )
+    )
+)
+PRODUCTION_SERVICE_IDENTITY_SHA256 = hashlib.sha256(
+    json.dumps(
+        PRODUCTION_SERVICE_ROW_IDENTIFIERS,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+).hexdigest()
 OLD_API_IMAGE_ID = "sha256:" + "a" * 64
 NEW_API_IMAGE_ID = "sha256:" + "b" * 64
 OLD_POSTGRES_IMAGE_ID = "sha256:" + "c" * 64
@@ -90,6 +164,24 @@ def _make_fixture(tmp_path: Path) -> CutoverFixture:
     previous_state.chmod(0o700)
     (state_dir / "host-python").write_text(
         str(Path(sys.executable).resolve()) + "\n",
+        encoding="utf-8",
+    )
+    (state_dir / "production-service-row-identifiers.json").write_text(
+        json.dumps(
+            PRODUCTION_SERVICE_ROW_IDENTIFIERS,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (state_dir / "production-runtime-row-identifiers.json").write_text(
+        json.dumps(
+            PRODUCTION_RUNTIME_ROW_IDENTIFIERS,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -225,6 +317,7 @@ systemctl reload nginx
                 f"NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH={renewal_hook_path}",
                 "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=test-internal-token",
                 "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=stale-legacy-root-secret-0123456789",  # noqa: E501  # gitleaks:allow
+                "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=stale-service-root-secret-0123456789",  # noqa: E501  # gitleaks:allow
             )
         )
         + "\n",
@@ -236,9 +329,12 @@ systemctl reload nginx
     maintenance_env.write_text(
         "\n".join(
             (
-                f"NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET={TARGET_SECRET}",
-                "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=p1-e06-target",
-                f"NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET={OLD_SECRET}",
+                f"NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET={RUNTIME_TARGET_SECRET}",
+                f"NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID={RUNTIME_TARGET_KEY_ID}",
+                f"NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET={RUNTIME_OLD_SECRET}",
+                f"NPCINK_CLOUD_SERVICE_SETTINGS_SECRET={SERVICE_TARGET_SECRET}",
+                f"NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID={SERVICE_TARGET_KEY_ID}",
+                f"NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET={SERVICE_OLD_SECRET}",
             )
         )
         + "\n",
@@ -800,6 +896,8 @@ def _fake_docker_source() -> str:
     for secret_value in \
         "${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET:-}" \
         "${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET:-}" \
+        "${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-}" \
+        "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET:-}" \
         "${NPCINK_CLOUD_DATABASE_URL:-}"; do
         if [ -n "${secret_value}" ] && [[ "${joined}" = *"${secret_value}"* ]]; then
             exit 97
@@ -1018,6 +1116,8 @@ def _fake_docker_source() -> str:
                     exit 42
                 fi
                 if [[ "${joined}" = *' alembic upgrade head '* ]]; then
+                    [ "${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET+x}" != "x" ] || exit 89
+                    [ "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET+x}" != "x" ] || exit 90
                     if [ "${NPCINK_CLOUD_DATABASE_URL+x}" = "x" ]; then
                         if [ "${fail_at}" = "restore_migrate" ]; then
                             printf 'failure:restore-migrate\n' >>"${EVENTS}"
@@ -1038,34 +1138,105 @@ def _fake_docker_source() -> str:
                     esac
                 done
                 [ -n "${mode}" ] || exit 87
+                family=""
+                if [[ "${joined}" = *' app.dev.reencrypt_runtime_data '* ]]; then
+                    family=runtime
+                elif [[ "${joined}" = *' app.dev.reencrypt_service_secrets '* ]]; then
+                    family=service
+                else
+                    exit 88
+                fi
+                case "${family}:${mode}" in
+                    runtime:dry-run|runtime:apply)
+                        [ "${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET+x}" = "x" ] || exit 91
+                        [ "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET+x}" != "x" ] || exit 92
+                        ;;
+                    service:dry-run|service:apply)
+                        [ "${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET+x}" != "x" ] || exit 93
+                        [ "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET+x}" = "x" ] || exit 94
+                        ;;
+                    runtime:inventory|runtime:verify|service:inventory|service:verify)
+                        [ "${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET+x}" != "x" ] || exit 95
+                        [ "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET+x}" != "x" ] || exit 96
+                        ;;
+                    *) exit 97 ;;
+                esac
                 location=production
                 if [ "${NPCINK_CLOUD_DATABASE_URL+x}" = "x" ]; then
                     location=restore
                 fi
-                if [ "${fail_at}" = "production_inventory" ] && \
-                    [ "${location}" = "production" ] && [ "${mode}" = "inventory" ]; then
-                    printf 'failure:production-inventory-after-migration\n' >>"${EVENTS}"
+                if [ "${fail_at}" = "production_service_inventory" ] && \
+                    [ "${location}" = "production" ] && [ "${family}" = "service" ] && \
+                    [ "${mode}" = "inventory" ]; then
+                    printf 'failure:production-service-inventory-after-migration\n' >>"${EVENTS}"
                     exit 43
                 fi
                 if [ "${fail_at}" = "post_migration_stop" ] && \
-                    [ "${location}" = "production" ] && [ "${mode}" = "inventory" ]; then
+                    [ "${location}" = "production" ] && [ "${family}" = "runtime" ] && \
+                    [ "${mode}" = "inventory" ]; then
                     rm -f "${STATE}/writers-stopped"
                     : >"${STATE}/writers-reappeared"
                     printf 'failure:writer-reappeared-after-migration\n' >>"${EVENTS}"
                     exit 43
                 fi
-                printf 'runtime:%s:%s\n' "${location}" "${mode}" >>"${EVENTS}"
-                "${HOST_PYTHON}" - "${mode}" <<'PY'
+                printf '%s:%s:%s\n' "${family}" "${location}" "${mode}" >>"${EVENTS}"
+                if [ "${fail_at}" = "production_service_identity_drift" ] && \
+                    [ "${location}" = "production" ] && [ "${family}" = "service" ] && \
+                    [ "${mode}" = "inventory" ]; then
+                    printf 'injection:production-service-identity-drift\n' >>"${EVENTS}"
+                fi
+                if [ "${fail_at}" = "production_service_apply" ] && \
+                    [ "${location}" = "production" ] && [ "${family}" = "service" ] && \
+                    [ "${mode}" = "apply" ]; then
+                    printf 'failure:production-service-apply-after-runtime-apply\n' >>"${EVENTS}"
+                    exit 43
+                fi
+                "${HOST_PYTHON}" - \
+                    "${family}" \
+                    "${mode}" \
+                    "${location}" \
+                    "${fail_at}" \
+                    "${STATE}" <<'PY'
 import json
 import sys
+from pathlib import Path
 
-mode = sys.argv[1]
+family = sys.argv[1]
+mode = sys.argv[2]
+location = sys.argv[3]
+fail_at = sys.argv[4]
+state_path = Path(sys.argv[5])
+totals = {"runtime": 18, "service": 12}
+total = totals[family]
 values = {
-    "inventory": (18, 18, 0, 0, 18),
-    "dry-run": (18, 18, 0, 0, 18),
-    "apply": (18, 0, 18, 18, 18),
-    "verify": (18, 0, 18, 0, 0),
+    "inventory": (total, total, 0, 0, total),
+    "dry-run": (total, total, 0, 0, total),
+    "apply": (total, 0, total, total, total),
+    "verify": (total, 0, total, 0, 0),
 }[mode]
+counts_by_family = {
+    "runtime": {
+        "site_api_key": {"total": 17},
+        "site_runtime_callback": {"total": 0},
+        "addon_connection_payload": {"total": 1},
+        "portal_idempotency_response": {"total": 0},
+        "runtime_execution_input": {"total": 0},
+    },
+    "service": {
+        "provider_connection_secret": {"total": 8},
+        "service_setting_secret": {"total": 4},
+    },
+}
+identity_path = state_path / f"production-{family}-row-identifiers.json"
+row_identifiers = json.loads(identity_path.read_text(encoding="utf-8"))
+if (
+    fail_at == "production_service_identity_drift"
+    and location == "production"
+    and family == "service"
+):
+    row_identifiers[-1] = "service_setting_secret:portal_qq_login:wrong_entry"
+if len(row_identifiers) != total or len(set(row_identifiers)) != total:
+    raise SystemExit(98)
 payload = {
     "mode": mode,
     "total": values[0],
@@ -1073,14 +1244,8 @@ payload = {
     "current": values[2],
     "migrated": values[3],
     "would_migrate": values[4],
-    "counts_by_kind": {
-        "site_api_key": {"total": 17},
-        "site_runtime_callback": {"total": 0},
-        "addon_connection_payload": {"total": 1},
-        "portal_idempotency_response": {"total": 0},
-        "runtime_execution_input": {"total": 0},
-    },
-    "row_identifiers": [f"row-{index}" for index in range(18)],
+    "counts_by_kind": counts_by_family[family],
+    "row_identifiers": row_identifiers,
 }
 print(json.dumps(payload, sort_keys=True))
 PY
@@ -1198,15 +1363,19 @@ PY
                                 printf 'data:target-services-recreated\n' >>"${EVENTS}"
                                 if [ "${fail_at}" = "maintenance_env_replace" ]; then
                                     replacement="${FIXTURE_ROOT}/.maintenance-env-b.$$"
-                                    s='replacement-root-secret-0123456789-ABCDEFGHIJ'
-                                    k='p1-e06-replacement-b'
                                     {
                                         printf '%s\n' \
-                                            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=${s}"
+                                            'NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXU='
                                         printf '%s\n' \
-                                            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=${k}"
+                                            'NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=p1-e06-runtime-replacement-b'
                                         printf '%s\n' \
-                                            'NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=replacement-old-secret-0123456789-ABCDEFGHIJ'
+                                            'NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=replacement-runtime-old-secret-0123456789-ABCDEFGHIJ'
+                                        printf '%s\n' \
+                                            'NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnY='
+                                        printf '%s\n' \
+                                            'NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=p1-e06-service-replacement-b'
+                                        printf '%s\n' \
+                                            'NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=replacement-service-old-secret-0123456789-ABCDEFGHIJ'
                                     } >"${replacement}"
                                     chmod 0600 "${replacement}"
                                     mv -f "${replacement}" \
@@ -1272,6 +1441,8 @@ PY
                     [[ "${action_joined}" = *' api -c import time; time.sleep(900) '* ]] || exit 89
                     has_env_name NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET "$@" || exit 82
                     has_env_name NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID "$@" || exit 83
+                    has_env_name NPCINK_CLOUD_SERVICE_SETTINGS_SECRET "$@" || exit 91
+                    has_env_name NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID "$@" || exit 92
                     if [ "${NPCINK_CLOUD_DATABASE_URL+x}" = "x" ]; then
                         has_env_name NPCINK_CLOUD_DATABASE_URL "$@" || exit 85
                     else
@@ -1283,6 +1454,17 @@ PY
                         ! has_env_name NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET "$@" || exit 77
                         ! grep -q '^NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=' \
                             "${compose_env_file}" || exit 74
+                    fi
+                    if [ "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET+x}" = "x" ]; then
+                        has_env_name NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET "$@" || exit 93
+                    else
+                        ! has_env_name NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET "$@" || exit 78
+                        ! grep -q '^NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=' \
+                            "${compose_env_file}" || exit 79
+                    fi
+                    if [ "${NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET+x}" = "x" ] && \
+                        [ "${NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET+x}" = "x" ]; then
+                        exit 76
                     fi
                     container_name=""
                     previous_token=""
@@ -1445,6 +1627,29 @@ def _read_events(fixture: CutoverFixture) -> list[str]:
     return fixture.events.read_text(encoding="utf-8").splitlines()
 
 
+def _one_off_exec_payloads(fixture: CutoverFixture) -> list[tuple[str, ...]]:
+    payloads: list[tuple[str, ...]] = []
+    for line in fixture.docker_calls.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("docker|exec|-i|npcink-p1e06-api-proof-"):
+            continue
+        fields = line.split("|")
+        assert fields[:3] == ["docker", "exec", "-i"]
+        assert fields[3].startswith("npcink-p1e06-api-proof-")
+        payloads.append(tuple(fields[4:]))
+    return payloads
+
+
+def _row_identity_sha256(row_identifiers: object) -> str:
+    assert isinstance(row_identifiers, list)
+    assert all(isinstance(identifier, str) for identifier in row_identifiers)
+    canonical = json.dumps(
+        sorted(row_identifiers),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _global_activation_receipt(fixture: CutoverFixture) -> Path:
     return fixture.remote / ".release-state" / "p1-e06-activation.json"
 
@@ -1474,6 +1679,8 @@ def test_cutover_entry_is_executable_valid_bash_and_help_is_non_mutating() -> No
 
     assert "one-time, fail-closed P1-E06" in completed.stdout
     assert "--off-host-receipt" in completed.stdout
+    assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root>" in completed.stdout
+    assert "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-root>" in completed.stdout
     assert "filesystem device numbers" in completed.stdout
     assert "never restarts old code after" in completed.stdout
     assert "migration starts" in completed.stdout
@@ -1509,10 +1716,28 @@ def test_static_contract_is_fail_closed_and_compose_v227_compatible() -> None:
     assert "docker inspect --format '{{.Image}}'" in source
     assert 'docker exec -i "${API_ONE_OFF_CONTAINER}" "${payload[@]}" </dev/null &' in source
     assert "docker image inspect --format '{{.Id}}' npcink-ai-cloud-api:prod" in source
+    assert "EXPECTED_RUNTIME_LEGACY_TOTAL=18" in source
+    assert "EXPECTED_SERVICE_LEGACY_TOTAL=12" in source
+    assert "EXPECTED_LEGACY_TOTAL=$((EXPECTED_RUNTIME_LEGACY_TOTAL +" in source
+    assert "if set(values) != allowed:" in source
+    assert 'base64.urlsafe_b64encode(decoded).decode("ascii") != value' in source
+    assert '"NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"' in source
+    assert '"NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"' in source
+    assert '"NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"' in source
+    assert '"NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"' in source
     assert "-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET" in source
     assert "-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID" in source
     assert "-e NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET" in source
+    assert "-e NPCINK_CLOUD_SERVICE_SETTINGS_SECRET" in source
+    assert "-e NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID" in source
+    assert "-e NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET" in source
     assert "-e NPCINK_CLOUD_DATABASE_URL" in source
+    assert "python -m app.dev.reencrypt_runtime_data" in source
+    assert "python -m app.dev.reencrypt_service_secrets" in source
+    assert source.count("run_api_evidence restore") == 4
+    assert source.count("run_service_api_evidence restore") == 4
+    assert source.count("run_api_evidence production") == 4
+    assert source.count("run_service_api_evidence production") == 4
     assert 'NPCINK_CLOUD_RELEASE_TOOL_PYTHON="${HOST_PYTHON}"' in source
     assert "docker run -d \\\n\t--pull=never" in source
     assert '"${RESTORE_POSTGRES_IMAGE_ID}"' in source
@@ -1546,6 +1771,71 @@ def test_static_contract_is_fail_closed_and_compose_v227_compatible() -> None:
     assert source.index(
         'publish_fresh_file "${GLOBAL_ACTIVATION_RECEIPT_TMP}" "${GLOBAL_ACTIVATION_RECEIPT}"'
     ) < source.index('rmdir "${DEPLOY_LOCK_DIR}"')
+
+
+def test_maintenance_env_requires_exact_independent_canonical_dual_domain_values(
+    tmp_path: Path,
+) -> None:
+    base_values = {
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET": RUNTIME_TARGET_SECRET,
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID": RUNTIME_TARGET_KEY_ID,
+        "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET": RUNTIME_OLD_SECRET,
+        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET": SERVICE_TARGET_SECRET,
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID": SERVICE_TARGET_KEY_ID,
+        "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET": SERVICE_OLD_SECRET,
+    }
+    invalid_variants = {
+        "missing-service-old": {
+            key: value
+            for key, value in base_values.items()
+            if key != "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"
+        },
+        "unexpected-seventh-key": base_values | {"NPCINK_CLOUD_UNEXPECTED": "rejected"},
+        "noncanonical-runtime-root": base_values
+        | {
+            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET": (
+                RUNTIME_TARGET_SECRET.rstrip("=")
+            )
+        },
+        "shared-target-root": base_values
+        | {"NPCINK_CLOUD_SERVICE_SETTINGS_SECRET": RUNTIME_TARGET_SECRET},
+        "runtime-target-reused-as-service-old": base_values
+        | {"NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET": RUNTIME_TARGET_SECRET},
+        "service-target-reused-as-runtime-old": base_values
+        | {"NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET": SERVICE_TARGET_SECRET},
+        "cross-domain-target-old-roots-swapped": base_values
+        | {
+            "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET": SERVICE_TARGET_SECRET,
+            "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET": RUNTIME_TARGET_SECRET,
+        },
+        "shared-key-id": base_values
+        | {"NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID": RUNTIME_TARGET_KEY_ID},
+    }
+
+    for case_name, values in invalid_variants.items():
+        fixture = _make_fixture(tmp_path / case_name)
+        fixture.maintenance_env.write_text(
+            "\n".join(f"{key}={value}" for key, value in values.items()) + "\n",
+            encoding="utf-8",
+        )
+        fixture.maintenance_env.chmod(0o600)
+
+        completed = subprocess.run(
+            _cutover_command(fixture),
+            cwd=ROOT,
+            env=_cutover_environment(fixture),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert completed.returncode != 0
+        assert "maintenance env contract is invalid" in completed.stderr
+        assert not (fixture.state / "image-prepared").exists()
+        assert not fixture.handoff.exists()
+        combined_output = completed.stdout + completed.stderr
+        assert all(secret not in combined_output for secret in values.values())
 
 
 def test_stale_certificate_evidence_fails_before_image_prepare(tmp_path: Path) -> None:
@@ -1598,7 +1888,9 @@ def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_ev
     assert payload["independent_postgres16_restore_verified"] is True
     assert payload["exact_data_service_images_activated"] is True
     assert payload["activation_committed"] is True
-    assert payload["legacy_rows_migrated"] == 18
+    assert payload["runtime_legacy_rows_migrated"] == 18
+    assert payload["service_legacy_rows_migrated"] == 12
+    assert payload["legacy_rows_migrated"] == 30
     assert payload["off_host_receipt"] == str(fixture.receipt)
     global_receipt_path = _global_activation_receipt(fixture)
     assert global_receipt_path.is_file()
@@ -1610,7 +1902,9 @@ def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_ev
         "status": "passed",
         "source_revision": "20260710_0058",
         "target_revision": "20260717_0068",
-        "legacy_rows_migrated": 18,
+        "runtime_legacy_rows_migrated": 18,
+        "service_legacy_rows_migrated": 12,
+        "legacy_rows_migrated": 30,
         "active_release": str(fixture.staged_release),
         "activation_commit_sha256": hashlib.sha256(
             (fixture.evidence / "activation-commit.json").read_bytes()
@@ -1629,6 +1923,15 @@ def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_ev
     )
     assert activation["status"] == "committed"
     assert activation["database_revision"] == "20260717_0068"
+    assert activation["runtime_legacy_rows_migrated"] == 18
+    assert activation["service_legacy_rows_migrated"] == 12
+    assert activation["legacy_rows_migrated"] == 30
+    restore_proof = json.loads(
+        (fixture.evidence / "restore-proof.json").read_text(encoding="utf-8")
+    )
+    assert restore_proof["runtime_legacy_rows"] == 18
+    assert restore_proof["service_legacy_rows"] == 12
+    assert restore_proof["legacy_rows"] == 30
     assert stat.S_IMODE(result_path.stat().st_mode) == 0o600
     assert fixture.backup.is_file()
     assert stat.S_IMODE(fixture.backup.stat().st_mode) == 0o400
@@ -1643,8 +1946,29 @@ def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_ev
     current_env = (fixture.remote / ".release-state" / "release-old" / "env.deploy").read_text(
         encoding="utf-8"
     )
+    maintenance_values = dict(
+        line.split("=", 1)
+        for line in fixture.maintenance_env.read_text(encoding="utf-8").splitlines()
+    )
+    assert maintenance_values == {
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET": RUNTIME_TARGET_SECRET,
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID": RUNTIME_TARGET_KEY_ID,
+        "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET": RUNTIME_OLD_SECRET,
+        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET": SERVICE_TARGET_SECRET,
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID": SERVICE_TARGET_KEY_ID,
+        "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET": SERVICE_OLD_SECRET,
+    }
     assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=" not in staged_env
+    assert "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=" not in staged_env
     assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=" in current_env
+    assert "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=" in current_env
+    assert f"NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET={RUNTIME_TARGET_SECRET}" in staged_env
+    assert f"NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID={RUNTIME_TARGET_KEY_ID}" in staged_env
+    assert f"NPCINK_CLOUD_SERVICE_SETTINGS_SECRET={SERVICE_TARGET_SECRET}" in staged_env
+    assert (
+        f"NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID={SERVICE_TARGET_KEY_ID}"
+        in staged_env
+    )
     data_image_evidence = (fixture.evidence / "new-data-service-image-ids.tsv").read_text(
         encoding="utf-8"
     )
@@ -1660,7 +1984,12 @@ def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_ev
     assert events.index("migration:independent-restore-to-0068") < events.index(
         "runtime:restore:inventory"
     )
-    assert events.index("runtime:restore:verify") < events.index("data:target-services-recreated")
+    assert events.index("runtime:restore:inventory") < events.index(
+        "service:restore:inventory"
+    )
+    assert events.index("service:restore:verify") < events.index(
+        "data:target-services-recreated"
+    )
     assert events.index("data:target-services-recreated") < events.index(
         "migration:production-to-0068"
     )
@@ -1677,13 +2006,17 @@ def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_ev
     assert "manifest:role-image-id:external_redis" in events
     assert "failure:default-python3-used" not in events
     assert "failure:release-helper-host-python" not in events
+    for location in ("restore", "production"):
+        for family in ("runtime", "service"):
+            for mode in ("inventory", "dry-run", "apply", "verify"):
+                assert events.count(f"{family}:{location}:{mode}") == 1
 
     docker_calls = fixture.docker_calls.read_text(encoding="utf-8")
     run_calls = [
         line for line in docker_calls.splitlines() if "|compose|" in line and "|run|" in line
     ]
     assert run_calls
-    assert len(run_calls) == 10
+    assert len(run_calls) == 18
     assert all("--env-from-file" not in line for line in run_calls)
     assert all("|--pull|" not in line for line in run_calls)
     assert all("|-d|" in line for line in run_calls)
@@ -1692,23 +2025,106 @@ def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_ev
     assert all("|api|-c|import time; time.sleep(900)" in line for line in run_calls)
     assert all("|alembic|" not in line for line in run_calls)
     assert all("|reencrypt_runtime_data|" not in line for line in run_calls)
+    assert all("|reencrypt_service_secrets|" not in line for line in run_calls)
     assert all("|-e|NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET" in line for line in run_calls)
     assert all("|-e|NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID" in line for line in run_calls)
+    assert all("|-e|NPCINK_CLOUD_SERVICE_SETTINGS_SECRET" in line for line in run_calls)
+    assert all(
+        "|-e|NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID" in line
+        for line in run_calls
+    )
     assert sum("|-e|NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET" in line for line in run_calls) == 4
-    assert sum("|-e|NPCINK_CLOUD_DATABASE_URL" in line for line in run_calls) == 5
-    one_off_exec_calls = [
-        line
-        for line in docker_calls.splitlines()
-        if line.startswith("docker|exec|-i|npcink-p1e06-api-proof-")
+    assert (
+        sum(
+            "|-e|NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET" in line
+            for line in run_calls
+        )
+        == 4
+    )
+    assert all(
+        not (
+            "|-e|NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET" in line
+            and "|-e|NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET" in line
+        )
+        for line in run_calls
+    )
+    assert sum("|-e|NPCINK_CLOUD_DATABASE_URL" in line for line in run_calls) == 9
+    runtime_module = ("python", "-m", "app.dev.reencrypt_runtime_data")
+    service_module = ("python", "-m", "app.dev.reencrypt_service_secrets")
+    encryption_payloads = [
+        runtime_module + ("inventory",),
+        service_module + ("inventory",),
+        runtime_module
+        + (
+            "dry-run",
+            "--old-root-env",
+            "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+        ),
+        service_module
+        + (
+            "dry-run",
+            "--old-root-env",
+            "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
+        ),
+        runtime_module
+        + (
+            "apply",
+            "--confirm-maintenance-window",
+            "--old-root-env",
+            "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+        ),
+        service_module
+        + (
+            "apply",
+            "--confirm-maintenance-window",
+            "--old-root-env",
+            "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
+        ),
+        runtime_module + ("verify",),
+        service_module + ("verify",),
     ]
-    assert len(one_off_exec_calls) == 10
-    assert sum("|alembic|upgrade|head" in line for line in one_off_exec_calls) == 2
-    assert sum("|app.dev.reencrypt_runtime_data" in line for line in one_off_exec_calls) == 8
-    assert events.count("oneoff:container-created") == 10
-    assert events.count("oneoff:container-removed") == 10
-    assert TARGET_SECRET not in docker_calls
-    assert OLD_SECRET not in docker_calls
+    assert _one_off_exec_payloads(fixture) == [
+        ("alembic", "upgrade", "head"),
+        *encryption_payloads,
+        ("alembic", "upgrade", "head"),
+        *encryption_payloads,
+    ]
+    assert events.count("oneoff:container-created") == 18
+    assert events.count("oneoff:container-removed") == 18
+    assert RUNTIME_TARGET_SECRET not in docker_calls
+    assert SERVICE_TARGET_SECRET not in docker_calls
+    assert RUNTIME_OLD_SECRET not in docker_calls
+    assert SERVICE_OLD_SECRET not in docker_calls
     assert "postgresql+psycopg://" not in docker_calls
+    assert PRODUCTION_RUNTIME_IDENTITY_SHA256 == (
+        "675cce444dbbf801bc8ab7fb35b717888c878e062097e5fb7f2f5f110e5a764c"
+    )
+    assert PRODUCTION_SERVICE_IDENTITY_SHA256 == (
+        "e5010d2b0a2afe22b7729c4c2395c91001a078e282abee87f03a5f0289aa0bf6"
+    )
+    for location in ("restore", "production"):
+        for family, expected_identifiers, expected_digest in (
+            (
+                "runtime",
+                PRODUCTION_RUNTIME_ROW_IDENTIFIERS,
+                PRODUCTION_RUNTIME_IDENTITY_SHA256,
+            ),
+            (
+                "service",
+                PRODUCTION_SERVICE_ROW_IDENTIFIERS,
+                PRODUCTION_SERVICE_IDENTITY_SHA256,
+            ),
+        ):
+            family_segment = "" if family == "runtime" else "-service"
+            for mode in ("inventory", "dry-run", "apply", "verify"):
+                report = json.loads(
+                    (
+                        fixture.evidence
+                        / f"{location}{family_segment}-{mode}.json"
+                    ).read_text(encoding="utf-8")
+                )
+                assert tuple(report["row_identifiers"]) == expected_identifiers
+                assert _row_identity_sha256(report["row_identifiers"]) == expected_digest
     restore_container_calls = [
         line for line in docker_calls.splitlines() if line.startswith("docker|run|")
     ]
@@ -1734,20 +2150,23 @@ def test_maintenance_env_replacement_fails_closed_without_activating_b(
     assert marker["migration_started"] == "0"
     assert (fixture.remote / "current").resolve() == fixture.previous_release
     replacement_source = fixture.maintenance_env.read_text(encoding="utf-8")
-    assert REPLACEMENT_TARGET_SECRET in replacement_source
-    assert REPLACEMENT_OLD_SECRET in replacement_source
-    assert REPLACEMENT_KEY_ID in replacement_source
+    replacement_values = (
+        REPLACEMENT_RUNTIME_TARGET_SECRET,
+        REPLACEMENT_SERVICE_TARGET_SECRET,
+        REPLACEMENT_RUNTIME_OLD_SECRET,
+        REPLACEMENT_SERVICE_OLD_SECRET,
+        REPLACEMENT_RUNTIME_KEY_ID,
+        REPLACEMENT_SERVICE_KEY_ID,
+    )
+    assert all(value in replacement_source for value in replacement_values)
     staged_env = (fixture.remote / ".release-state" / "release-new" / "env.deploy").read_text(
         encoding="utf-8"
     )
-    assert REPLACEMENT_TARGET_SECRET not in staged_env
-    assert REPLACEMENT_OLD_SECRET not in staged_env
-    assert REPLACEMENT_KEY_ID not in staged_env
+    assert all(value not in staged_env for value in replacement_values)
     assert not _maintenance_env_snapshot(fixture).exists()
     assert not _global_activation_receipt(fixture).exists()
     docker_calls = fixture.docker_calls.read_text(encoding="utf-8")
-    assert REPLACEMENT_TARGET_SECRET not in docker_calls
-    assert REPLACEMENT_OLD_SECRET not in docker_calls
+    assert all(value not in docker_calls for value in replacement_values)
 
 
 def test_exact_api_one_off_blocks_pre_creation_tag_drift(tmp_path: Path) -> None:
@@ -1925,7 +2344,7 @@ def test_executable_post_migration_failure_never_restarts_old_code_and_requires_
 ) -> None:
     fixture = _make_fixture(tmp_path)
 
-    completed = _run_cutover(fixture, fail_at="production_inventory")
+    completed = _run_cutover(fixture, fail_at="production_service_inventory")
 
     assert completed.returncode != 0
     marker_path = fixture.remote / ".cutover-failed"
@@ -1933,7 +2352,16 @@ def test_executable_post_migration_failure_never_restarts_old_code_and_requires_
     assert marker["status"] == "failed"
     assert marker["phase"] == "production-encryption-inventory"
     assert marker["outcome"] == "full_database_restore_required"
-    assert marker["recovery"] == ("restore_whole_database_previous_release_and_old_key_together")
+    assert marker["recovery"] == (
+        "restore_whole_database_previous_release_external_env_and_both_old_roots_together"
+    )
+    assert marker["previous_external_env"] == str(
+        fixture.remote / ".release-state" / "release-old" / "env.deploy"
+    )
+    assert marker["required_old_root_env_names"] == (
+        "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET,"
+        "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"
+    )
     assert marker["database_recovery_point"] == str(fixture.backup)
     assert marker["off_host_receipt"] == str(fixture.receipt)
     assert marker["data_services_switched"] == "1"
@@ -1946,11 +2374,128 @@ def test_executable_post_migration_failure_never_restarts_old_code_and_requires_
 
     events = _read_events(fixture)
     assert "migration:production-to-0068" in events
-    assert "failure:production-inventory-after-migration" in events
+    assert "runtime:production:inventory" in events
+    assert "failure:production-service-inventory-after-migration" in events
+    assert "service:production:inventory" not in events
     assert "images:production-tag-restored" not in events
     assert "recovery:previous-public-writers-recreated" not in events
     assert (fixture.state / "writers-stopped").exists()
     assert "terminal:success-published-after-unlock" not in events
+
+
+def test_service_identity_drift_with_frozen_count_requires_full_restore(
+    tmp_path: Path,
+) -> None:
+    fixture = _make_fixture(tmp_path)
+
+    completed = _run_cutover(fixture, fail_at="production_service_identity_drift")
+
+    assert completed.returncode != 0
+    marker = _read_marker(fixture.remote / ".cutover-failed")
+    assert marker["phase"] == "production-encryption-inventory"
+    assert marker["outcome"] == "full_database_restore_required"
+    assert marker["recovery"] == (
+        "restore_whole_database_previous_release_external_env_and_both_old_roots_together"
+    )
+    assert marker["previous_external_env"] == str(
+        fixture.remote / ".release-state" / "release-old" / "env.deploy"
+    )
+    assert marker["required_old_root_env_names"] == (
+        "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET,"
+        "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"
+    )
+    assert marker["migration_started"] == "1"
+    assert marker["data_services_switched"] == "1"
+    assert marker["image_tags_restored"] == "0"
+    assert marker["previous_data_services_restored"] == "0"
+    assert marker["previous_runtime_restored"] == "0"
+    assert (fixture.remote / ".deploy-lock").is_dir()
+    assert (fixture.remote / "current").resolve() == fixture.previous_release
+    assert not (fixture.evidence / "activation-commit.json").exists()
+    assert not (fixture.evidence / "cutover-result.json").exists()
+    assert not _global_activation_receipt(fixture).exists()
+
+    drifted_report = json.loads(
+        (fixture.evidence / "production-service-inventory.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert drifted_report["total"] == 12
+    assert len(drifted_report["row_identifiers"]) == 12
+    assert len(set(drifted_report["row_identifiers"])) == 12
+    assert _row_identity_sha256(drifted_report["row_identifiers"]) != (
+        PRODUCTION_SERVICE_IDENTITY_SHA256
+    )
+
+    events = _read_events(fixture)
+    assert "migration:production-to-0068" in events
+    assert "runtime:production:inventory" in events
+    assert "service:production:inventory" in events
+    assert "injection:production-service-identity-drift" in events
+    assert "runtime:production:dry-run" not in events
+    assert "images:production-tag-restored" not in events
+    assert "recovery:previous-data-services-recreated" not in events
+    assert "recovery:previous-public-writers-recreated" not in events
+    assert "terminal:success-published-after-unlock" not in events
+
+
+def test_service_apply_failure_after_runtime_apply_requires_full_restore_without_old_restart(
+    tmp_path: Path,
+) -> None:
+    fixture = _make_fixture(tmp_path)
+
+    completed = _run_cutover(fixture, fail_at="production_service_apply")
+
+    assert completed.returncode != 0
+    marker_path = fixture.remote / ".cutover-failed"
+    marker = _read_marker(marker_path)
+    assert marker["status"] == "failed"
+    assert marker["phase"] == "production-encryption-apply"
+    assert marker["outcome"] == "full_database_restore_required"
+    assert marker["recovery"] == (
+        "restore_whole_database_previous_release_external_env_and_both_old_roots_together"
+    )
+    assert marker["migration_started"] == "1"
+    assert marker["data_services_switched"] == "1"
+    assert marker["image_tags_restored"] == "0"
+    assert marker["previous_data_services_restored"] == "0"
+    assert marker["previous_runtime_restored"] == "0"
+    assert marker["post_migration_writer_stop_proved"] == "1"
+    assert marker["database_recovery_point"] == str(fixture.backup)
+    assert marker["off_host_receipt"] == str(fixture.receipt)
+    assert stat.S_IMODE(marker_path.stat().st_mode) == 0o600
+    assert (fixture.remote / ".deploy-lock").is_dir()
+    assert (fixture.remote / "current").resolve() == fixture.previous_release
+    assert not (fixture.evidence / "activation-commit.json").exists()
+    assert not (fixture.evidence / "cutover-result.json").exists()
+    assert not _global_activation_receipt(fixture).exists()
+
+    runtime_apply_report = json.loads(
+        (fixture.evidence / "production-apply.json").read_text(encoding="utf-8")
+    )
+    assert runtime_apply_report["mode"] == "apply"
+    assert runtime_apply_report["migrated"] == 18
+    assert _row_identity_sha256(runtime_apply_report["row_identifiers"]) == (
+        PRODUCTION_RUNTIME_IDENTITY_SHA256
+    )
+    service_apply_report = fixture.evidence / "production-service-apply.json"
+    assert service_apply_report.is_file()
+    assert service_apply_report.read_text(encoding="utf-8") == ""
+
+    events = _read_events(fixture)
+    runtime_apply_index = events.index("runtime:production:apply")
+    service_apply_index = events.index("service:production:apply")
+    failure_index = events.index("failure:production-service-apply-after-runtime-apply")
+    assert runtime_apply_index < service_apply_index < failure_index
+    assert "runtime:production:verify" not in events
+    assert "service:production:verify" not in events
+    assert "images:production-tag-restored" not in events
+    assert "recovery:previous-data-services-recreated" not in events
+    assert "recovery:previous-public-writers-recreated" not in events
+    assert "terminal:private-result-published-under-lock" not in events
+    assert "terminal:global-receipt-published-under-lock" not in events
+    assert "terminal:success-published-after-unlock" not in events
+    assert (fixture.state / "writers-stopped").exists()
 
 
 def test_executable_data_switch_failure_restores_exact_old_data_before_old_apps(

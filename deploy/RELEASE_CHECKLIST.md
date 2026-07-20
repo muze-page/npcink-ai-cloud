@@ -72,14 +72,28 @@ All items in this section are `Required`.
 - [x] `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` is set to a production value
 - [x] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
 - [x] `NPCINK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
-- [x] `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is set to a stable, dedicated production value and is preserved across deploys and admin-session key rotation
-- [ ] `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` is set to a stable, dedicated production value and is not reused by admin sessions, Portal JWT, internal auth, bootstrap, or service-settings encryption
-- [ ] `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` identifies that deployed key without containing secret material
-- [ ] the runtime-data encryption secret and key ID are present for `api`, `worker`, `callback-worker`, and `ops-worker`, and are absent from `frontend`
-- [ ] Provider Connection credentials have been re-imported or re-saved with the dedicated service-settings key before runtime traffic is restored; ciphertext created by the retired admin/Portal/internal key selection is intentionally unreadable after this cutover
+- [ ] `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is a dedicated canonical padded
+  URL-safe Base64 value that decodes to exactly 32 random bytes
+- [ ] `NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID` identifies the Service
+  Settings target root without containing secret material
+- [ ] `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` is a separate canonical
+  padded URL-safe Base64 value that decodes to exactly 32 random bytes and is
+  not reused by any authentication or Service Settings domain
+- [ ] `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` identifies the Runtime Data
+  target root without containing secret material and differs from the Service
+  Settings key ID
+- [ ] both target root/key-ID pairs are present for `api`, `worker`,
+  `callback-worker`, and `ops-worker`, and all four variables are absent from
+  `frontend`
+- [ ] all eight Provider Connection ciphertexts and four Service Setting secret
+  entries were migrated losslessly by
+  `python -m app.dev.reencrypt_service_secrets`; migration preserved credential
+  values without manual entry or a replacement save operation
 - [x] retired `OPS_*` and runtime `OPENAI_COMPATIBLE_*` names are absent from `.env.deploy`
 - [x] QQ Open Platform uses only `/open/auth/qq/callback`
-- [x] stored service credentials decrypt after restart without admin-session, Portal JWT, or internal-token fallback
+- [ ] stored service credentials use active `sse.v1` envelopes and decrypt after
+  restart without raw-Fernet, legacy, dual-read, Admin-session, Portal JWT, or
+  internal-token fallback
 - [x] `NPCINK_CLOUD_PORTAL_JWT_SECRET` is set to a production value
 - [x] at least one real hosted-runtime provider credential is configured for the release host
 - [x] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is not equal to `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
@@ -169,7 +183,8 @@ after remediation; the stable unchecked gate above remains authoritative.
 - [x] `/admin/service-settings` QQ login is configured and tested when QQ login is enabled; QQ is currently disabled
 - [x] `/admin/service-settings` SMTP host, port, TLS mode, sender email, and sender name are configured
 - [x] `/admin/service-settings` SMTP username and write-only password are configured if required by provider
-- [x] the stored SMTP and payment secrets remain readable after an API restart with the same `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET`
+- [ ] stored SMTP and payment secrets use active `sse.v1` envelopes and remain
+  readable after an API restart with the same Service Settings root/key-ID pair
 - [x] one real mailbox received three consecutive messages from production SMTP
 
 ### 3.4 Production Guardrails
@@ -271,8 +286,10 @@ All items in this section are `Required`.
 - [ ] `off-host-receipt-verified.json` persists the exact validated receipt,
   source path, and receipt SHA-256, and terminal evidence contains that digest
 - [ ] an independent disposable PostgreSQL 16 restore passed the `0058 -> 0068`
-  migration and 18-row encryption rehearsal before production migration began
-- [ ] the pre-cutover code revision and old runtime-data decryption key material are recoverable together with that backup
+  migration and both encryption rehearsals: Runtime Data `18 = 17 + 1`, Service
+  Settings `12 = 8 + 4`, and `30` legacy rows total
+- [ ] the pre-cutover code revision, old Runtime Data root, and old Service
+  Settings root are recoverable together with that backup
 - [x] migration state is confirmed on the release target
 - [ ] schema drift has been checked on the target host
 - [x] rollback plan for the database has been written down
@@ -414,8 +431,11 @@ All items in this section are `Required`.
   invalidated and fsynced the prior receipt;
   stage-only upload/verification was allowed to precede this gate
 - [ ] the untracked maintenance env stayed outside the release tree, was mode
-  `0600`, and contained exactly the target encryption secret/key ID plus one
-  explicit old-root environment value
+  `0600`, and contained exactly six keys: two target root/key-ID pairs plus the
+  Runtime Data and Service Settings old-root variables; both target roots were
+  canonical padded URL-safe Base64 encoding exactly 32 random bytes. The exact
+  old-root names were `NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET` and
+  `NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET`
 - [ ] `deploy/runtime-data-encryption-cutover.sh` ran once in the foreground
   with `/usr/bin/python3.11`, the exact staged path, backup path, previously
   absent receipt path, and all three required acknowledgements
@@ -428,7 +448,14 @@ All items in this section are `Required`.
 - [ ] the same process accepted the operator's receipt, completed the
   independent PostgreSQL 16 restore/rehearsal, then recorded successful
   production `inventory`, `dry-run`, `apply`, and new-key-only `verify` phases
-  from `python -m app.dev.reencrypt_runtime_data`
+  from both `python -m app.dev.reencrypt_runtime_data` and
+  `python -m app.dev.reencrypt_service_secrets`; evidence proved Runtime Data
+  `18 = 17 + 1`, Service Settings `12 = 8 + 4`, and `30` total rows
+- [ ] the canonical-JSON row-identifier SHA-256 values matched the reviewed
+  Runtime Data `675cce444dbbf801bc8ab7fb35b717888c878e062097e5fb7f2f5f110e5a764c`
+  and Service Settings
+  `e5010d2b0a2afe22b7729c4c2395c91001a078e282abee87f03a5f0289aa0bf6`
+  sets; no count-preserving identity substitution was accepted
 - [ ] after receipt/restore rehearsal and before production migration, the
   orchestrator switched PostgreSQL and Redis to the exact target image IDs and
   proved both healthy plus PostgreSQL still at `20260710_0058`
@@ -441,15 +468,20 @@ All items in this section are `Required`.
   to `inventory` and positionally pairs each ID/root in `dry-run` and `apply`
 - [ ] `dry-run`/`apply` used only `--old-root-env` variable names, and `apply`
   recorded the explicit `--confirm-maintenance-window` acknowledgement without
-  logging key values; inventory and new-key-only `verify` received no old root
+  logging key values; each tool received only its matching old root, while
+  inventory and new-key-only `verify` received neither old root
+- [ ] Runtime Data and Service Settings `apply` each completed in its own
+  database transaction, and the operator understands that failure of either
+  apply or any later pre-activation step requires the whole database, old
+  release/external env, and both old roots to be restored together
 - [ ] after migration started, every failure path re-stopped and proved zero
   running writer containers by managed labels and old/new writer image ancestry
 - [ ] all public/write services remained stopped until new-key-only verification;
   API and all three workers then passed release-generation readiness before
   traffic returned
-- [ ] the target release's external env state contains the new key while the
-  prior release's external env state remains matched to the old backup/code/key
-  recovery point
+- [ ] the target release's external env state contains both new root/key-ID
+  pairs while the prior release's external env remains matched to the old
+  backup/code/two-root recovery point
 - [ ] after active validation, `activation-commit.json` was durably published as
   the irreversible commit point; only then were rollback tags/maps cleaned,
   mode-`0600` `cutover-result.json` published with the persistent receipt digest,
@@ -464,11 +496,13 @@ All items in this section are `Required`.
   migration, restore recorded PostgreSQL/Redis tags and dependencies first if
   data images switched, prove health and unchanged `0058`, then resume old code;
   after migration starts, restore the whole `0058` dump plus old release,
-  external env, and old key together, never Alembic downgrade or partial rollback
-- [ ] temporary old-key material and the maintenance env were removed after the
-  rollback-evidence window; normal runtime has no legacy/dual-read path, while
-  the migration-only tool remains available for controlled rekey
-- [ ] the operator understands that normal deploy/secret rotation must not directly rotate `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` or its key ID
+  external env, and both old roots together, never Alembic downgrade or partial
+  rollback
+- [ ] temporary old-root material and the maintenance env were removed after
+  the rollback-evidence window; normal runtime has no legacy/dual-read path,
+  accepts only active `rde.v1` and `sse.v1` envelopes, and rejects raw Fernet
+- [ ] the operator understands that normal deploy/secret rotation must not
+  directly rotate either the Service Settings or Runtime Data root/key-ID pair
 - [x] operator has checked `GET /internal/service/ops/cadence` and all required cadence tasks are fresh
 - [x] operator has checked `GET /internal/service/observability/summary` and worker heartbeats are fresh
 - [ ] operator has retained the exact worker cutoff and evidence that each new

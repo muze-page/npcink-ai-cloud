@@ -237,9 +237,11 @@ Public legal and policy pages under `/terms/*` are served as static files from
 the checked-in `site/` directory by NGINX.
 The frontend does not load `.env.deploy`; it receives only its explicit runtime
 allowlist, including the server-side internal token required by the existing
-admin proxy. Runtime-data encryption, bootstrap, admin-session,
-service-settings, Portal JWT, database, and provider secrets stay in backend
-containers only.
+admin proxy. `api`, `worker`, `callback-worker`, and `ops-worker` each receive
+both the Service Settings target root/key-ID pair and the Runtime Data target
+root/key-ID pair. `frontend` receives none of those four variables.
+Runtime-data encryption, bootstrap, admin-session, service-settings, Portal
+JWT, database, and provider secrets stay in backend containers only.
 
 Production Compose does not run a trace collector or trace store. OTLP export
 is optional for ordinary runtime operation. Formal release requires explicit,
@@ -455,18 +457,23 @@ after cleanup and unlock are proved.
 
 Runtime configuration-only changes can normally be applied to the current
 release's external `.release-state/<release-name>/env.deploy` and followed by a
-container restart. This does not apply to
-`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` or
-`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID`: never rotate either through the
-ordinary deploy path because existing ciphertext must be re-encrypted while all
-four writers are stopped. Code, policy, billing, governance, and provider
+container restart. This does not apply to either encryption pair:
+`NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` /
+`NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID` or
+`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` /
+`NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID`. Never rotate them through the
+ordinary deploy path because existing ciphertext must be re-encrypted while
+all four writers are stopped. Code, policy, billing, governance, and provider
 routing logic changes must go through Git.
 
-## One-Time Runtime-Data Encryption Maintenance
+## One-Time P1-E06 Dual-Domain Encryption Maintenance
 
 This maintenance path is deliberately separate from the normal deployment
-sequence above. The first raw-ciphertext migration uses one governed entry
-point; operators must not assemble a second sequence from lower-level helpers.
+sequence above. The first Runtime Data and Service Settings raw-ciphertext
+migrations use one governed entry point and one writer fence/backup/restore
+window; operators must not assemble a second sequence from lower-level helpers.
+Each target root is canonical padded URL-safe Base64 that decodes to exactly 32
+random bytes. The two domains have separate target roots and separate key IDs.
 
 1. From the trusted workstation, run
    `deploy/deploy-to-ssh-host.sh --stage-only --skip-bundle-build` against the
@@ -488,13 +495,20 @@ point; operators must not assemble a second sequence from lower-level helpers.
    prove no managed path is group/world-writable, and create root-owned mode
    `0700` `/var/backups/npcink-ai-cloud` and `/run/npcink-ai-cloud`.
 3. Create the mode-`0600` maintenance env outside the managed release tree. It
-   contains exactly:
+   contains exactly six keys:
 
 ```text
-NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=<target-secret>
+NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=<canonical-base64-32-byte-target-root>
 NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=<target-key-id>
-NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root-secret>
+NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-runtime-root>
+NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=<canonical-base64-32-byte-target-root>
+NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=<target-key-id>
+NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-service-settings-root>
 ```
+
+The two old-root variables are available only to the matching `dry-run` and
+`apply`; neither `inventory`, new-key-only `verify`, nor normal runtime receives
+them.
 
 4. Run `deploy/runtime-data-encryption-cutover.sh` once, in the foreground,
    with the staged path, maintenance env, fresh host backup path, previously
@@ -514,7 +528,7 @@ sudo "${STAGED_RELEASE}/deploy/runtime-data-encryption-cutover.sh" \
   --off-host-receipt /run/npcink-ai-cloud/p1-e06-off-host-receipt.json \
   --off-host-receipt-timeout-seconds 900 \
   --confirm-off-host-handoff I_ACKNOWLEDGE_THE_BACKUP_COPY_IS_OFF_HOST_AND_INDEPENDENT \
-  --confirm-whole-database-restore I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_AND_OLD_KEY_TOGETHER \
+  --confirm-whole-database-restore I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_ENV_AND_BOTH_OLD_ROOTS_TOGETHER \
   --confirm-production-cutover I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER
 ```
 
@@ -529,15 +543,31 @@ sudo "${STAGED_RELEASE}/deploy/runtime-data-encryption-cutover.sh" \
    `off-host-receipt-verified.json`, including its source path and SHA-256, and
    includes that digest in terminal evidence.
 6. Only after that receipt does the script perform an independent PostgreSQL 16
-   restore and `0058 -> 0068` plus `inventory -> dry-run -> apply -> verify`
-   rehearsal. It then switches production PostgreSQL and Redis to the exact
-   target image IDs and proves both are healthy plus PostgreSQL is still at
-   `0058` before migration. Production Compose v2.27 one-offs pass only
+   restore and `0058 -> 0068`, then separately runs
+   `inventory -> dry-run -> apply -> verify` through
+   `python -m app.dev.reencrypt_runtime_data` and
+   `python -m app.dev.reencrypt_service_secrets`. Both the restored rehearsal
+   and production are count-locked to 18 Runtime Data rows (17 site signing
+   secrets plus one Addon connection payload), 12 service-secret ciphertexts
+   (eight provider connections plus four service-setting secret entries), and
+   30 ciphertexts total. Each `apply` is an independent database transaction; both applies and
+   both verifies must pass. It then switches production PostgreSQL and Redis to
+   the exact target image IDs and proves both are healthy plus PostgreSQL is
+   still at `0058` before migration. Production Compose v2.27 one-offs pass only
    variable names with `run --rm --no-deps -e VARIABLE_NAME`; no CLI `--pull`,
    secret value argument, or env-file run option is allowed. Runtime Compose
    `pull_policy: never` and exact API image-ID proof are required. Inventory and
-   new-key-only `verify` receive no old-root variable; only `dry-run` and
-   `apply` do. The first raw-ciphertext cutover omits `--old-key-id`.
+   new-key-only `verify` receive no old-root variable; only each matching
+   `dry-run` and `apply` do. The first raw-ciphertext cutover omits
+   `--old-key-id`. Production repeats both four-phase sequences inside the same
+   stopped-writer and backup/restore window.
+   The script additionally freezes the sorted row-identifier sets using
+   canonical-JSON SHA-256 (`675cce444dbbf801bc8ab7fb35b717888c878e062097e5fb7f2f5f110e5a764c`
+   for Runtime Data and
+   `e5010d2b0a2afe22b7729c4c2395c91001a078e282abee87f03a5f0289aa0bf6`
+   for Service Settings), so a count-preserving identity substitution cannot
+   pass. Any intentional inventory change requires a stopped, reviewed digest
+   update before cutover.
 7. After restoring traffic and validating the active release, the script
    durably publishes `activation-commit.json`. This is the irreversible
    activation commit point. It then cleans rollback tags/maps, publishes the
@@ -549,15 +579,18 @@ sudo "${STAGED_RELEASE}/deploy/runtime-data-encryption-cutover.sh" \
    terminalization incomplete, not necessarily a runtime rollback.
 
 Before production migration starts, recovery may resume the unchanged `0058`
-database with the old release/key after pointer, schema, and dependency health
-are proven. If PostgreSQL/Redis had already switched to target image IDs,
+database with the old release and both old roots after pointer, schema, and
+dependency health are proven. If PostgreSQL/Redis had already switched to target image IDs,
 restore their recorded prior tags and recreate/prove those dependencies before
 starting the old application; otherwise prove the existing dependencies and
 then restore the old application. Once production migration starts and before
 activation commits, never downgrade or restart old code: restore the whole
-fresh `0058` dump, old application revision, old external env, and old key
-together. Migration `0061` removes legacy media/audio tables, so downgrade
-cannot reconstruct their old bytes.
+fresh `0058` dump, old application revision, old external env, and both old
+roots together. Runtime Data and Service Settings `apply` are independent
+transactions, but failure of either or any later pre-activation step requires
+that full recovery point; keeping only one newly encrypted domain is forbidden.
+Migration `0061` removes legacy media/audio tables, so downgrade cannot
+reconstruct their old bytes.
 
 After `activation-commit.json` exists, cleanup, private/global evidence, or
 unlock failure must keep the healthy new runtime and pointer. Do not stop writers,
@@ -582,6 +615,10 @@ run --rm --no-deps
 The old-root `-e` entry applies only to `dry-run` and `apply`; inventory and
 new-key-only `verify` omit it.
 
-Normal runtime has no legacy or dual-read path; retain the migration-only tool
-for future controlled rekeys. The detailed operator procedure and manual
-future-rotation commands are in `deploy/OPS_PLAYBOOK.md`.
+Normal runtime has no legacy or dual-read path. It accepts only active `rde.v1`
+and `sse.v1` envelopes and rejects raw Fernet. The Runtime Data tool supports
+the separately approved future `rde.v1` rotation described in
+`deploy/OPS_PLAYBOOK.md`; the Service Settings tool supports only the first
+raw-Fernet to `sse.v1` cutover and must be extended under a new approved
+contract before any future `sse.v1` rotation. Both commands remain
+migration-only offline maintenance tools, never normal runtime fallbacks.
