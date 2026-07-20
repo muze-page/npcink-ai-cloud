@@ -10,17 +10,19 @@ ROLLBACK_TAG_SUFFIX="${NPCINK_CLOUD_ROLLBACK_TAG_SUFFIX:-}"
 MANIFEST_HELPER="${ROOT_DIR}/scripts/verify-release-bundle-manifest.py"
 RELEASE_VERIFIER="${ROOT_DIR}/deploy/verify-release-bundle.sh"
 RETIRED_BUNDLE_SERVICES=(caddy jaeger otel-collector)
+CERTIFICATE_RENEWAL_READINESS="${ROOT_DIR}/deploy/certificate-renewal-readiness.sh"
 
 # Shared compose/env helpers for deploy scripts.
 . "${ROOT_DIR}/deploy/common.sh"
 npcink_ai_cloud_load_env_file "${ROOT_DIR}"
+RELEASE_TOOL_PYTHON="$(npcink_ai_cloud_release_tool_python)"
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 COMPOSE_FILE="${NPCINK_CLOUD_COMPOSE_FILE:-${ROOT_DIR}/docker-compose.prod.yml}"
 COMPOSE_PROJECT_NAME_EFFECTIVE="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-npcink-ai-cloud}}"
 
 npcink_ai_cloud_require_cmd docker
 npcink_ai_cloud_require_cmd curl
-npcink_ai_cloud_require_cmd python3
+npcink_ai_cloud_require_release_tool_python "${RELEASE_TOOL_PYTHON}"
 npcink_ai_cloud_require_internal_token
 
 case "${LOAD_MODE}" in
@@ -43,6 +45,14 @@ if [ "${LOAD_MODE}" = "prepare-only" ]; then
 	fi
 fi
 
+is_formal_runtime() {
+	if [ "$(basename "${COMPOSE_FILE}")" != "docker-compose.runtime.yml" ] &&
+		[[ "${BASE_URL}" != https://* ]]; then
+		return 1
+	fi
+	return 0
+}
+
 require_external_edge_for_formal_runtime() {
 	if [ "$(basename "${COMPOSE_FILE}")" != "docker-compose.runtime.yml" ] &&
 		[[ "${BASE_URL}" != https://* ]]; then
@@ -62,7 +72,7 @@ require_external_edge_for_formal_runtime() {
 		exit 1
 	fi
 
-	python3 - "${BASE_URL}" "${NPCINK_CLOUD_DOMAIN_NAME}" <<'PY'
+	"${RELEASE_TOOL_PYTHON}" - "${BASE_URL}" "${NPCINK_CLOUD_DOMAIN_NAME}" <<'PY'
 from __future__ import annotations
 
 import sys
@@ -92,6 +102,41 @@ if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
 PY
 
 	echo "[ok] External TLS edge contract acknowledged for ${BASE_URL}"
+}
+
+verify_certificate_renewal_readiness() {
+	local certificate_path="${NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH:-}"
+	local evidence_path="${NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH:-}"
+	local timer_name="${NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER:-}"
+	local deploy_hook_path="${NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH:-}"
+	[ -n "${certificate_path}" ] || {
+		echo "[fail] Formal runtime requires NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH." >&2
+		exit 1
+	}
+	[ -n "${evidence_path}" ] || {
+		echo "[fail] Formal runtime requires NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH." >&2
+		exit 1
+	}
+	[ -n "${timer_name}" ] || {
+		echo "[fail] Formal runtime requires NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER." >&2
+		exit 1
+	}
+	[ -n "${deploy_hook_path}" ] || {
+		echo "[fail] Formal runtime requires NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH." >&2
+		exit 1
+	}
+	[ -x "${CERTIFICATE_RENEWAL_READINESS}" ] || {
+		echo "[fail] Certificate-renewal readiness verifier is missing or not executable." >&2
+		exit 1
+	}
+	NPCINK_CLOUD_RELEASE_TOOL_PYTHON="${RELEASE_TOOL_PYTHON}" \
+		bash "${CERTIFICATE_RENEWAL_READINESS}" verify \
+		--domain "${NPCINK_CLOUD_DOMAIN_NAME}" \
+		--certificate-path "${certificate_path}" \
+		--owner certbot \
+		--timer "${timer_name}" \
+		--deploy-hook-path "${deploy_hook_path}" \
+		--evidence-path "${evidence_path}"
 }
 
 assert_retired_bundle_services_absent() {
@@ -225,11 +270,11 @@ prepare_release_images() {
 	# This is deliberately before the first docker load and before compose up.
 	npcink_ai_cloud_run_timed "verify exact bundle before load" \
 		bash "${RELEASE_VERIFIER}" --pre-load "${ROOT_DIR}"
-	if ! load_plan="$(python3 "${MANIFEST_HELPER}" load-plan --root "${ROOT_DIR}")"; then
+	if ! load_plan="$("${RELEASE_TOOL_PYTHON}" "${MANIFEST_HELPER}" load-plan --root "${ROOT_DIR}")"; then
 		echo "[fail] Exact release image load plan could not be read." >&2
 		return 1
 	fi
-	if ! alias_plan="$(python3 "${MANIFEST_HELPER}" alias-plan --root "${ROOT_DIR}")"; then
+	if ! alias_plan="$("${RELEASE_TOOL_PYTHON}" "${MANIFEST_HELPER}" alias-plan --root "${ROOT_DIR}")"; then
 		echo "[fail] Exact release image alias plan could not be read." >&2
 		return 1
 	fi
@@ -256,6 +301,11 @@ prepare_release_images() {
 		bash "${RELEASE_VERIFIER}" --post-load "${ROOT_DIR}"
 }
 
+if is_formal_runtime && { [ "${LOAD_MODE}" = "full" ] || [ "${LOAD_MODE}" = "prepare-only" ]; }; then
+	# Renewal evidence is verified before snapshot/tag/load can mutate images.
+	verify_certificate_renewal_readiness
+fi
+
 if [ "${LOAD_MODE}" = "full" ] || [ "${LOAD_MODE}" = "prepare-only" ]; then
 	prepare_release_images
 fi
@@ -265,11 +315,87 @@ if [ "${LOAD_MODE}" = "prepare-only" ]; then
 	exit 0
 fi
 
+data_service_reference() {
+	case "$1" in
+		postgres) printf '%s' 'npcink-ai-cloud-postgres:prod' ;;
+		redis) printf '%s' 'npcink-ai-cloud-external-redis:prod' ;;
+		*) return 1 ;;
+	esac
+}
+
+wait_for_exact_data_service() {
+	local service="$1"
+	local expected_reference="$2"
+	local expected_image_id="$3"
+	local attempt=0
+	local container_id=""
+	local container_count=0
+	local observed_image_id=""
+	local observed_reference_id=""
+	local state=""
+
+	while [ "${attempt}" -lt 30 ]; do
+		observed_reference_id="$(
+			docker image inspect --format '{{.Id}}' "${expected_reference}" 2>/dev/null
+		)" || return 1
+		[ "${observed_reference_id}" = "${expected_image_id}" ] || return 1
+		container_id="$(npcink_ai_cloud_compose "${ROOT_DIR}" ps -q "${service}" 2>/dev/null)" || return 1
+		container_count="$(printf '%s\n' "${container_id}" | awk 'NF {n += 1} END {print n + 0}')"
+		if [ "${container_count}" -eq 1 ]; then
+			observed_image_id="$(docker inspect --format '{{.Image}}' "${container_id}" 2>/dev/null || true)"
+			state="$(docker inspect --format '{{.State.Running}} {{.State.Restarting}} {{.RestartCount}} {{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "${container_id}" 2>/dev/null || true)"
+			if [ "${observed_image_id}" = "${expected_image_id}" ] && \
+				[ "${state}" = "true false 0 healthy" ]; then
+				printf '[ok] Data service %s uses the frozen exact image ID and is healthy.\n' "${service}"
+				return 0
+			fi
+		fi
+		attempt=$((attempt + 1))
+		sleep 2
+	done
+	return 1
+}
+
 if [ "${LOAD_MODE}" = "data-only" ]; then
 	SERVICES=(postgres redis)
+	POSTGRES_REFERENCE="$(data_service_reference postgres)"
+	REDIS_REFERENCE="$(data_service_reference redis)"
+	POSTGRES_IMAGE_ID="$(
+		"${RELEASE_TOOL_PYTHON}" "${MANIFEST_HELPER}" role-image-id \
+			--root "${ROOT_DIR}" --role postgres
+	)"
+	REDIS_IMAGE_ID="$(
+		"${RELEASE_TOOL_PYTHON}" "${MANIFEST_HELPER}" role-image-id \
+			--root "${ROOT_DIR}" --role external_redis
+	)"
+	[[ "${POSTGRES_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+		echo "[fail] Frozen PostgreSQL image ID is invalid." >&2
+		exit 1
+	}
+	[[ "${REDIS_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+		echo "[fail] Frozen Redis image ID is invalid." >&2
+		exit 1
+	}
+	[ "$(docker image inspect --format '{{.Id}}' "${POSTGRES_REFERENCE}")" = "${POSTGRES_IMAGE_ID}" ] || {
+		echo "[fail] PostgreSQL tag drifted from the bundle manifest before data startup." >&2
+		exit 1
+	}
+	[ "$(docker image inspect --format '{{.Id}}' "${REDIS_REFERENCE}")" = "${REDIS_IMAGE_ID}" ] || {
+		echo "[fail] Redis tag drifted from the bundle manifest before data startup." >&2
+		exit 1
+	}
 	echo "[info] Starting data services only: ${SERVICES[*]}"
 	npcink_ai_cloud_run_timed "compose up data services" \
-		npcink_ai_cloud_compose "${ROOT_DIR}" up -d --pull never --no-build "${SERVICES[@]}"
+		npcink_ai_cloud_compose "${ROOT_DIR}" up -d --pull never --no-build \
+		--no-deps --force-recreate "${SERVICES[@]}"
+	wait_for_exact_data_service postgres "${POSTGRES_REFERENCE}" "${POSTGRES_IMAGE_ID}" || {
+		echo "[fail] PostgreSQL did not reach the frozen exact healthy generation." >&2
+		exit 1
+	}
+	wait_for_exact_data_service redis "${REDIS_REFERENCE}" "${REDIS_IMAGE_ID}" || {
+		echo "[fail] Redis did not reach the frozen exact healthy generation." >&2
+		exit 1
+	}
 	echo "[ok] Data services are ready for one-off migration."
 	exit 0
 fi

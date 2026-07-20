@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
@@ -18,6 +19,7 @@ RUNTIME_SITE_ID="${NPCINK_CLOUD_RELEASE_SITE_ID:-}"
 RUNTIME_KEY_ID="${NPCINK_CLOUD_RELEASE_KEY_ID:-}"
 RUNTIME_SECRET="${NPCINK_CLOUD_RELEASE_KEY_SECRET:-}"
 PERSISTED_PORTAL_COOKIE_JAR="${NPCINK_CLOUD_PORTAL_COOKIE_JAR:-}"
+CREDENTIALS_FILE=""
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -26,20 +28,20 @@ while [ "$#" -gt 0 ]; do
 			shift 2
 			;;
 		--internal-auth-token)
-			INTERNAL_AUTH_TOKEN="$2"
-			shift 2
+			echo "[fail] --internal-auth-token is forbidden because process arguments are observable; use --credentials-file or NPCINK_CLOUD_INTERNAL_AUTH_TOKEN." >&2
+			exit 1
 			;;
 		--admin-token)
-			ADMIN_TOKEN="$2"
-			shift 2
+			echo "[fail] --admin-token is forbidden because process arguments are observable; use --credentials-file or NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN." >&2
+			exit 1
 			;;
 		--member-email)
 			MEMBER_EMAIL="$2"
 			shift 2
 			;;
 		--login-code)
-			LOGIN_CODE="$2"
-			shift 2
+			echo "[fail] --login-code is forbidden because process arguments are observable; use --credentials-file or NPCINK_CLOUD_PORTAL_LOGIN_CODE." >&2
+			exit 1
 			;;
 		--runtime-site-id)
 			RUNTIME_SITE_ID="$2"
@@ -50,7 +52,11 @@ while [ "$#" -gt 0 ]; do
 			shift 2
 			;;
 		--runtime-secret)
-			RUNTIME_SECRET="$2"
+			echo "[fail] --runtime-secret is forbidden because process arguments are observable; use --credentials-file or NPCINK_CLOUD_RELEASE_KEY_SECRET." >&2
+			exit 1
+			;;
+		--credentials-file)
+			CREDENTIALS_FILE="$2"
 			shift 2
 			;;
 		*)
@@ -69,17 +75,78 @@ ok() {
 	echo "[ok] $*"
 }
 
+load_credentials_file() {
+	local credentials_file="$1"
+	local assignments=""
+	if ! assignments="$(python3 - "${credentials_file}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import stat
+import sys
+
+path = sys.argv[1]
+metadata = os.lstat(path)
+if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+    raise SystemExit("[fail] Release smoke credentials must be a regular non-symlink file.")
+if metadata.st_uid != os.geteuid():
+    raise SystemExit("[fail] Release smoke credentials must be owned by the current account.")
+if stat.S_IMODE(metadata.st_mode) != 0o600:
+    raise SystemExit("[fail] Release smoke credentials must have mode 0600.")
+with open(path, encoding="utf-8") as handle:
+    payload = json.load(handle)
+if not isinstance(payload, dict):
+    raise SystemExit("[fail] Release smoke credentials must be a JSON object.")
+mapping = {
+    "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN": "INTERNAL_AUTH_TOKEN",
+    "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN": "ADMIN_TOKEN",
+    "NPCINK_CLOUD_RELEASE_MEMBER_EMAIL": "MEMBER_EMAIL",
+    "NPCINK_CLOUD_PORTAL_LOGIN_CODE": "LOGIN_CODE",
+    "NPCINK_CLOUD_RELEASE_SITE_ID": "RUNTIME_SITE_ID",
+    "NPCINK_CLOUD_RELEASE_KEY_ID": "RUNTIME_KEY_ID",
+    "NPCINK_CLOUD_RELEASE_KEY_SECRET": "RUNTIME_SECRET",
+}
+unknown = sorted(set(payload) - set(mapping))
+if unknown:
+    raise SystemExit("[fail] Release smoke credentials contain unsupported keys.")
+for source, target in mapping.items():
+    value = payload.get(source, "")
+    if not isinstance(value, str):
+        raise SystemExit(f"[fail] Release smoke credential {source} must be a string.")
+    print(f"{target}={shlex.quote(value)}")
+PY
+)"; then
+		return 1
+	fi
+	eval "${assignments}"
+	unset assignments
+}
+
+if [ -n "${CREDENTIALS_FILE}" ]; then
+	load_credentials_file "${CREDENTIALS_FILE}" || fail "Release smoke credentials could not be loaded"
+fi
+
+# Do not let the complete caller environment, including credentials supplied by
+# GitHub Actions, flow into every curl/Python child process.
+unset \
+	NPCINK_CLOUD_INTERNAL_AUTH_TOKEN \
+	NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN \
+	NPCINK_CLOUD_PORTAL_LOGIN_CODE \
+	NPCINK_CLOUD_RELEASE_KEY_SECRET
+
 if [ -z "${INTERNAL_AUTH_TOKEN}" ]; then
-	fail "--internal-auth-token or NPCINK_CLOUD_INTERNAL_AUTH_TOKEN is required"
+	fail "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN is required through --credentials-file or the process environment"
 fi
 if [ -z "${ADMIN_TOKEN}" ]; then
-	fail "--admin-token or NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN is required"
+	fail "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN is required through --credentials-file or the process environment"
 fi
 if [ -z "${MEMBER_EMAIL}" ]; then
 	fail "--member-email or NPCINK_CLOUD_RELEASE_MEMBER_EMAIL is required"
 fi
 if [ -z "${RUNTIME_SITE_ID}" ] || [ -z "${RUNTIME_KEY_ID}" ] || [ -z "${RUNTIME_SECRET}" ]; then
-	fail "release smoke requires signed runtime credentials: pass --runtime-site-id, --runtime-key-id, and --runtime-secret (or set NPCINK_CLOUD_RELEASE_SITE_ID, NPCINK_CLOUD_RELEASE_KEY_ID, and NPCINK_CLOUD_RELEASE_KEY_SECRET)"
+	fail "release smoke requires signed runtime credentials through --credentials-file or the process environment"
 fi
 
 json_read_path() {
@@ -122,7 +189,7 @@ assert_status() {
 	local expected="$2"
 	local message="$3"
 	if [ "${actual}" != "${expected}" ]; then
-		fail "${message} (expected ${expected}, got ${actual}; body=${HTTP_BODY})"
+		fail "${message} (expected ${expected}, got ${actual})"
 	fi
 }
 
@@ -149,7 +216,7 @@ assert_json_equals() {
 		fail "${message} (missing path ${json_path})"
 	fi
 	if [ "${actual}" != "${expected}" ]; then
-		fail "${message} (expected ${expected}, got ${actual}; body=${json_payload})"
+		fail "${message} (expected ${expected}, got ${actual})"
 	fi
 }
 
@@ -162,7 +229,28 @@ assert_body_contains() {
 	fi
 }
 
+umask 077
 TMP_DIR="$(mktemp -d)"
+TMP_CLEANUP_ARMED=1
+cleanup_tmp_dir() {
+	local exit_status="$?"
+	local cleanup_failed=0
+	trap - EXIT
+	set +e
+	if [ "${TMP_CLEANUP_ARMED}" = "1" ]; then
+		rm -rf -- "${TMP_DIR}" || cleanup_failed=1
+		if [ -e "${TMP_DIR}" ] || [ -L "${TMP_DIR}" ]; then
+			cleanup_failed=1
+		fi
+	fi
+	if [ "${cleanup_failed}" -ne 0 ]; then
+		echo "[fail] Release smoke credential-file cleanup did not complete." >&2
+		exit_status=1
+	fi
+	exit "${exit_status}"
+}
+trap cleanup_tmp_dir EXIT
+chmod 0700 "${TMP_DIR}"
 if [ -n "${PERSISTED_PORTAL_COOKIE_JAR}" ]; then
 	if [ -L "${PERSISTED_PORTAL_COOKIE_JAR}" ]; then
 		fail "NPCINK_CLOUD_PORTAL_COOKIE_JAR must not be a symbolic link"
@@ -182,7 +270,6 @@ else
 	PORTAL_COOKIE_JAR="${TMP_DIR}/portal-cookies.txt"
 fi
 ADMIN_COOKIE_JAR="${TMP_DIR}/admin-cookies.txt"
-trap 'rm -rf "${TMP_DIR}"' EXIT
 
 HTTP_STATUS=""
 HTTP_BODY=""
@@ -200,8 +287,11 @@ http_request() {
 		shift "$#"
 	fi
 
-	local tmp_body="${TMP_DIR}/body.txt"
-	local tmp_headers="${TMP_DIR}/headers.txt"
+	local request_id="${RANDOM:-0}-$$"
+	local tmp_body="${TMP_DIR}/body-${request_id}.txt"
+	local tmp_headers="${TMP_DIR}/headers-${request_id}.txt"
+	local request_headers="${TMP_DIR}/request-${request_id}.headers"
+	local request_body="${TMP_DIR}/request-${request_id}.body"
 	local status
 	local curl_args=(
 		-sS
@@ -212,22 +302,35 @@ http_request() {
 		-w "%{http_code}"
 		-X "${method}"
 		"${url}"
-		-H "Accept: application/json"
+		--header "@${request_headers}"
 	)
 	local header=""
-	for header in "$@"; do
-		if [ -n "${header}" ]; then
-			curl_args+=(-H "${header}")
+	(
+		umask 077
+		printf '%s\n' "Accept: application/json" >"${request_headers}"
+		for header in "$@"; do
+			if [ -n "${header}" ]; then
+				printf '%s\n' "${header}" >>"${request_headers}"
+			fi
+		done
+		if [ -n "${body}" ]; then
+			printf '%s\n' "Content-Type: application/json" >>"${request_headers}"
+			printf '%s' "${body}" >"${request_body}"
 		fi
-	done
+	)
+	chmod 0600 "${request_headers}"
 	if [ -n "${body}" ]; then
-		curl_args+=(-H "Content-Type: application/json" --data "${body}")
+		chmod 0600 "${request_body}"
+		curl_args+=(--data-binary "@${request_body}")
 	fi
 
 	status="$(curl "${curl_args[@]}")" || fail "HTTP request failed: ${method} ${url}"
 	HTTP_STATUS="${status}"
 	HTTP_BODY="$(cat "${tmp_body}")"
 	HTTP_HEADERS="$(cat "${tmp_headers}")"
+	if ! rm -f -- "${tmp_body}" "${tmp_headers}" "${request_headers}" "${request_body}"; then
+		fail "Release smoke request-file cleanup failed"
+	fi
 }
 
 ok "Waiting for cloud ready: ${BASE_URL}"
@@ -280,12 +383,12 @@ esac
 
 RUNTIME_IDEMPOTENCY_SUFFIX="${NPCINK_CLOUD_IDEMPOTENCY_SUFFIX:-release-smoke-$(date -u +%Y%m%d%H%M%S)}"
 NPCINK_CLOUD_INTERNAL_AUTH_TOKEN="${INTERNAL_AUTH_TOKEN}" \
+NPCINK_CLOUD_SECRET="${RUNTIME_SECRET}" \
 NPCINK_CLOUD_IDEMPOTENCY_SUFFIX="${RUNTIME_IDEMPOTENCY_SUFFIX}" \
 	bash "${ROOT_DIR}/deploy/remote-smoke.sh" \
 		--base-url "${BASE_URL}" \
 		--site-id "${RUNTIME_SITE_ID}" \
-		--key-id "${RUNTIME_KEY_ID}" \
-		--secret "${RUNTIME_SECRET}"
+		--key-id "${RUNTIME_KEY_ID}"
 
 http_request "GET" "${BASE_URL%/}/" "${PORTAL_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "home page should load"
@@ -324,7 +427,7 @@ PY
 		LOGIN_CODE="${STUB_LOGIN_CODE}"
 	fi
 	if [ -z "${LOGIN_CODE}" ]; then
-		fail "portal login code is required to continue; request delivery=${DELIVERY_MODE:-unknown}. Pass --login-code when using real SMTP delivery."
+		fail "portal login code is required to continue; request delivery=${DELIVERY_MODE:-unknown}. Supply it through --credentials-file or NPCINK_CLOUD_PORTAL_LOGIN_CODE when using real SMTP delivery."
 	fi
 else
 	if [ "${PORTAL_SESSION_REUSED}" = "0" ]; then
@@ -375,7 +478,7 @@ fi
 http_request "POST" "${BASE_URL%/}/admin/auth/bootstrap" "${ADMIN_COOKIE_JAR}" "${ADMIN_BODY}" "Origin: ${BASE_URL%/}"
 case "${HTTP_STATUS}" in
 	200 | 303) ;;
-	*) fail "admin bootstrap login should succeed (expected 200 or 303, got ${HTTP_STATUS}; body=${HTTP_BODY})" ;;
+	*) fail "admin bootstrap login should succeed (expected 200 or 303, got ${HTTP_STATUS})" ;;
 esac
 assert_body_contains "${HTTP_HEADERS}" "npcink_admin_session_token" "admin bootstrap should set ops session cookie"
 

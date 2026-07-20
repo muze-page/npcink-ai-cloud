@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
@@ -45,8 +46,8 @@ while [ "$#" -gt 0 ]; do
 			shift 2
 			;;
 		--secret)
-			SECRET="$2"
-			shift 2
+			echo "[fail] --secret is forbidden because process arguments are observable; use NPCINK_CLOUD_SECRET or a protected environment file." >&2
+			exit 1
 			;;
 		--key-label)
 			KEY_LABEL="$2"
@@ -78,7 +79,7 @@ if [ -z "${MEMBER_EMAIL}" ]; then
 fi
 
 BOOTSTRAP_ARGS=(
-	python -m app.dev.bootstrap_portal_site
+	python -
 	--site-id "${SITE_ID}"
 	--member-email "${MEMBER_EMAIL}"
 	--member-role "${MEMBER_ROLE}"
@@ -96,8 +97,32 @@ fi
 if [ -n "${KEY_ID}" ]; then
 	BOOTSTRAP_ARGS+=(--key-id "${KEY_ID}")
 fi
+COMPOSE_SECRET_ARGS=()
 if [ -n "${SECRET}" ]; then
-	BOOTSTRAP_ARGS+=(--secret "${SECRET}")
+	unset NPCINK_CLOUD_SECRET
+	export NPCINK_CLOUD_BOOTSTRAP_SITE_SECRET="${SECRET}"
+	COMPOSE_SECRET_ARGS=(-e NPCINK_CLOUD_BOOTSTRAP_SITE_SECRET)
 fi
+unset SECRET
 
-npcink_ai_cloud_compose "${ROOT_DIR}" run --rm api "${BOOTSTRAP_ARGS[@]}"
+bootstrap_status=0
+npcink_ai_cloud_compose "${ROOT_DIR}" run --rm -T \
+	"${COMPOSE_SECRET_ARGS[@]}" \
+	api "${BOOTSTRAP_ARGS[@]}" <<'PY' || bootstrap_status=$?
+from __future__ import annotations
+
+import os
+import sys
+
+from app.dev.bootstrap_portal_site import main
+
+secret = os.environ.pop("NPCINK_CLOUD_BOOTSTRAP_SITE_SECRET", "")
+if secret:
+    sys.argv.extend(("--secret", secret))
+main()
+PY
+if ! unset NPCINK_CLOUD_BOOTSTRAP_SITE_SECRET; then
+	echo "[fail] Portal bootstrap secret cleanup failed." >&2
+	exit 1
+fi
+exit "${bootstrap_status}"

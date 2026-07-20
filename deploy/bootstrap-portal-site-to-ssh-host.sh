@@ -69,7 +69,7 @@ fi
 
 SSH_ARGS=(
 	-p "${SSH_PORT}"
-	-o StrictHostKeyChecking=accept-new
+	-o StrictHostKeyChecking=yes
 )
 if [ -n "${SSH_IDENTITY_FILE}" ]; then
 	SSH_ARGS+=(-i "${SSH_IDENTITY_FILE}")

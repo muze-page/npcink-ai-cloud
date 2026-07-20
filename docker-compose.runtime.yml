@@ -1,6 +1,7 @@
 services:
   postgres:
     image: npcink-ai-cloud-postgres:prod
+    pull_policy: never
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-npcink_ai_cloud}
@@ -16,6 +17,7 @@ services:
 
   redis:
     image: npcink-ai-cloud-external-redis:prod
+    pull_policy: never
     restart: unless-stopped
     command: redis-server --appendonly yes
     healthcheck:
@@ -28,6 +30,7 @@ services:
 
   api:
     image: npcink-ai-cloud-api:prod
+    pull_policy: never
     restart: unless-stopped
     command: >-
       gunicorn -k uvicorn.workers.UvicornWorker
@@ -53,6 +56,7 @@ services:
 
   frontend:
     image: npcink-ai-cloud-frontend:prod
+    pull_policy: never
     restart: unless-stopped
     environment:
       CLOUD_API_BASE_URL: http://api:8000
@@ -64,6 +68,7 @@ services:
 
   worker:
     image: npcink-ai-cloud-worker:prod
+    pull_policy: never
     restart: unless-stopped
     command: python -m app.workers.runtime_queue
     env_file:
@@ -80,6 +85,7 @@ services:
 
   callback-worker:
     image: npcink-ai-cloud-worker:prod
+    pull_policy: never
     restart: unless-stopped
     command: python -m app.workers.callback_dispatch
     env_file:
@@ -92,6 +98,7 @@ services:
 
   ops-worker:
     image: npcink-ai-cloud-worker:prod
+    pull_policy: never
     restart: unless-stopped
     command: python -m app.workers.ops_cadence
     env_file:
@@ -108,6 +115,7 @@ services:
 
   proxy:
     image: npcink-ai-cloud-external-nginx:prod
+    pull_policy: never
     restart: unless-stopped
     depends_on:
       api:

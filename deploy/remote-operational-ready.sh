@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
 npcink_ai_cloud_load_env_file "${ROOT_DIR}"
+RELEASE_TOOL_PYTHON="$(npcink_ai_cloud_release_tool_python)"
 
 npcink_ai_cloud_require_internal_token
+INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 WORKER_CUTOFF="${NPCINK_CLOUD_WORKER_CUTOFF:-}"
@@ -29,12 +32,12 @@ done
 
 if [ "${NPCINK_CLOUD_OPERATIONAL_READY_INTERNAL:-0}" = "1" ]; then
 	npcink_ai_cloud_require_cmd docker
-	npcink_ai_cloud_require_cmd python3
+	npcink_ai_cloud_require_release_tool_python "${RELEASE_TOOL_PYTHON}"
 	if [ -z "${WORKER_CUTOFF}" ]; then
 		echo "[fail] Cutover operational readiness requires --worker-cutoff." >&2
 		exit 1
 	fi
-	python3 - "${WORKER_CUTOFF}" <<'PY'
+	"${RELEASE_TOOL_PYTHON}" - "${WORKER_CUTOFF}" <<'PY'
 from __future__ import annotations
 
 from datetime import datetime
@@ -76,7 +79,7 @@ PY
 		restarting="$(docker inspect --format '{{.State.Restarting}}' "${container_id}")"
 		restart_count="$(docker inspect --format '{{.RestartCount}}' "${container_id}")"
 		started_at="$(docker inspect --format '{{.State.StartedAt}}' "${container_id}")"
-		python3 - "${service_name}" "${container_id}" "${WORKER_CUTOFF}" \
+		"${RELEASE_TOOL_PYTHON}" - "${service_name}" "${container_id}" "${WORKER_CUTOFF}" \
 			"${running}" "${restarting}" "${restart_count}" "${started_at}" <<'PY'
 from __future__ import annotations
 
@@ -225,8 +228,37 @@ PY
 fi
 
 npcink_ai_cloud_require_cmd curl
+npcink_ai_cloud_require_cmd mktemp
+unset NPCINK_CLOUD_INTERNAL_AUTH_TOKEN
+umask 077
+REQUEST_DIR="$(mktemp -d)"
+REQUEST_HEADERS="${REQUEST_DIR}/headers"
+cleanup_request_dir() {
+	local exit_status="$?"
+	local cleanup_failed=0
+	trap - EXIT
+	set +e
+	rm -rf -- "${REQUEST_DIR}" || cleanup_failed=1
+	if [ -e "${REQUEST_DIR}" ] || [ -L "${REQUEST_DIR}" ]; then
+		cleanup_failed=1
+	fi
+	if [ "${cleanup_failed}" -ne 0 ]; then
+		echo "[fail] Operational-readiness credential-file cleanup did not complete." >&2
+		exit_status=1
+	fi
+	exit "${exit_status}"
+}
+trap cleanup_request_dir EXIT
+chmod 0700 "${REQUEST_DIR}"
+printf '%s\n' "X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}" >"${REQUEST_HEADERS}"
+chmod 0600 "${REQUEST_HEADERS}"
+unset INTERNAL_AUTH_TOKEN
 curl -fsS \
-	-H "X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}" \
+	--header "@${REQUEST_HEADERS}" \
 	"${BASE_URL%/}/health/operational-ready" >/dev/null
+if ! rm -f -- "${REQUEST_HEADERS}"; then
+	echo "[fail] Operational-readiness credential-file cleanup failed." >&2
+	exit 1
+fi
 
 echo "[ok] Cloud service is operationally ready at ${BASE_URL}"

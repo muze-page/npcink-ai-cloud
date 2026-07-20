@@ -8,6 +8,43 @@ npcink_ai_cloud_require_cmd() {
 	}
 }
 
+npcink_ai_cloud_release_tool_python() {
+	printf '%s' "${NPCINK_CLOUD_RELEASE_TOOL_PYTHON:-python3}"
+}
+
+npcink_ai_cloud_require_release_tool_python() {
+	local python_command="${1:-$(npcink_ai_cloud_release_tool_python)}"
+
+	if [[ "${python_command}" == */* ]]; then
+		if [ ! -x "${python_command}" ]; then
+			echo "[fail] Host release-tool Python is not executable: ${python_command}" >&2
+			return 1
+		fi
+	elif ! command -v "${python_command}" >/dev/null 2>&1; then
+		echo "[fail] Host release-tool Python is not available: ${python_command}" >&2
+		return 1
+	fi
+
+	if ! "${python_command}" -c \
+		'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)'; then
+		echo "[fail] Release-tool Python 3.9 or newer is required: ${python_command}" >&2
+		return 1
+	fi
+}
+
+npcink_ai_cloud_require_host_release_tool_python() {
+	local python_command="${1:-$(npcink_ai_cloud_release_tool_python)}"
+
+	if ! npcink_ai_cloud_require_release_tool_python "${python_command}"; then
+		return 1
+	fi
+	if ! "${python_command}" -c \
+		'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'; then
+		echo "[fail] Host release-tool Python 3.11 or newer is required: ${python_command}" >&2
+		return 1
+	fi
+}
+
 npcink_ai_cloud_append_timing_summary() {
 	local label="$1"
 	local duration_seconds="$2"
@@ -239,6 +276,235 @@ npcink_ai_cloud_compose() {
 	COMPOSE_PROJECT_NAME="${compose_project_name}" \
 		NPCINK_CLOUD_BACKEND_ENV_FILE="${backend_env_file}" \
 		docker compose -f "${compose_file}" "$@"
+}
+
+npcink_ai_cloud_compose_run_with_image_proof() {
+	local root_dir="$1"
+	local service="$2"
+	local expected_reference="$3"
+	local expected_image_id="$4"
+	shift 4
+
+	local observed_image_id=""
+	local observed_reference_id=""
+	local run_status=0
+	local proof_failed=0
+	local cleanup_failed=0
+	local container_created=0
+	local cleanup_armed=0
+	local stdin_cleanup_armed=0
+	local stdin_capture_failed=0
+	local stdin_dir=""
+	local stdin_path=""
+	local payload_pid=""
+	local container_name="npcink-release-proof-${service}-$$-${RANDOM}"
+
+	one_off_remove_container() {
+		local attempt=0
+		[ "${cleanup_armed}" -eq 1 ] || return 0
+		while [ "${attempt}" -lt 2 ]; do
+			if docker rm -f "${container_name}" >/dev/null 2>&1; then
+				cleanup_armed=0
+				return 0
+			fi
+			attempt=$((attempt + 1))
+			sleep 1
+		done
+		return 1
+	}
+	one_off_remove_stdin() {
+		local failed=0
+		[ "${stdin_cleanup_armed}" -eq 1 ] || return 0
+		if [ -n "${stdin_path}" ]; then
+			rm -f -- "${stdin_path}" || failed=1
+			if [ -e "${stdin_path}" ] || [ -L "${stdin_path}" ]; then
+				failed=1
+			fi
+		fi
+		if [ -n "${stdin_dir}" ]; then
+			rmdir -- "${stdin_dir}" >/dev/null 2>&1 || failed=1
+			if [ -e "${stdin_dir}" ] || [ -L "${stdin_dir}" ]; then
+				failed=1
+			fi
+		fi
+		if [ "${failed}" -eq 0 ]; then
+			stdin_cleanup_armed=0
+		fi
+		return "${failed}"
+	}
+	one_off_mode_of() {
+		local mode=""
+		if mode="$(stat -c '%a' -- "$1" 2>/dev/null)"; then
+			:
+		elif mode="$(stat -f '%Lp' "$1" 2>/dev/null)"; then
+			:
+		else
+			return 1
+		fi
+		printf '%s' "${mode}"
+	}
+	one_off_cleanup() {
+		local failed=0
+		one_off_remove_container || failed=1
+		one_off_remove_stdin || failed=1
+		return "${failed}"
+	}
+	one_off_signal() {
+		local status="$1"
+		trap - EXIT HUP INT TERM
+		set +e
+		if [ -n "${payload_pid}" ]; then
+			kill "${payload_pid}" >/dev/null 2>&1 || true
+			wait "${payload_pid}" >/dev/null 2>&1 || true
+		fi
+		if ! one_off_cleanup; then
+			echo "[fail] One-off ${service} proof container could not be removed or protected stdin cleanup failed during signal cleanup." >&2
+			status=1
+		fi
+		exit "${status}"
+	}
+
+	if [[ ! "${service}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+		echo "[fail] Invalid one-off Compose service name." >&2
+		return 1
+	fi
+	if [[ ! "${expected_reference}" =~ ^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?$ ]]; then
+		echo "[fail] Invalid one-off expected image reference." >&2
+		return 1
+	fi
+	if [[ ! "${expected_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+		echo "[fail] Manifest-frozen one-off image ID is invalid." >&2
+		return 1
+	fi
+
+	stdin_cleanup_armed=1
+	trap 'one_off_signal 129' HUP
+	trap 'one_off_signal 130' INT
+	trap 'one_off_signal 143' TERM
+	if ! stdin_dir="$(mktemp -d "${TMPDIR:-/tmp}/npcink-release-proof-stdin.XXXXXX")"; then
+		stdin_cleanup_armed=0
+		trap - HUP INT TERM
+		echo "[fail] Protected one-off stdin directory could not be created." >&2
+		return 1
+	fi
+	stdin_path="${stdin_dir}/payload.stdin"
+	if ! chmod 0700 "${stdin_dir}" || \
+		[ ! -d "${stdin_dir}" ] || [ -L "${stdin_dir}" ] || \
+		[ ! -O "${stdin_dir}" ] || \
+		[ "$(one_off_mode_of "${stdin_dir}" 2>/dev/null || true)" != "700" ]; then
+		echo "[fail] One-off ${service} stdin directory is not private." >&2
+		proof_failed=1
+		stdin_capture_failed=1
+	fi
+	if [ "${proof_failed}" -eq 0 ]; then
+		if ! (umask 077; set -o noclobber; : >"${stdin_path}") 2>/dev/null || \
+			! chmod 0600 "${stdin_path}" || \
+			[ ! -f "${stdin_path}" ] || [ -L "${stdin_path}" ] || \
+			[ ! -O "${stdin_path}" ] || \
+			[ "$(one_off_mode_of "${stdin_path}" 2>/dev/null || true)" != "600" ]; then
+			echo "[fail] One-off ${service} stdin file is not private." >&2
+			proof_failed=1
+			stdin_capture_failed=1
+		fi
+	fi
+	# A terminal is not a finite payload and must not make a no-stdin migration
+	# wait for an interactive EOF. Non-interactive callers (including heredocs)
+	# are captured byte-for-byte. The explicit stdin duplication preserves the
+	# caller stream for the asynchronous process; running it in the background
+	# lets the signal trap interrupt a blocked/slow caller stream and clean up.
+	if [ "${proof_failed}" -eq 0 ] && [ ! -t 0 ]; then
+		cat <&0 >"${stdin_path}" &
+		payload_pid="$!"
+		if ! wait "${payload_pid}"; then
+			echo "[fail] One-off ${service} stdin could not be captured safely." >&2
+			proof_failed=1
+			stdin_capture_failed=1
+		fi
+		payload_pid=""
+	fi
+
+	if [ "${proof_failed}" -eq 0 ]; then
+		observed_reference_id="$(
+			docker image inspect --format '{{.Id}}' "${expected_reference}" 2>/dev/null
+		)" || {
+			echo "[fail] Expected one-off image reference is unavailable." >&2
+			proof_failed=1
+		}
+	fi
+	if [ "${proof_failed}" -eq 0 ] && \
+		[ "${observed_reference_id}" != "${expected_image_id}" ]; then
+		echo "[fail] One-off image tag drifted from the bundle manifest before container creation." >&2
+		proof_failed=1
+	fi
+
+	# Start the real Compose service shape with an inert process first. The
+	# migration/provider payload is not allowed to execute until the created
+	# container's immutable .Image matches the frozen exact tag.
+	if [ "${proof_failed}" -eq 0 ]; then
+		cleanup_armed=1
+		if npcink_ai_cloud_compose "${root_dir}" run -d \
+			--name "${container_name}" --no-deps --rm --entrypoint python "${service}" \
+			-c 'import time; time.sleep(900)' >/dev/null; then
+			container_created=1
+		else
+			run_status=$?
+			proof_failed=1
+		fi
+	fi
+
+	if [ "${container_created}" -eq 1 ]; then
+		observed_image_id="$(
+			docker inspect --format '{{.Image}}' "${container_name}" 2>/dev/null
+		)" || proof_failed=1
+		observed_reference_id="$(
+			docker image inspect --format '{{.Id}}' "${expected_reference}" 2>/dev/null
+		)" || proof_failed=1
+		if [ "${observed_image_id}" != "${expected_image_id}" ] || \
+			[ "${observed_reference_id}" != "${expected_image_id}" ]; then
+			proof_failed=1
+		fi
+	fi
+
+	if [ "${proof_failed}" -eq 0 ]; then
+		# Bash gives an asynchronous command /dev/null as stdin unless the
+		# redirection is explicit. Freeze the caller's stdin above, then feed that
+		# exact protected file to the background Docker client. Neither its path
+		# nor its contents enter process argv or ordinary logs.
+		docker exec -i "${container_name}" "$@" <"${stdin_path}" &
+		payload_pid="$!"
+		if wait "${payload_pid}"; then
+			run_status=0
+		else
+			run_status=$?
+		fi
+		payload_pid=""
+		observed_reference_id="$(
+			docker image inspect --format '{{.Id}}' "${expected_reference}" 2>/dev/null
+		)" || proof_failed=1
+		[ "${observed_reference_id}" = "${expected_image_id}" ] || proof_failed=1
+	fi
+	if ! one_off_cleanup; then
+		cleanup_failed=1
+	fi
+	trap - HUP INT TERM
+
+	if [ "${proof_failed}" -ne 0 ]; then
+		if [ "${stdin_capture_failed}" -ne 0 ]; then
+			echo "[fail] One-off ${service} payload was blocked because protected stdin was unavailable." >&2
+			return 1
+		fi
+		echo "[fail] One-off ${service} payload was blocked because the frozen exact image ID was not proved." >&2
+		return 1
+	fi
+	if [ "${run_status}" -ne 0 ]; then
+		echo "[fail] One-off ${service} command failed after exact image proof." >&2
+		return "${run_status}"
+	fi
+	if [ "${cleanup_failed}" -ne 0 ]; then
+		echo "[fail] One-off ${service} proof container could not be removed or protected stdin cleanup failed." >&2
+		return 1
+	fi
+	printf '[ok] One-off %s container used the frozen exact image ID.\n' "${service}"
 }
 
 npcink_ai_cloud_wait_for_ready() {

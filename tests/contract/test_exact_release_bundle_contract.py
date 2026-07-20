@@ -529,6 +529,39 @@ def install_real_prepare_only_loader(
     assert recreated.returncode == 0, recreated.stderr
 
 
+def test_role_image_id_is_read_from_verified_bundle_manifest(
+    exact_bundle_fixture: tuple[Path, Path, Path],
+) -> None:
+    _, bundle, _ = exact_bundle_fixture
+    manifest = json.loads((bundle / "release-bundle-manifest.json").read_text())
+    expected = next(
+        image["expected_image_id"]
+        for archive in manifest["archives"]
+        for image in archive["images"]
+        if image["role"] == "api"
+    )
+
+    completed = run_helper(
+        "role-image-id",
+        "--root",
+        str(bundle),
+        "--role",
+        "api",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == expected
+
+    missing = run_helper(
+        "role-image-id",
+        "--root",
+        str(bundle),
+        "--role",
+        "missing",
+    )
+    assert missing.returncode == 1
+    assert "missing or ambiguous" in missing.stderr
+
+
 def install_stateful_fake_docker(fake_bin: Path) -> None:
     docker = fake_bin / "docker"
     docker.write_text(

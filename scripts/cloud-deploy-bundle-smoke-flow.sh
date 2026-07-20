@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -37,6 +38,7 @@ PY
 SITE_ID="${NPCINK_CLOUD_SITE_ID:-site_deploy_smoke}"
 KEY_ID="${NPCINK_CLOUD_KEY_ID:-key_deploy_smoke}"
 SECRET="${NPCINK_CLOUD_SECRET:-npcink-cloud-deploy-secret}"
+unset NPCINK_CLOUD_SECRET
 DEPLOY_SMOKE_POSTGRES_PASSWORD="${NPCINK_CLOUD_DEPLOY_SMOKE_POSTGRES_PASSWORD:-npcink-cloud-deploy-postgres-secret}"
 
 export POSTGRES_PASSWORD="${DEPLOY_SMOKE_POSTGRES_PASSWORD}"
@@ -107,8 +109,6 @@ export NPCINK_CLOUD_PORT="${PORT}"
 export NPCINK_CLOUD_BASE_URL="${BASE_URL}"
 export NPCINK_CLOUD_SITE_ID="${SITE_ID}"
 export NPCINK_CLOUD_KEY_ID="${KEY_ID}"
-export NPCINK_CLOUD_SECRET="${SECRET}"
-
 ok "Replaying bundle load/up"
 run_deploy_command bash deploy/remote-load-and-up.sh
 
@@ -126,9 +126,11 @@ ok "Replaying migrate"
 run_deploy_command bash deploy/remote-migrate.sh
 
 ok "Replaying seed"
-run_deploy_command bash deploy/remote-seed-runtime.sh --site-id "${SITE_ID}" --key-id "${KEY_ID}" --secret "${SECRET}"
+NPCINK_CLOUD_SECRET="${SECRET}" \
+	run_deploy_command bash deploy/remote-seed-runtime.sh --site-id "${SITE_ID}" --key-id "${KEY_ID}"
 
 ok "Running smoke"
-run_deploy_command bash deploy/remote-smoke.sh --base-url "${BASE_URL}" --site-id "${SITE_ID}" --key-id "${KEY_ID}" --secret "${SECRET}"
+NPCINK_CLOUD_SECRET="${SECRET}" \
+	run_deploy_command bash deploy/remote-smoke.sh --base-url "${BASE_URL}" --site-id "${SITE_ID}" --key-id "${KEY_ID}"
 
 ok "Cloud deploy bundle smoke completed successfully."

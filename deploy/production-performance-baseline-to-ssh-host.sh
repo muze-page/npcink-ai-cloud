@@ -64,7 +64,7 @@ fi
 
 SSH_ARGS=(
 	-p "${SSH_PORT}"
-	-o StrictHostKeyChecking=accept-new
+	-o StrictHostKeyChecking=yes
 	-o BatchMode=yes
 	-o ConnectTimeout="${SSH_CONNECT_TIMEOUT_SECONDS}"
 )

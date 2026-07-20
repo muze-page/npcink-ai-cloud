@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 HELPER="${ROOT_DIR}/scripts/verify-release-bundle-manifest.py"
+. "${ROOT_DIR}/deploy/common.sh"
+RELEASE_TOOL_PYTHON="$(npcink_ai_cloud_release_tool_python)"
 MODE="pre-load"
 TARGET="${ROOT_DIR}"
 CHECKSUM=""
@@ -47,10 +49,7 @@ case "${1:-}" in
 		;;
 esac
 
-command -v python3 >/dev/null 2>&1 || {
-	echo "[fail] python3 is required for exact release-bundle verification" >&2
-	exit 1
-}
+npcink_ai_cloud_require_release_tool_python "${RELEASE_TOOL_PYTHON}"
 [ -f "${HELPER}" ] || {
 	echo "[fail] release-bundle verifier helper is missing: ${HELPER}" >&2
 	exit 1
@@ -60,17 +59,17 @@ case "${MODE}" in
 	archive)
 		[ -f "${TARGET}" ] || { echo "[fail] bundle archive not found: ${TARGET}" >&2; exit 1; }
 		[ -f "${CHECKSUM}" ] || { echo "[fail] bundle checksum not found: ${CHECKSUM}" >&2; exit 1; }
-		python3 "${HELPER}" verify-archive --bundle "${TARGET}" --checksum "${CHECKSUM}"
+		"${RELEASE_TOOL_PYTHON}" "${HELPER}" verify-archive --bundle "${TARGET}" --checksum "${CHECKSUM}"
 		;;
 	pre-load)
-		python3 "${HELPER}" verify-directory --root "${TARGET}"
+		"${RELEASE_TOOL_PYTHON}" "${HELPER}" verify-directory --root "${TARGET}"
 		;;
 	post-load)
 		command -v docker >/dev/null 2>&1 || {
 			echo "[fail] docker is required for post-load image-ID verification" >&2
 			exit 1
 		}
-		python3 "${HELPER}" verify-directory --root "${TARGET}" --post-load
+		"${RELEASE_TOOL_PYTHON}" "${HELPER}" verify-directory --root "${TARGET}" --post-load
 		;;
 esac
 

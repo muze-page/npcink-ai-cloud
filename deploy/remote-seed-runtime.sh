@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # Shared compose/env helpers for deploy scripts.
@@ -24,8 +25,8 @@ while [ "$#" -gt 0 ]; do
 			shift 2
 			;;
 		--secret)
-			SECRET="$2"
-			shift 2
+			echo "[fail] --secret is forbidden because process arguments are observable; use NPCINK_CLOUD_SECRET or a protected environment file." >&2
+			exit 1
 			;;
 		--site-name)
 			SITE_NAME="$2"
@@ -52,11 +53,21 @@ done
 
 npcink_ai_cloud_require_cmd docker
 
+if [ -z "${SECRET}" ]; then
+	echo "[fail] NPCINK_CLOUD_SECRET is required for runtime seeding." >&2
+	exit 1
+fi
+
+# The host-side value is copied to a short-lived, purpose-specific container
+# environment variable. Docker and Python argv contain only its variable name.
+unset NPCINK_CLOUD_SECRET
+export NPCINK_CLOUD_SEED_RUNTIME_SECRET="${SECRET}"
+unset SECRET
+
 SEED_ARGS=(
-	python -m app.dev.seed_runtime
+	python -
 	--site-id "${SITE_ID}"
 	--key-id "${KEY_ID}"
-	--secret "${SECRET}"
 	--scopes "${SCOPES}"
 )
 
@@ -70,4 +81,25 @@ if [ "${SKIP_HEALTH_SCAN}" -eq 1 ]; then
 	SEED_ARGS+=(--skip-health-scan)
 fi
 
-npcink_ai_cloud_compose "${ROOT_DIR}" run --rm api "${SEED_ARGS[@]}"
+seed_status=0
+npcink_ai_cloud_compose "${ROOT_DIR}" run --rm -T \
+	-e NPCINK_CLOUD_SEED_RUNTIME_SECRET \
+	api "${SEED_ARGS[@]}" <<'PY' || seed_status=$?
+from __future__ import annotations
+
+import os
+import sys
+
+from app.dev.seed_runtime import main
+
+secret = os.environ.pop("NPCINK_CLOUD_SEED_RUNTIME_SECRET", "")
+if not secret:
+    raise SystemExit("[fail] Runtime seed secret is missing.")
+sys.argv.extend(("--secret", secret))
+main()
+PY
+if ! unset NPCINK_CLOUD_SEED_RUNTIME_SECRET; then
+	echo "[fail] Runtime seed secret cleanup failed." >&2
+	exit 1
+fi
+exit "${seed_status}"

@@ -69,6 +69,40 @@ Loopback origins are a development convenience only. If a production frontend
 requires `http://127.0.0.1:8010` or `localhost` as a public URL, treat that as a
 release-blocking environment configuration error.
 
+### Production host ownership and release-tool Python
+
+Production release tooling and Cloud application code have separate Python
+contracts:
+
+- release tooling on the host uses
+  `NPCINK_CLOUD_RELEASE_TOOL_PYTHON=/usr/bin/python3.11` and requires Python
+  `>=3.11`;
+- the Cloud application runs only inside the exact release image and requires
+  Python `>=3.12`; host Python must never be treated as an application runtime.
+
+Set `NPCINK_CLOUD_DEPLOY_HOST_PYTHON=/usr/bin/python3.11`, or pass
+`--host-python /usr/bin/python3.11`, for the production SSH deploy. The deploy
+entry point verifies the absolute executable and its version over SSH before it
+creates a remote incoming directory, uploads bytes, or acquires `.deploy-lock`.
+Install or repair that host prerequisite before retrying; do not upload a
+bundle first and hope a later remote phase can recover.
+
+All managed production paths under `/opt/npcink-ai-cloud` are root-owned. Before
+the P1-E06 cutover, normalize the managed tree to `root:root` and prove that no
+managed directory or file is group- or world-writable. Create the transient and
+backup roots explicitly:
+
+```bash
+sudo chown -R root:root -- /opt/npcink-ai-cloud
+test -z "$(sudo find /opt/npcink-ai-cloud \( ! -user root -o ! -group root -o -perm /022 \) -print -quit)"
+sudo install -d -o root -g root -m 0700 \
+  /var/backups/npcink-ai-cloud \
+  /run/npcink-ai-cloud
+```
+
+Run the cutover as root. Do not mix a deploy-user-owned release tree with a
+root-owned lock, state, backup, or evidence tree.
+
 ### External Edge and bundled NGINX
 
 Production has one public chain:
@@ -89,31 +123,130 @@ The exact-bundle smoke may replay the artifact through loopback NGINX over
 plain HTTP. That is a local verification exception, never a production public
 origin.
 
+P1-E06 has an independent production Edge hard gate. Before the cutover or
+first image mutation may start, install and activate host NGINX through the
+governed binding helper, pass `nginx -t` and the exact-host loopback-resolved
+HTTPS check, stop the retired project Caddy, and persist
+`NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`. The encryption cutover neither creates
+nor repairs this topology. Pure `--stage-only` upload and verification may run
+while this gate is pending because it does not inspect runtime state or mutate
+images.
+
+The gate also requires a named certificate-renewal owner, an enabled automatic
+renewal service/timer, a persistent root-owned non-writable executable hook in
+`renewal-hooks/deploy`, a successful renewal dry run, direct hook/reload proof,
+and at least 30 days remaining on both the named PEM leaf and the leaf actually
+served by `127.0.0.1:443`. Their SHA256 fingerprints must match. On the current
+Alibaba Cloud Linux 3 target, use the EPEL `certbot-renew.timer`; another timer
+is accepted only when explicitly selected and bound into evidence. Do not
+retire Caddy while it is still the only working certificate-renewal owner.
+The selected timer must resolve through its effective `Unit` to one service
+whose effective `ExecStart` directly invokes the canonical, root-owned,
+non-group/world-writable Certbot executable with a real `renew` subcommand.
+Shell or `env` wrappers, no-op services, ignored errors, dry-run-only commands,
+hook-disabling flags, and unrelated Certbot subcommands are release-blocking
+failures.
+Host NGINX must reference the Certbot live-lineage `fullchain.pem` and
+`privkey.pem` directly. Do not copy either file into `/etc/nginx/ssl`: renewal
+would rotate the lineage target while NGINX kept serving the stale copy. Both
+live paths must be symlinks to root-owned, non-symlink files in the matching
+`/etc/letsencrypt/archive` lineage; the private-key target must grant no group
+or other permissions. Readiness parses the effective `nginx -T` server block,
+binds both directives and their digest, proves keypair equality, then compares
+the named and loopback-served leaves.
+
+After host NGINX is active, generate the fail-closed evidence from the exact
+staged release. The script is root-only, requires `/usr/bin/python3.11`, runs a
+real Certbot dry run with deploy hooks, and atomically writes a root-owned
+mode-`0600` receipt. The receipt binds `renewal_service`, `certbot_real_path`,
+`renewal_exec_start_sha256`, both archive targets, the derived private-key
+path, and the actual NGINX TLS binding; `verify` resolves and compares them
+again. The receipt is valid for at most seven days:
+
+```bash
+sudo NPCINK_CLOUD_RELEASE_TOOL_PYTHON=/usr/bin/python3.11 \
+  "${STAGED_RELEASE}/deploy/certificate-renewal-readiness.sh" generate \
+  --domain cloud.npc.ink \
+  --certificate-path /etc/letsencrypt/live/cloud.npc.ink/fullchain.pem \
+  --owner certbot \
+  --timer certbot-renew.timer \
+  --deploy-hook-path /etc/letsencrypt/renewal-hooks/deploy/reload-nginx \
+  --evidence-path /var/lib/npcink-ai-cloud/edge/certificate-renewal-readiness.json
+```
+
+Persist all four exact values in the active release env; formal runtime has no
+fallback for any of them:
+
+```dotenv
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH=/etc/letsencrypt/live/cloud.npc.ink/fullchain.pem
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH=/var/lib/npcink-ai-cloud/edge/certificate-renewal-readiness.json
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=certbot-renew.timer
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH=/etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+```
+
+Formal `full` and `prepare-only` image flows, and P1-E06 itself, run `verify`
+before image snapshot/tag/load or database work. `generate` first removes and
+fsyncs any prior receipt, so a failed regeneration leaves no reusable success.
+Regenerate after certificate or hook rotation and before the receipt becomes
+seven days old; never hand-edit the JSON.
+
+Inventory note (2026-07-20): host NGINX was absent, the retired Caddy was still
+running, and the external-Edge readiness flag was absent. This dated note is
+operator context, not a permanent policy assertion; update it after the gate is
+closed without weakening the stable checks above.
+
 For the first migration from the retired bundled edge:
 
 1. Retain the previous bundle and matched database recovery point while the old
-   Caddy route remains active.
-2. Preinstall host NGINX and `curl`, then run
-   `deploy/bind-domain-to-ssh-host.sh --prepare-only`. Require private-key
-   permission validation, certificate/key matching, loopback-upstream health,
-   and `nginx -t`; this mode must not install packages, start, or restart host
-   NGINX.
-3. Record and stop only the running Caddy container IDs selected by both
-   `com.docker.compose.project=${NPCINK_CLOUD_COMPOSE_PROJECT_NAME}` and
-   `com.docker.compose.service=caddy` labels.
-4. Rerun the binding helper without `--prepare-only`. It must reject a still
-   running project Caddy, activate host NGINX, and pass the loopback-resolved
-   public HTTPS health check before the readiness acknowledgement is set.
-5. Run the normal release loader and require its marker
+   Caddy route remains active. Provision the certificate, preinstall host NGINX,
+   EPEL Certbot, and `curl`, but do not yet enable renewal or mutate images.
+2. Run `deploy/bind-domain-to-ssh-host.sh --prepare-only` with the remote
+   `/etc/letsencrypt/live/<lineage>/fullchain.pem` and matching `privkey.pem`
+   paths. The helper must hold `/opt/npcink-ai-cloud/.deploy-lock`, validate the
+   lineage/targets, keypair, loopback upstream and candidate `nginx -t`, then
+   restore the exact prior NGINX files. This mode must not upload TLS material,
+   stop Caddy, restart NGINX, switch traffic, or leave a prepared config behind.
+3. Rerun the same binding command without `--prepare-only`; do not manually stop
+   Caddy between invocations. The one locked remote transaction freezes NGINX
+   state plus exact running project-Caddy IDs, stops only those IDs, activates
+   and validates NGINX, and commits only after loopback-resolved HTTPS succeeds.
+   Any failure restores NGINX and restarts/verifies the exact frozen Caddy IDs.
+   Incomplete rollback preserves its evidence and `.deploy-lock` for recovery.
+   Final health is marked committed while the lock is still held; if lock
+   release then fails, retain the healthy Edge plus lock/evidence, return
+   nonzero, and do not perform a post-commit rollback.
+4. Install the persistent hook and enable the Alibaba Cloud Linux 3 EPEL timer:
+
+   ```bash
+   sudo install -d -o root -g root -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+   printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' \
+     '/usr/sbin/nginx -t' '/usr/bin/systemctl reload nginx' | \
+     sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx >/dev/null
+   sudo chown root:root /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+   sudo chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+   sudo systemctl enable --now certbot-renew.timer
+   sudo systemctl show certbot-renew.timer \
+     --property=NextElapseUSecRealtime --value
+   sudo /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+   ```
+
+   This persistent operator-owned hook is host Edge configuration, not Cloud
+   application code. Directly run the installed hook once and require success;
+   the readiness receipt binds its absolute path and SHA256.
+5. Run `certificate-renewal-readiness.sh generate` exactly as above, persist all
+   four certificate-readiness env values, and leave image preparation blocked
+   unless `verify` succeeds. No current production receipt exists, so this gate
+   remains open today.
+6. Only then run the normal release loader and require its marker
    `[ok] Retired bundle services are absent: caddy jaeger otel-collector`
    before public health verification.
-6. Confirm no current Compose-project container is named for `caddy`, `jaeger`,
+7. Confirm no current Compose-project container is named for `caddy`, `jaeger`,
    or `otel-collector`, then verify public HTTPS, operational readiness, signed
    runtime, and media upload/download controls.
 
-The binding helper restores prior host NGINX files and service state when its
-activation fails. Before the loader runs, rollback is `stop host NGINX ->
-restart only the recorded Caddy IDs`. After the loader starts, rollback is
+The binding helper itself restores prior host NGINX files/service state and
+restarts/verifies only its frozen Caddy IDs when activation fails. Do not
+perform a second manual ingress switch. After the loader starts, rollback is
 `stop the new project -> stop host NGINX -> restore the matched prior bundle
 and database recovery point when required`. The loader uses Compose orphan
 removal and fails closed on any residual retired service. Never leave both
@@ -129,7 +262,16 @@ Compose project label must match it. A project rename or label drift during an
 ordinary deploy is a blocking configuration error because it can leave old
 writers outside the stop/recovery set. `--skip-frontend-image` is valid only
 when exactly one running old frontend exists to preserve; never use it for a
-first deploy or a missing frontend.
+first deploy or a missing frontend. Ordinary full deploy itself also requires
+an existing managed `current` release and must not bootstrap a new host. Before
+image loading it queries PostgreSQL through the frozen previous release;
+revision `20260710_0058` is a hard stop requiring the P1-E06 orchestrator.
+Formal production dispatch additionally verifies the persistent global
+activation receipt, its complete digest-bound cutover evidence, and that the
+current revision is `0068` or a descendant in the staged Alembic graph. Full
+deploy requires that receipt gate and cannot disable it; the production
+workspace target also exports `NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT=1`. Only
+`--stage-only` omits the receipt.
 
 The normal deploy sequence is fixed:
 
@@ -146,8 +288,14 @@ prepare exact images
   -> restore frontend/proxy traffic
 ```
 
-Migration and provider refresh use `run --rm --no-deps --pull never`; release
-operations must consume the exact loaded image and must not pull a mutable tag.
+Migration and provider refresh first use Compose
+`run -d --name --no-deps --rm` with
+an inert Python entrypoint. Release tooling compares both the tag and the
+created container `.Image` with the bundle-manifest API image ID before any
+payload runs, executes the payload through `docker exec -i`, then removes the
+proof container. Its inert process self-terminates after 15 minutes as an
+additional interruption cleanup bound. Docker Compose v2.27 `run` receives no CLI `--pull` option;
+Runtime Compose also sets `pull_policy: never`.
 The worker gate requires exactly one `worker`, `callback-worker`, and
 `ops-worker` container, all running and non-restarting with zero restarts and a
 stable container ID, plus `runtime_queue`, `callback_dispatch`, and
@@ -170,6 +318,12 @@ force a retry.
 After success, retain the new release's external `env.deploy` as matched release
 state. Remove the temporary rollback-image map and its private rollback tags;
 do not remove the per-release env state with them.
+Once the new runtime has passed activation checks, an incoming, rollback-tag,
+rollback-map, stale-marker, or lock cleanup failure is post-commit
+terminalization failure: keep the healthy new `current`, return nonzero, retain
+the rollback map and `.deploy-lock`, and repair from the restricted failure
+marker. Do not start an old-runtime rollback. Report success only after every
+tag/map cleanup and lock release is proved.
 
 ## Signed Runtime Smoke Semantics
 
@@ -229,81 +383,53 @@ configuration value. Never update it or
 `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID` through the normal secret-rotation
 or deploy-and-restart path. A direct change can strand persisted ciphertext.
 
-Use a planned maintenance window and a bundle-backed staged release. Extract
-and load the release bundle first, then work from its staged release directory;
-do not switch `current` yet. The staged `docker-compose.runtime.yml` must resolve
-`api` to the newly loaded release image. The maintenance command runs inside
-that image and does not require Python or application source on the host.
+The first raw-ciphertext migration is a one-time P1-E06 operation. Use the
+single fail-closed orchestrator; do not reproduce its migration, backup,
+restore, key rewrite, pointer, worker, or cleanup sequence by hand.
 
-1. Record the current release revision, current key ID, database target, staged
-   release path, and rollback owner. Keep the old code and old decryption key
-   material available from the protected operator secret store; do not place a
-   key value in shell history, command arguments, logs, or Git.
-2. A pure bundle does not contain `.env.deploy`. Before any Compose command,
-   create the staged release's external state, copy the protected current
-   release state into it, and verify directory modes `0700` and file mode
-   `0600`. Do not put the env in the release directory. Do not call
-   `deploy/deploy-to-ssh-host.sh`, `deploy/remote-load-and-up.sh`, or another
-   general deploy helper for this staging step: those paths switch `current`
-   and/or start services before re-encryption verification.
+1. From the trusted operator workstation, stage the already-built exact bundle
+   with `deploy/deploy-to-ssh-host.sh --stage-only`. Set the production host
+   release-tool interpreter explicitly. Stage-only accepts only its mode,
+   bundle/platform, SSH connection, host-Python, and managed-root inputs; do
+   not supply env, base URL, site, key, model, provider, member, migration,
+   refresh, seed, smoke, or ordinary-deploy inputs:
 
    ```bash
-   REMOTE_DIR=/opt/npcink-ai-cloud
-   STAGED_RELEASE="${REMOTE_DIR}/release-STAGED_RELEASE"
-   STAGED_RELEASE_NAME="$(basename "${STAGED_RELEASE}")"
-   CURRENT_RELEASE="$(readlink -f "${REMOTE_DIR}/current")"
-   CURRENT_RELEASE_NAME="$(basename "${CURRENT_RELEASE}")"
-   RELEASE_STATE_ROOT="${REMOTE_DIR}/.release-state"
-   RELEASE_STATE_DIR="${RELEASE_STATE_ROOT}/${STAGED_RELEASE_NAME}"
-   RELEASE_ENV_FILE="${RELEASE_STATE_DIR}/env.deploy"
-   ENV_SOURCE="${RELEASE_STATE_ROOT}/${CURRENT_RELEASE_NAME}/env.deploy"
-   umask 077
-   install -d -m 0700 "${RELEASE_STATE_ROOT}" "${RELEASE_STATE_DIR}"
-   if [ ! -f "${ENV_SOURCE}" ]; then
-     # one-time transition for the currently deployed legacy host only. This
-     # creates external release state; it is not a continuing runtime fallback.
-     LEGACY_ENV_SOURCE="${REMOTE_DIR}/.env.deploy"
-     test -f "${LEGACY_ENV_SOURCE}"
-     test "$(stat -c '%a' "${LEGACY_ENV_SOURCE}")" = "600"
-     install -d -m 0700 "${RELEASE_STATE_ROOT}/${CURRENT_RELEASE_NAME}"
-     install -m 600 "${LEGACY_ENV_SOURCE}" "${ENV_SOURCE}"
-   fi
-   test -f "${ENV_SOURCE}"
-   install -m 600 "${ENV_SOURCE}" "${RELEASE_ENV_FILE}"
-   test "$(stat -c '%a' "${RELEASE_STATE_ROOT}")" = "700"
-   test "$(stat -c '%a' "${RELEASE_STATE_DIR}")" = "700"
-   test "$(stat -c '%a' "${RELEASE_ENV_FILE}")" = "600"
-   export NPCINK_CLOUD_ENV_FILE="${RELEASE_ENV_FILE}"
-   export NPCINK_CLOUD_BACKEND_ENV_FILE="${RELEASE_ENV_FILE}"
-   cd "${STAGED_RELEASE}"
+   unset NPCINK_CLOUD_ENV_FILE
+   export NPCINK_CLOUD_DEPLOY_HOST_PYTHON=/usr/bin/python3.11
+   bash deploy/deploy-to-ssh-host.sh \
+     --stage-only \
+     --skip-bundle-build \
+     --bundle-path dist/deploy-bundle.tgz \
+     --image-platform linux/amd64 \
+     --ssh-host "${SSH_HOST}" \
+     --ssh-user "${SSH_USER}" \
+     --identity-file "${SSH_IDENTITY_FILE}" \
+     --host-python /usr/bin/python3.11 \
+     --remote-dir /opt/npcink-ai-cloud
    ```
 
-   After the matched recovery/evidence window, remove the one-time legacy root
-   env source. All subsequent operations must resolve per-release external
-   state directly and must not retain a legacy fallback.
-
-3. Use the production `COMPOSE_PROJECT_NAME`. Keep `postgres` and `redis`
-   running, but stop and fence all four writers: `api`, `worker`,
-   `callback-worker`, and `ops-worker`. Keep public traffic in
-   maintenance/fail-closed mode until the cutover is verified:
-
-   ```bash
-   cd "${STAGED_RELEASE}"
-   export COMPOSE_PROJECT_NAME="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-npcink-ai-cloud}"
-   docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml up -d --pull never --no-build postgres redis
-   docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-     stop api worker callback-worker ops-worker
-   ```
-
-4. Create a custom-format PostgreSQL backup with restrictive permissions,
-   record its SHA-256 checksum, restore it into a separate verification
-   database, and prove that the restored inventory is readable with the old
-   code and old key. A database dump without its matching key is not a usable
-   encrypted-data recovery point.
-5. Create an untracked maintenance env file outside the release directory and
-   set it to mode `0600`. It must contain the target envelope and one explicit
-   old root, while normal production settings continue to come from the staged
-   external `${RELEASE_ENV_FILE}`:
+   Accept only the machine-readable `staged_release=/absolute/release-path`
+   output. Stage-only uploads and verifies the archive, safely extracts it, and
+   runs the bundle pre-load check. It releases its own lock without resolving
+   or changing `current`, creating release env state, loading images, invoking
+   Docker, stopping services, running migrations, or starting traffic. Failure
+   removes the unverified release and incoming files. Ordinary deploy remains a
+   different path. The remote Python `>=3.11` check runs before remote mkdir,
+   upload, or lock. Local/archive preflight failures create no remote object;
+   later stage-only failure removes its incoming object, partial release, and
+   lock before returning nonzero.
+2. Recheck and close the independent Edge hard gate. Record the current
+   release, source database revision `20260710_0058`, old key recovery owner,
+   exact Linux/AMD64 bundle checksum, and rollback owner. The verified staged
+   directory may exist already, but do not start the cutover or mutate an image
+   until the Edge gate is complete. Normalize the managed root to `root:root`,
+   prove it has no group/world-writable path, and create
+   `/var/backups/npcink-ai-cloud` plus `/run/npcink-ai-cloud` as root-owned mode
+   `0700` directories before invoking the cutover.
+3. On the production host, create the untracked maintenance env outside the
+   release tree, mode `0600`, with exactly these three keys. Keep values out of
+   shell history, command arguments, logs, and Git:
 
    ```text
    NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=<target-secret>
@@ -311,85 +437,151 @@ that image and does not require Python or application source on the host.
    NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root-secret>
    ```
 
-   ```bash
-   export MAINTENANCE_ENV=/run/npcink-ai-cloud/runtime-data-reencrypt.env
-   test "$(stat -c '%a' "${MAINTENANCE_ENV}")" = "600"
-   ```
-
-6. From the staged release directory, run all phases through a one-off `api`
-   container from the new image. `--no-deps` prevents these commands from
-   starting any stopped writer or replacing the already-running database/cache:
+4. Run the one-time orchestrator in the foreground with the three exact
+   acknowledgements. It prepares exact images through the governed
+   `remote-load-and-up.sh` `prepare-only` mode, then stops and fences public
+   services plus `api`, `worker`, `callback-worker`, and `ops-worker`. The
+   prepare-only helper is intentionally allowed inside this orchestrator; do
+   not call a traffic-starting load mode as a staging shortcut.
 
    ```bash
-   docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-     python -m app.dev.reencrypt_runtime_data inventory
-   docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-     python -m app.dev.reencrypt_runtime_data dry-run \
-       --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
-   docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-     python -m app.dev.reencrypt_runtime_data apply \
-       --confirm-maintenance-window \
-       --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
-   docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-     python -m app.dev.reencrypt_runtime_data verify
+   sudo "${STAGED_RELEASE}/deploy/runtime-data-encryption-cutover.sh" \
+     --remote-dir /opt/npcink-ai-cloud \
+     --staged-release "${STAGED_RELEASE}" \
+     --host-python /usr/bin/python3.11 \
+     --maintenance-env /run/npcink-ai-cloud/runtime-data-reencrypt.env \
+     --backup-path /var/backups/npcink-ai-cloud/p1-e06.dump \
+     --off-host-receipt /run/npcink-ai-cloud/p1-e06-off-host-receipt.json \
+     --off-host-receipt-timeout-seconds 900 \
+     --confirm-off-host-handoff I_ACKNOWLEDGE_THE_BACKUP_COPY_IS_OFF_HOST_AND_INDEPENDENT \
+     --confirm-whole-database-restore I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_AND_OLD_KEY_TOGETHER \
+     --confirm-production-cutover I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER
    ```
 
-   The first raw-ciphertext cutover intentionally omits `--old-key-id`.
+5. The orchestrator publishes a fresh mode-`0600` custom-format backup and
+   checksum, atomically writes its mode-`0600` handoff marker under the staged
+   release's external evidence directory, and waits in the same process. It
+   does not accept an ordinary same-host copy as off-host evidence. From the
+   trusted workstation, pull both backup files with `scp` to independent
+   storage and verify SHA-256 locally. Create a receipt containing exactly:
 
-   For a future `rde.v1` to `rde.v1` rotation, inventory must declare the old
-   envelope key ID even though it does not need the old root. Then `dry-run` and
-   `apply` must pair that same key ID positionally with its old root:
-
-   ```bash
-   export OLD_RUNTIME_DATA_KEY_ID=rde-previous-key-id
-   docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-     python -m app.dev.reencrypt_runtime_data inventory --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
-   docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-     python -m app.dev.reencrypt_runtime_data dry-run \
-       --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET \
-       --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
-   docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-     run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-     python -m app.dev.reencrypt_runtime_data apply \
-       --confirm-maintenance-window \
-       --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET \
-       --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
+   ```json
+   {
+     "contract": "p1_e06_off_host_backup_receipt.v1",
+     "status": "passed",
+     "backup_sha256": "<verified-sha256>",
+     "off_host_copy": true
+   }
    ```
 
-   Add further `--old-root-env`/`--old-key-id` pairs only when preflight evidence
-   proves multiple historical envelopes. Stop immediately on an unreadable row,
-   count mismatch, partial-apply error, or verification failure. Do not start
-   any writer after a failed phase.
-7. After new-key-only verification succeeds, update only the staged release's
-   external `${RELEASE_ENV_FILE}` with the target secret/key ID and keep it mode
-   `0600`. Preserve the prior release's external state unchanged with its old
-   database/key recovery point. Promote the verified staged release; do not
-   rerun the ordinary deploy sequence for the key change.
-8. Start `api` from that same release image and verify `/health/ready`; then
-   capture a high-resolution cutoff immediately before starting `worker`,
-   `callback-worker`, and `ops-worker`. Prove exactly one stable container per
-   worker service, zero restarts, unchanged container IDs across the stability
-   window, and all three heartbeat timestamps newer than the cutoff. Then pass
-   generic `/health/operational-ready` and restore `frontend`, `proxy`, and
-   external-Edge traffic. Verify fresh cadence, signed runtime execution/result
-   retrieval, terminal callback delivery, Addon connection consumption, and
-   idempotent Portal replay.
-9. After the rollback-evidence window, securely delete the maintenance env and
-   temporary old-key copies. Normal runtime has no legacy or dual-read path;
-   retain the migration-only re-encryption tool for future controlled rekeys.
+   Upload the receipt to a temporary sibling path, set it mode `0600`, then
+   atomically rename it to the exact receipt path printed by the waiting
+   process. The final path must not have existed, must not be a symlink, and
+   must be owned by the cutover operator. Never manufacture the receipt before
+   the independent pull and local checksum verification. After validation, the
+   orchestrator persists an immutable evidence copy named
+   `off-host-receipt-verified.json` together with the source receipt path and
+   receipt SHA-256. The terminal result carries that receipt digest; deleting
+   or replacing the transient upload must not erase the validated evidence.
+6. After accepting the receipt, the same process proves an independent
+   PostgreSQL 16 restore, rehearses `0058 -> 0068`, runs count-locked
+   `inventory -> dry-run -> apply -> verify` against the restored copy, removes
+   the disposable restore resources, and only then switches production
+   `postgres` and `redis` to the exact target bundle image IDs. It proves both
+   container image IDs, both health checks, and that PostgreSQL remains at
+   `0058` before production migration begins. Compose v2.27 one-off commands
+   use `run --rm --no-deps -e VARIABLE_NAME`; they never use a CLI `--pull`
+   option, pass secret values on the command line, or use an env-file run
+   option. Runtime Compose `pull_policy: never` plus the staged image-ID proof
+   binds every one-off to the exact API image. The first raw-ciphertext cutover
+   intentionally omits `--old-key-id`.
+7. The orchestrator writes the target key only to the staged external env,
+   atomically activates the staged release, verifies API and new worker
+   generation readiness, restores traffic, and validates the active release.
+   Immediately after that validation it durably publishes
+   `activation-commit.json`; this is the explicit irreversible activation
+   commit point. Only after the commit point may it remove the rollback
+   map/private tags, atomically publish the final mode-`0600`
+   `.release-state/<staged-release-name>/p1-e06-runtime-data-cutover/cutover-result.json`.
+   It then publishes the global activation receipt bound to both the activation
+   commit and cutover-result digests, releases `.deploy-lock`, and only then
+   marks the operation complete. A successful command exit alone is insufficient.
 
-If rollback is required, fence the same four writers and restore the matching
-old database backup (the pre-cutover snapshot), old application revision, and
-old key together.
-After new-key writes have begun, rolling back only code or only the environment
-is invalid; use a verified reverse re-encryption or accept the explicitly
-approved loss of post-cutover writes when restoring the full old recovery point.
+Failure recovery has two non-interchangeable boundaries:
+
+- Before production migration starts, the old application may be restored
+  automatically after the failure evidence is written. If production data
+  services were not switched, prove their existing health and `0058`, then
+  restore the prior application and traffic. If they were switched to target
+  image IDs, first restore the recorded PostgreSQL and Redis tags, recreate and
+  prove those dependencies healthy with PostgreSQL still at `0058`, and only
+  then restore the prior API, workers, frontend, and proxy. Do not claim that
+  writers remain stopped when this verified pre-migration recovery succeeds.
+- Once production migration starts, do not downgrade and do not restart old
+  code against the new or partially changed schema. Restore the whole fresh
+  `0058` database dump, previous application release, previous external env,
+  and old key together. A code-only, env-only, key-only, or database-only
+  rollback is forbidden. Migration `0061` removes legacy media/audio tables,
+  so an Alembic downgrade cannot reconstruct the pre-cutover bytes.
+
+Before the activation commit point, every unrecovered failure leaves
+`/opt/npcink-ai-cloud/.cutover-failed` and retains `.deploy-lock` for operator
+recovery; passed and failed evidence must never coexist. After the activation
+commit point, cleanup, private/global evidence, or unlock failure is terminalization
+incomplete, not a rollback signal: keep the healthy new runtime and pointer,
+do not restore tags or stop writers, and retain or reacquire the lock with
+`outcome=activation_committed_terminalization_incomplete` and
+`recovery=do_not_rollback_healthy_active_runtime`. Repair terminal evidence
+without destructive rollback.
+
+#### Future `rde.v1` to `rde.v1` rotation
+
+This is a later, separately approved maintenance path, not an alternative way
+to execute the first P1-E06 cutover. Keep the same backup, off-host receipt,
+writer fence, restore rehearsal, and whole-database rollback requirements.
+Load the validated target and old-root values into the operator process
+environment without printing them. Docker Compose v2.27 receives only variable
+names through `-e`:
+
+```bash
+export OLD_RUNTIME_DATA_KEY_ID=rde-previous-key-id
+docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
+  run --rm --no-deps \
+  -e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET \
+  -e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID api \
+  python -m app.dev.reencrypt_runtime_data inventory \
+    --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
+docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
+  run --rm --no-deps \
+  -e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET \
+  -e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID \
+  -e NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET api \
+  python -m app.dev.reencrypt_runtime_data dry-run \
+    --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET \
+    --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
+docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
+  run --rm --no-deps \
+  -e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET \
+  -e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID \
+  -e NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET api \
+  python -m app.dev.reencrypt_runtime_data apply \
+    --confirm-maintenance-window \
+    --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET \
+    --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
+docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
+  run --rm --no-deps \
+  -e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET \
+  -e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID api \
+  python -m app.dev.reencrypt_runtime_data verify
+```
+
+Positionally pair every additional `--old-root-env` and `--old-key-id` only
+when preflight evidence proves multiple historical envelopes.
+Inventory and new-key-only `verify` do not receive any old root; only
+`dry-run` and `apply` may receive
+`NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET`.
+Normal runtime has no legacy or dual-read path; the migration-only tool remains
+available for controlled rekey operations.
 
 ## Worker Operations
 

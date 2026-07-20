@@ -24,7 +24,8 @@ are immediately backported to Git.
 
 ## GitHub Actions
 
-`Cloud CI` runs on pull requests, `master`, `main`, and `production`.
+`Cloud CI` runs on pull requests, `master`, `main`, and `production`. A push to
+`production` validates source truth only; it never deploys the host.
 
 Pull requests use a targeted backend gate by default: release-policy contract,
 anti-drift checks, changed Python quality, contract tests, and changed pytest
@@ -43,24 +44,22 @@ Full backend runs upload `pytest-backend-timing-shard-*` artifacts containing
 each shard's JUnit report and selected file list, then write slow-test tables to
 the job summary.
 
-On `production` push events, `Cloud CI` runs `backend` and `frontend` first,
-then runs the `deploy-production` job only after both pass. `Deploy Production`
-is a manual fallback workflow only, and must be run from the `production`
-branch. The deploy jobs are bound to the GitHub Environment named `production`;
-add environment approval rules when the GitHub plan supports them.
-After a successful production deploy, `Cloud CI` runs `post-production-smoke`.
-That job runs the small-customer preflight automatically. It runs the formal
-release smoke too when the optional release-smoke secrets are configured; if
-they are missing, the job summary records the skip without printing secret
-values.
+Production deployment has one trigger: manually dispatch `Deploy Production`
+from the exact `production` revision after `Cloud CI` is green. The operator
+must enter `Approved for production validation by operator.` exactly, and the
+GitHub Environment named `production` must receive its human approval. The
+workflow then deploys and runs the small-customer preflight plus optional formal
+release smoke. Missing optional smoke secrets produce an explicit skip, never a
+secret-bearing log. Neither a normal `production` push nor a static-terms-only
+push deploys automatically.
 
-Exception: if a `production` push changes only `site/terms/*`, `Cloud CI` uses
-the static terms fast path. That path skips backend/frontend/full Docker
-deployment, uploads only the checked-in `site/terms` tree to the current release,
-and verifies `/terms`, `/terms/en/terms.html`, `/terms/zh/terms.html`,
-`/terms/styles.css`, and `/health/live`.
+`Deploy Production` and `Production Maintenance` share the
+`production-host-mutation` concurrency group. A mutating `safe-prune` also
+requires the exact phrase `Prune production images and old releases.` and
+atomically acquires the same remote `.deploy-lock` used by deployment. It must
+never prune images or releases while another host mutation holds that lock.
 
-The production deploy job:
+The manually approved production deploy job:
 
 1. Builds the production Docker image bundle.
 2. Uploads the exact bundle and, when supplied, the env file as separate
@@ -73,7 +72,7 @@ The production deploy job:
 5. Prepares exact images, stops old public/write services, and starts or retains
    only PostgreSQL and Redis.
 6. Runs migration and provider refresh through staged one-off API containers
-   with `--pull never`.
+   with Runtime Compose `pull_policy: never` and exact image-ID proof.
 7. Moves `current` atomically, starts API, then starts the three workers.
 8. Proves each new worker container is stable and each heartbeat is newer than
    the cutover cutoff, then verifies generic `/health/operational-ready`.
@@ -122,8 +121,18 @@ pnpm run deploy:static-terms:ssh
 ```
 
 Use it only for public static legal/policy page content under `site/terms/*`.
-Any proxy, compose, application, API, provider, database, or runtime change must
-use the full production deploy path.
+The helper uploads a root-owned mode-`0600` archive under a unique
+`.incoming/static-terms.<token>.tgz` name, acquires the same remote
+`.deploy-lock` as the full deployment, and resolves `current` exactly once to a
+direct managed `release-*` directory. It stages and validates the replacement,
+moves the prior tree to `terms.previous`, activates only inside that frozen
+release, and keeps the lock until the public terms pages and `/health/live`
+pass. A pre-commit failure restores the prior tree (or the original absence),
+cleans the protected upload, and records mode-`0600` failure evidence. Cleanup
+or unlock failure returns nonzero and retains the shared lock and evidence for
+operator recovery; it never reports a false success. Any proxy, compose,
+application, API, provider, database, or runtime change must use the full
+production deploy path.
 
 ## GitHub Secrets
 
@@ -131,14 +140,15 @@ Configure these repository or environment secrets:
 
 ```text
 PROD_SSH_HOST=120.24.237.214
-PROD_SSH_USER=deploy
+PROD_SSH_USER=root
 PROD_SSH_PORT=22
-PROD_SSH_KEY=<private key for deploy user>
+PROD_SSH_KEY=<private key for the root-managed release account>
+PROD_SSH_KNOWN_HOSTS=<pinned known_hosts line verified through an independent channel>
 PROD_REMOTE_DIR=/opt/npcink-ai-cloud
 PROD_BASE_URL=https://cloud.npc.ink
 ```
 
-Optional formal release-smoke secrets for automatic `post-production-smoke`:
+Optional formal release-smoke secrets used by the manually dispatched deploy:
 
 ```text
 NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=<internal readiness token>
@@ -166,6 +176,30 @@ runs; it is never extracted into the release directory.
 Do not put database passwords, SMTP passwords, provider API keys, portal JWT
 secrets, or internal auth tokens in GitHub Actions unless you intentionally move
 to a managed secret store.
+
+## Production Host Prerequisites
+
+The production SSH secret must identify the root-managed release account; do
+not fall back to a guessed `deploy` user. All managed paths under
+`/opt/npcink-ai-cloud` are `root:root` and must not be group- or world-writable.
+Before P1-E06, normalize and verify that tree, then create
+`/var/backups/npcink-ai-cloud` and `/run/npcink-ai-cloud` as root-owned mode
+`0700` directories.
+
+The production Environment must also hold a pre-verified
+`PROD_SSH_KNOWN_HOSTS` entry for the exact host/port. Obtain and compare its
+fingerprint through an independent trusted channel before storing it. The
+workflow never uses runtime `ssh-keyscan` as a trust root, and all SSH/SCP
+connections require `StrictHostKeyChecking=yes`. A legitimate host-key change
+must be investigated and the pinned secret deliberately rotated before deploy.
+
+Host release tools use
+`NPCINK_CLOUD_RELEASE_TOOL_PYTHON=/usr/bin/python3.11` and require Python
+`>=3.11`. Cloud application code is different: it runs inside the exact image
+and requires Python `>=3.12`. Configure
+`NPCINK_CLOUD_DEPLOY_HOST_PYTHON=/usr/bin/python3.11`, or pass
+`--host-python /usr/bin/python3.11`. The SSH entry point verifies that host
+interpreter before any remote mkdir, upload, or deployment lock.
 
 ## Production Runtime Shape
 
@@ -217,42 +251,133 @@ The exact-bundle smoke is the formal release workflow's plain-HTTP exception:
 it may replay the artifact through loopback NGINX without an external Edge.
 Never use that local smoke topology as a production public origin.
 
+P1-E06 treats the external Edge as an independent hard gate. Before the cutover
+or first image mutation may start, the governed Edge migration must install and
+activate host NGINX, pass `nginx -t` and the exact-host loopback-resolved HTTPS
+check, stop the retired project Caddy, and persist
+`NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`. It must also record a named
+certificate-renewal owner, enable an automatic renewal service/timer, pass a
+renewal dry run plus direct persistent hook/reload test, and prove at least 30
+days of validity for both the named PEM and the leaf served on
+`127.0.0.1:443`; their SHA256 fingerprints must match. The hook must be a
+root-owned non-writable executable directly under `renewal-hooks/deploy`. On
+Alibaba Cloud Linux 3, the selected EPEL unit is `certbot-renew.timer`; another
+safe timer is accepted only when explicitly configured and evidence-bound. The
+runtime-data encryption cutover does not create or repair that topology.
+The timer's effective `Unit` must resolve to one service whose effective
+`ExecStart` directly invokes the canonical, root-owned,
+non-group/world-writable Certbot executable with the `renew` subcommand. Shell
+or `env` wrappers, no-op services, ignored errors, dry-run-only commands,
+hook-disabling flags, and unrelated Certbot subcommands fail closed.
+NGINX must reference the Certbot live-lineage `fullchain.pem` and `privkey.pem`
+paths directly; copied certificate files are forbidden because renewal would
+not update the active Edge. Each live path must be a symlink whose final,
+root-owned non-symlink target is in the matching `/etc/letsencrypt/archive`
+lineage, and the private-key target grants no group or other permissions. The
+readiness receipt parses `nginx -T`, binds both directives and their digest,
+and proves the certificate/private-key pair matches before checking the served
+leaf.
+Pure `--stage-only` archive upload/verification may run while the gate is
+pending,
+but do not start `runtime-data-encryption-cutover.sh` or mutate images until it
+is complete.
+
+Once host NGINX is active, generate the machine-verifiable gate from the exact
+staged release:
+
+```bash
+sudo NPCINK_CLOUD_RELEASE_TOOL_PYTHON=/usr/bin/python3.11 \
+  "${STAGED_RELEASE}/deploy/certificate-renewal-readiness.sh" generate \
+  --domain cloud.npc.ink \
+  --certificate-path /etc/letsencrypt/live/cloud.npc.ink/fullchain.pem \
+  --owner certbot \
+  --timer certbot-renew.timer \
+  --deploy-hook-path /etc/letsencrypt/renewal-hooks/deploy/reload-nginx \
+  --evidence-path /var/lib/npcink-ai-cloud/edge/certificate-renewal-readiness.json
+```
+
+The root-owned mode-`0600` evidence binds `renewal_service`,
+`certbot_real_path`, `renewal_exec_start_sha256`, both Certbot archive targets,
+the derived `privkey.pem`, and the actual NGINX TLS binding; `verify` resolves
+and compares them again. It is fresh for at most seven days.
+Persist all four explicit values in the active release env:
+
+```dotenv
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH=/etc/letsencrypt/live/cloud.npc.ink/fullchain.pem
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH=/var/lib/npcink-ai-cloud/edge/certificate-renewal-readiness.json
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=certbot-renew.timer
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH=/etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+```
+
+Formal runtime has no defaults for these values. `generate` atomically removes
+and fsyncs any prior success before it starts live checks, so a failed rerun
+cannot leave old evidence usable. Formal `full`/`prepare-only` loading and
+P1-E06 verify this receipt before image mutation. Regenerate it after
+certificate or hook rotation; do not edit or copy a stale receipt into place.
+
+Inventory note (2026-07-20): host NGINX was absent, the retired Caddy was still
+running, and the readiness flag was absent. This is a dated operator snapshot,
+not a permanent release-policy condition.
+
 ## First Migration to the External Edge
 
 Before the first deploy of this topology:
 
 1. Retain the previous exact bundle and matched database recovery point. Keep
    the retired Caddy container running while the host Edge is prepared.
-2. Preinstall host NGINX and `curl`, then run
-   `deploy/bind-domain-to-ssh-host.sh --prepare-only`. This installs the
-   certificate, private key, and site configuration with restrictive
-   permissions and runs `nginx -t`, but it does not start or restart host
-   NGINX. The helper rejects a non-loopback upstream, an invalid or near-expiry
-   certificate, a mismatched or locally over-permissive private key, and an
-   unhealthy inner ingress.
-3. On the deployment host, record and stop only the running Caddy container IDs
-   from the exact release Compose project:
+   Provision the certificate and preinstall host NGINX, EPEL Certbot, and
+   `curl`, but do not enable renewal or mutate images yet.
+2. Run the binding helper in read-only preparation mode. Certificate paths are
+   remote Certbot paths; no TLS material is uploaded:
 
    ```bash
-   COMPOSE_PROJECT_NAME_EFFECTIVE="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-npcink-ai-cloud}}"
-   mapfile -t RETIRED_CADDY_IDS < <(docker ps -q \
-     --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
-     --filter "label=com.docker.compose.service=caddy")
-   ((${#RETIRED_CADDY_IDS[@]} > 0))
-   printf 'retired Caddy: %s\n' "${RETIRED_CADDY_IDS[@]}"
-   docker stop "${RETIRED_CADDY_IDS[@]}"
+   bash deploy/bind-domain-to-ssh-host.sh \
+     --ssh-host "${SSH_HOST}" \
+     --ssh-user root \
+     --domain cloud.npc.ink \
+     --certificate-path /etc/letsencrypt/live/cloud.npc.ink/fullchain.pem \
+     --private-key-path /etc/letsencrypt/live/cloud.npc.ink/privkey.pem \
+     --prepare-only
    ```
 
-4. Rerun `deploy/bind-domain-to-ssh-host.sh` without `--prepare-only`. The
-   activation refuses to proceed if that project's Caddy is still running,
-   starts host NGINX, and proves HTTPS through the exact host with a loopback
-   resolution. If activation fails, the helper restores the previous host
-   NGINX files and service state. Only after this succeeds may
-   `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true` be set.
-5. Run the normal release loader. Confirm it reports
+   It holds the shared `/opt/npcink-ai-cloud/.deploy-lock`, validates the
+   Certbot lineage, target ownership/modes, certificate/key match, inner
+   ingress, and candidate `nginx -t`, then restores the exact prior NGINX files.
+   It does not stop Caddy, restart NGINX, switch traffic, or leave a prepared
+   config that could overwrite unique rollback evidence.
+3. Rerun the same command without `--prepare-only`. Do not stop Caddy manually.
+   One locked remote transaction freezes the prior NGINX files/service state
+   and exact running Caddy IDs, installs the direct Certbot-lineage config,
+   stops only those IDs, activates NGINX, and proves HTTPS through loopback. On
+   any failure it restores NGINX, restarts and verifies those exact original
+   Caddy IDs, and returns nonzero. If rollback proof fails, it preserves the
+   rollback directory and shared lock for manual recovery. After final health,
+   it marks the new Edge committed while still locked and only then releases
+   the lock; release failure preserves the healthy Edge, lock, and evidence,
+   returns nonzero, and never starts a post-commit rollback. Only after success
+   may `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true` be set.
+4. Install the persistent host hook, then enable and inspect the EPEL timer:
+
+   ```bash
+   sudo install -d -o root -g root -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+   printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' \
+     '/usr/sbin/nginx -t' '/usr/bin/systemctl reload nginx' | \
+     sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx >/dev/null
+   sudo chown root:root /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+   sudo chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+   sudo systemctl enable --now certbot-renew.timer
+   sudo systemctl show certbot-renew.timer \
+     --property=NextElapseUSecRealtime --value
+   sudo /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+   ```
+
+5. Generate the certificate-renewal evidence shown above and persist all four
+   readiness env values. There is no current real receipt, so production is
+   blocked here until `generate` and then `verify` pass.
+6. Only then run the normal release loader. Confirm it reports
    `[ok] Retired bundle services are absent: caddy jaeger otel-collector` before
    public health verification.
-6. Verify forwarded-header replacement, HTTPS, operational readiness, signed
+7. Verify forwarded-header replacement, HTTPS, operational readiness, signed
    runtime execution, media upload
    and pull behavior, and external trace export/query evidence.
 
@@ -260,8 +385,9 @@ The loader uses orphan removal and then rejects a release project that still
 contains a `caddy`, `jaeger`, or `otel-collector` container. Do not manually
 rename a retired container to bypass this check.
 
-If activation fails before the loader runs, stop host NGINX and restart only
-the recorded `RETIRED_CADDY_IDS`. If the loader fails before migration and its
+If activation fails before the loader runs, the same binding transaction
+restores host NGINX and restarts/verifies its frozen Caddy IDs. Do not perform a
+second manual ingress switch. If the loader fails before migration and its
 rollback evidence is complete, it may restore the matched previous application.
 Once migration starts, it deliberately leaves application/write services
 stopped and restores only the prior pointer; an operator must decide whether to
@@ -278,8 +404,8 @@ local feature work
   -> Cloud CI passes
   -> PR master -> production
   -> Cloud CI passes on production
-  -> GitHub Environment approval, when available
-  -> Cloud CI deploy-production job
+  -> operator enters the exact production-validation approval phrase
+  -> manually dispatch Deploy Production in the production Environment
   -> operational-ready passes
 ```
 
@@ -298,15 +424,34 @@ prepare images
 ```
 
 Before `prepare images`, both release env files must resolve the same Compose
-project name. Migration and provider refresh are one-off, `--no-deps`,
-`--pull never` executions of the staged API image. Once migration begins, a
-failure is fail-closed: old application services are not automatically started
-against the changed or partially changed schema. Recovery must prove that all
+project name. Ordinary full deploy also requires an existing managed `current`
+release; it is not a host-bootstrap path. It queries the frozen previous
+PostgreSQL before image loading and unconditionally rejects revision
+`20260710_0058`. The formal `Deploy Production` workflow requires the persistent
+global `p1_e06_global_activation.v1` receipt, validates the complete
+digest-bound activation/cutover evidence, and accepts only revision `0068` or a
+descendant proven by the staged bundle's Alembic graph. Full deploy defaults to
+receipt enforcement, and `deploy/workspace-target.env.sh` pins it to `1` for
+the supported production CLI path. Migration and provider
+refresh first create an inert named
+`--no-deps --rm` container, compare its `.Image` and the current tag with the
+bundle-manifest API image ID, execute the payload only after that proof, and
+remove the container. Signal cleanup and a 15-minute self-termination bound
+limit interruption residue. Docker Compose v2.27 `run` receives no `--pull` option;
+Runtime Compose also uses `pull_policy: never`. Once migration begins, a failure
+is fail-closed: old application services are not automatically started against
+the changed or partially changed schema. Recovery must prove that all
 public/write services are stopped, `current` is restored, and a restricted
 failure marker exists. If any recovery proof is incomplete, `.deploy-lock` is
 retained for an operator. A successful deploy retains
 `.release-state/<release-name>/env.deploy`, removes the temporary rollback-image map,
 and removes private rollback tags.
+After the new runtime has passed activation checks, failure to clean protected
+incoming state, rollback tags, the rollback map, stale failure evidence, or the
+deploy lock keeps the healthy new `current` but fails the deployment. The
+remote transaction writes `outcome=post_commit_cleanup_incomplete`, retains the
+map and lock, and never starts the previous runtime. Success is emitted only
+after cleanup and unlock are proved.
 
 Runtime configuration-only changes can normally be applied to the current
 release's external `.release-state/<release-name>/env.deploy` and followed by a
@@ -320,58 +465,30 @@ routing logic changes must go through Git.
 ## One-Time Runtime-Data Encryption Maintenance
 
 This maintenance path is deliberately separate from the normal deployment
-sequence above; it does not change the generic deploy scripts or their order.
+sequence above. The first raw-ciphertext migration uses one governed entry
+point; operators must not assemble a second sequence from lower-level helpers.
 
-Before the cutover, extract and load the bundle into a staged release without
-switching `current`. A pure bundle does not contain `.env.deploy`; before any
-Compose command, create the staged release's external state directory, copy the
-protected current release state into it, and verify every permission. Never put
-the copied env inside the staged release directory:
-
-```bash
-REMOTE_DIR=/opt/npcink-ai-cloud
-STAGED_RELEASE="${REMOTE_DIR}/release-STAGED_RELEASE"
-STAGED_RELEASE_NAME="$(basename "${STAGED_RELEASE}")"
-CURRENT_RELEASE="$(readlink -f "${REMOTE_DIR}/current")"
-CURRENT_RELEASE_NAME="$(basename "${CURRENT_RELEASE}")"
-RELEASE_STATE_ROOT="${REMOTE_DIR}/.release-state"
-RELEASE_STATE_DIR="${RELEASE_STATE_ROOT}/${STAGED_RELEASE_NAME}"
-RELEASE_ENV_FILE="${RELEASE_STATE_DIR}/env.deploy"
-ENV_SOURCE="${RELEASE_STATE_ROOT}/${CURRENT_RELEASE_NAME}/env.deploy"
-umask 077
-install -d -m 0700 "${RELEASE_STATE_ROOT}" "${RELEASE_STATE_DIR}"
-if [ ! -f "${ENV_SOURCE}" ]; then
-  # one-time transition for the currently deployed legacy host only. This
-  # creates external release state; it is not a continuing runtime fallback.
-  LEGACY_ENV_SOURCE="${REMOTE_DIR}/.env.deploy"
-  test -f "${LEGACY_ENV_SOURCE}"
-  test "$(stat -c '%a' "${LEGACY_ENV_SOURCE}")" = "600"
-  install -d -m 0700 "${RELEASE_STATE_ROOT}/${CURRENT_RELEASE_NAME}"
-  install -m 600 "${LEGACY_ENV_SOURCE}" "${ENV_SOURCE}"
-fi
-test -f "${ENV_SOURCE}"
-install -m 600 "${ENV_SOURCE}" "${RELEASE_ENV_FILE}"
-test "$(stat -c '%a' "${RELEASE_STATE_ROOT}")" = "700"
-test "$(stat -c '%a' "${RELEASE_STATE_DIR}")" = "700"
-test "$(stat -c '%a' "${RELEASE_ENV_FILE}")" = "600"
-export NPCINK_CLOUD_ENV_FILE="${RELEASE_ENV_FILE}"
-export NPCINK_CLOUD_BACKEND_ENV_FILE="${RELEASE_ENV_FILE}"
-cd "${STAGED_RELEASE}"
-```
-
-This legacy-root import is a one-time transition for the currently deployed
-host, not a continuing compatibility path. Remove the root source after the
-matched recovery/evidence window; every later release uses only its external
-per-release state.
-
-Do not call `deploy/deploy-to-ssh-host.sh`,
-`deploy/remote-load-and-up.sh`, or another general deploy helper to prepare the
-staged release; those paths switch `current` and/or start services before
-re-encryption verification. Preserve a checksum-verified custom-format database backup,
-verify restoration into a separate database, and retain the matching old code
-revision and old key material. Keep the production `postgres` and `redis`
-services running, stop and fence `api`, `worker`, `callback-worker`, and
-`ops-worker`, and create a `0600` untracked maintenance env containing:
+1. From the trusted workstation, run
+   `deploy/deploy-to-ssh-host.sh --stage-only --skip-bundle-build` against the
+   already verified Linux/AMD64 bundle. Stage-only must not receive
+   `--env-file` or `NPCINK_CLOUD_ENV_FILE`. Select
+   `/usr/bin/python3.11` with `--host-python` (or
+   `NPCINK_CLOUD_DEPLOY_HOST_PYTHON`) and accept only its
+   `staged_release=/absolute/release-path` result. It uploads, archive-checks,
+   safely extracts, and pre-load verifies the bundle; it does not resolve or
+   change `current`, create `.release-state`, call Docker, load images, mutate
+   containers, migrate, refresh, seed, smoke, or start traffic. Its remote
+   argument envelope contains only stage mode, managed root, release/incoming
+   paths, and host Python. The Python `>=3.11` check occurs before remote mkdir,
+   upload, or lock; any later failure removes the incoming object, partial
+   release, and stage lock.
+2. Recheck and close the independent production Edge hard gate. Stage-only may
+   have completed already, but no image mutation or cutover command may begin
+   while that gate is pending. Normalize `/opt/npcink-ai-cloud` to `root:root`,
+   prove no managed path is group/world-writable, and create root-owned mode
+   `0700` `/var/backups/npcink-ai-cloud` and `/run/npcink-ai-cloud`.
+3. Create the mode-`0600` maintenance env outside the managed release tree. It
+   contains exactly:
 
 ```text
 NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=<target-secret>
@@ -379,62 +496,92 @@ NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=<target-key-id>
 NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root-secret>
 ```
 
-From the staged release directory, run every phase inside the newly loaded API
-image. The host does not need application source or a Python environment:
+4. Run `deploy/runtime-data-encryption-cutover.sh` once, in the foreground,
+   with the staged path, maintenance env, fresh host backup path, previously
+   absent receipt path, optional receipt timeout, and all three explicit
+   acknowledgements. The command owns governed `remote-load-and-up.sh`
+   `prepare-only` image loading, writer/public fencing, backup, independent
+   restore, migration, re-encryption, pointer, readiness, traffic restoration,
+   evidence, cleanup, and unlock:
 
 ```bash
-docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-  run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-  python -m app.dev.reencrypt_runtime_data inventory
-docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-  run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-  python -m app.dev.reencrypt_runtime_data dry-run \
-    --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
-docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-  run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-  python -m app.dev.reencrypt_runtime_data apply \
-    --confirm-maintenance-window \
-    --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
-docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-  run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-  python -m app.dev.reencrypt_runtime_data verify
+sudo "${STAGED_RELEASE}/deploy/runtime-data-encryption-cutover.sh" \
+  --remote-dir /opt/npcink-ai-cloud \
+  --staged-release "${STAGED_RELEASE}" \
+  --host-python /usr/bin/python3.11 \
+  --maintenance-env /run/npcink-ai-cloud/runtime-data-reencrypt.env \
+  --backup-path /var/backups/npcink-ai-cloud/p1-e06.dump \
+  --off-host-receipt /run/npcink-ai-cloud/p1-e06-off-host-receipt.json \
+  --off-host-receipt-timeout-seconds 900 \
+  --confirm-off-host-handoff I_ACKNOWLEDGE_THE_BACKUP_COPY_IS_OFF_HOST_AND_INDEPENDENT \
+  --confirm-whole-database-restore I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_AND_OLD_KEY_TOGETHER \
+  --confirm-production-cutover I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER
 ```
 
-The first raw-ciphertext cutover omits `--old-key-id`. For future `rde.v1` to
-`rde.v1` rotation, inventory declares the old key ID alone, while `dry-run` and
-`apply` pair that same ID positionally with the old root:
+5. After the fresh custom-format backup and checksum are atomically published,
+   the same process writes a mode-`0600` handoff marker and waits. The operator
+   pulls both files with `scp` to independent off-host storage, verifies the
+   checksum locally, creates a mode-`0600`
+   `p1_e06_off_host_backup_receipt.v1` JSON receipt with the matching SHA, and
+   uploads it to a temporary sibling before atomically renaming it to the exact
+   path printed by the script. A same-host copy or pre-created receipt is not
+   proof. The script persists the validated receipt as
+   `off-host-receipt-verified.json`, including its source path and SHA-256, and
+   includes that digest in terminal evidence.
+6. Only after that receipt does the script perform an independent PostgreSQL 16
+   restore and `0058 -> 0068` plus `inventory -> dry-run -> apply -> verify`
+   rehearsal. It then switches production PostgreSQL and Redis to the exact
+   target image IDs and proves both are healthy plus PostgreSQL is still at
+   `0058` before migration. Production Compose v2.27 one-offs pass only
+   variable names with `run --rm --no-deps -e VARIABLE_NAME`; no CLI `--pull`,
+   secret value argument, or env-file run option is allowed. Runtime Compose
+   `pull_policy: never` and exact API image-ID proof are required. Inventory and
+   new-key-only `verify` receive no old-root variable; only `dry-run` and
+   `apply` do. The first raw-ciphertext cutover omits `--old-key-id`.
+7. After restoring traffic and validating the active release, the script
+   durably publishes `activation-commit.json`. This is the irreversible
+   activation commit point. It then cleans rollback tags/maps, publishes the
+   authoritative mode-`0600`
+   `.release-state/<staged-release-name>/p1-e06-runtime-data-cutover/cutover-result.json`,
+   publishes the global activation receipt bound to the activation-commit and
+   cutover-result digests, and only then releases `.deploy-lock` and marks the
+   command complete. A command that has not reached all of those states is
+   terminalization incomplete, not necessarily a runtime rollback.
 
-```bash
-export OLD_RUNTIME_DATA_KEY_ID=rde-previous-key-id
-docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-  run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-  python -m app.dev.reencrypt_runtime_data inventory --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
-docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-  run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-  python -m app.dev.reencrypt_runtime_data dry-run \
-    --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET \
-    --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
-docker compose --env-file "${RELEASE_ENV_FILE}" -f docker-compose.runtime.yml \
-  run --rm --no-deps --env-from-file "${MAINTENANCE_ENV}" --pull never api \
-  python -m app.dev.reencrypt_runtime_data apply \
-    --confirm-maintenance-window \
-    --old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET \
-    --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"
+Before production migration starts, recovery may resume the unchanged `0058`
+database with the old release/key after pointer, schema, and dependency health
+are proven. If PostgreSQL/Redis had already switched to target image IDs,
+restore their recorded prior tags and recreate/prove those dependencies before
+starting the old application; otherwise prove the existing dependencies and
+then restore the old application. Once production migration starts and before
+activation commits, never downgrade or restart old code: restore the whole
+fresh `0058` dump, old application revision, old external env, and old key
+together. Migration `0061` removes legacy media/audio tables, so downgrade
+cannot reconstruct their old bytes.
+
+After `activation-commit.json` exists, cleanup, private/global evidence, or
+unlock failure must keep the healthy new runtime and pointer. Do not stop writers,
+restore tags, or launch destructive rollback. Retain or reacquire `.deploy-lock`
+and write `.cutover-failed` with
+`outcome=activation_committed_terminalization_incomplete` plus
+`recovery=do_not_rollback_healthy_active_runtime`, then repair terminalization.
+
+Future `rde.v1` to `rde.v1` rotation remains a separate, manually approved
+maintenance procedure; it is not an alternate P1-E06 entry point. It keeps the
+same backup, receipt, fence, restore, and rollback gates. It supplies every old
+key ID to `inventory`, positionally pairs each `--old-key-id` with its
+`--old-root-env` in `dry-run` and `apply`, and runs Compose v2.27 with only:
+
+```text
+run --rm --no-deps
+-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET
+-e NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID
+-e NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET
 ```
 
-Add multiple old-root/key-ID pairs only with preflight evidence.
+The old-root `-e` entry applies only to `dry-run` and `apply`; inventory and
+new-key-only `verify` omit it.
 
-Do not restart writers unless the new-key-only verification succeeds. Start
-`api` and verify readiness first, then start the three workers and verify
-their container identity, restart count, post-cutoff heartbeat, stability
-window, and generic operational readiness before restoring frontend/proxy
-traffic. Keep the verified target env in the staged release's external state
-directory and preserve the prior release state unchanged for rollback. Remove
-temporary old-key material and the `0600` maintenance env after the evidence window.
 Normal runtime has no legacy or dual-read path; retain the migration-only tool
-for future controlled rekeys.
-
-Rollback requires the matching old database backup, old application revision,
-and old key together. Once new-key writes exist, restoring only the environment
-or only the code is not a valid rollback. The authoritative operator procedure
-is `deploy/OPS_PLAYBOOK.md`.
+for future controlled rekeys. The detailed operator procedure and manual
+future-rotation commands are in `deploy/OPS_PLAYBOOK.md`.

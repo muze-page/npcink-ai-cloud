@@ -1557,6 +1557,22 @@ def emit_image_plan(root: Path, *, aliases: bool) -> None:
             print(f"{archive['path']}\t{primary['role']}\t{primary['reference']}")
 
 
+def emit_role_image_id(root: Path, role: str) -> None:
+    verify_directory(root, post_load=False)
+    if re.fullmatch(r"[a-z0-9_]+", role) is None:
+        fail("invalid release image role")
+    manifest = json.loads((root / MANIFEST_NAME).read_text(encoding="utf-8"))
+    matches = [
+        image["expected_image_id"]
+        for archive in manifest["archives"]
+        for image in archive["images"]
+        if image["role"] == role
+    ]
+    if len(matches) != 1 or IMAGE_ID_RE.fullmatch(matches[0]) is None:
+        fail(f"release image role is missing or ambiguous: {role}")
+    print(matches[0])
+
+
 def verify_archive(bundle: Path, checksum: Path) -> dict[str, Any]:
     expected_line = checksum.read_text(encoding="utf-8").strip()
     match = re.fullmatch(r"([0-9a-f]{64})  ([^/\r\n]+)", expected_line)
@@ -1721,6 +1737,9 @@ def build_parser() -> argparse.ArgumentParser:
     load_plan.add_argument("--root", required=True)
     alias_plan = subparsers.add_parser("alias-plan")
     alias_plan.add_argument("--root", required=True)
+    role_image_id = subparsers.add_parser("role-image-id")
+    role_image_id.add_argument("--root", required=True)
+    role_image_id.add_argument("--role", required=True)
     archive = subparsers.add_parser("verify-archive")
     archive.add_argument("--bundle", required=True)
     archive.add_argument("--checksum", required=True)
@@ -1781,6 +1800,8 @@ def main() -> int:
             emit_image_plan(Path(args.root).resolve(), aliases=False)
         elif args.command == "alias-plan":
             emit_image_plan(Path(args.root).resolve(), aliases=True)
+        elif args.command == "role-image-id":
+            emit_role_image_id(Path(args.root).resolve(), args.role)
         elif args.command == "verify-archive":
             verify_archive(Path(args.bundle), Path(args.checksum))
         elif args.command == "archive-platform":
