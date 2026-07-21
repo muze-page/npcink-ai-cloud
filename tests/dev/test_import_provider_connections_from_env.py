@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import ProviderConnection
@@ -8,6 +10,9 @@ from app.dev.import_provider_connections_from_env import (
     import_provider_connections_from_env,
     remove_imported_provider_env_keys,
 )
+
+SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"S" * 32).decode("ascii")
+SERVICE_SETTINGS_KEY_ID = "test-service-settings-key"
 
 
 def _sqlite_url(tmp_path) -> str:
@@ -22,7 +27,8 @@ def _settings(database_url: str) -> Settings:
         redis_url="redis://localhost:6379/0",
         internal_auth_token="npcink-cloud-internal-test-token-32b",
         admin_session_secret="npcink-cloud-admin-session-secret-32b",
-        service_settings_secret="npcink-cloud-service-settings-secret-32b",
+        service_settings_secret=SERVICE_SETTINGS_ROOT,
+        service_settings_encryption_key_id=SERVICE_SETTINGS_KEY_ID,
         portal_jwt_secret="npcink-cloud-portal-jwt-secret-32b",
     )
 

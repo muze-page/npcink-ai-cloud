@@ -79,13 +79,13 @@ def test_production_performance_baseline_is_readonly_and_boundary_labeled() -> N
     assert "DELETE " not in source
 
 
-def test_remote_production_performance_baseline_keeps_synthetic_smoke_explicit() -> None:
+def test_remote_production_performance_baseline_is_read_only() -> None:
     remote_source = (ROOT / "deploy" / "remote-performance-baseline.sh").read_text()
     ssh_source = (ROOT / "deploy" / "production-performance-baseline-to-ssh-host.sh").read_text()
 
     assert "production_performance_baseline.py" in remote_source
     assert "--require-indexes" in remote_source
     assert "NPCINK_CLOUD_PRODUCTION_PERF_ANALYZE" in remote_source
-    assert "WITH_SYNTHETIC_SMOKE=0" in ssh_source
-    assert "--with-synthetic-smoke" in ssh_source
-    assert "remote-smoke.sh" in ssh_source
+    assert "--with-synthetic-smoke" not in ssh_source
+    assert "remote-smoke.sh" not in ssh_source
+    assert 'run_remote "bash deploy/remote-performance-baseline.sh"' in ssh_source

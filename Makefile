@@ -8,7 +8,7 @@ CHANGED_BASE_REF ?= origin/master
 TEST_PROVIDER_ENV = NPCINK_CLOUD_OPENAI_API_KEY=
 DOCKER_TEST_PROVIDER_ENV = -e NPCINK_CLOUD_OPENAI_API_KEY=
 
-.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed mypy-full mypy-targeted mypy-commercial-runtime perimeter frontend-sync frontend-watch frontend-doctor frontend-recover migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check
+.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed mypy-full mypy-targeted mypy-commercial-runtime perimeter frontend-sync frontend-watch frontend-doctor frontend-recover migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status secret-rotation-check
 
 baseline:
 	.venv/bin/pytest --version
@@ -104,9 +104,6 @@ deploy-ssh:
 
 provider-status:
 	bash deploy/remote-provider-status.sh
-
-env-ssh:
-	bash deploy/env-to-ssh-host.sh
 
 secret-rotation-check:
 	bash deploy/validate-secret-rotation.sh

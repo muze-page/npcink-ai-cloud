@@ -658,11 +658,10 @@ config now fails fast when these are missing:
 After the first platform-admin login, configure Portal public URL, QQ login,
 and Portal email delivery in `/admin/service-settings`. These service settings
 are stored by Cloud runtime storage and are no longer read from `.env`.
-Secret values saved through `/admin/service-settings` are encrypted with
-`NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` when it is configured. Older rows saved
-before this setting are still readable through the previous runtime secret
-chain, and re-saving the email configuration migrates the SMTP password onto
-the dedicated service-settings secret.
+Secret values saved through `/admin/service-settings` use the active `sse.v1`
+key family. Legacy raw rows are not read through a compatibility chain; they
+must be migrated by the stopped-writer P1-E06 procedure before ordinary
+runtime resumes.
 
 The runtime-data secret and key ID are not ordinary configuration-only rotation
 values. Changing them requires the stopped-writer inventory, backup,
@@ -867,7 +866,9 @@ The real-site bootstrap path reuses:
 
 - one already provisioned account + site + subscription
 - current usage meter events and billing state for that site
-- existing site keys, unless you explicitly pass `--issue-key`
+- existing site keys; `--issue-key` is host-local only and requires
+  `NPCINK_CLOUD_SECRET` from a protected process environment. The remote
+  `portal:bind:ssh` wrapper intentionally rejects key issuance.
 
 The runtime seed command creates a minimal site + subscription baseline for
 operator smoke, and does not create portal members or portal-facing sample data.
@@ -1328,7 +1329,6 @@ make bundle
 make deploy-smoke
 make deploy-ssh
 make provider-status
-make env-ssh
 ```
 
 `make deploy-smoke` currently reuses
@@ -1337,14 +1337,15 @@ test asset. This is a temporary test dependency for deploy verification only;
 it does not move control-plane ownership, settings truth, or runtime authorship
 back into the plugin workspace.
 
-Example dev seed:
+Example dev seed (local development only; never reuse this sample secret in a
+deployed environment):
 
 ```bash
 docker compose -f docker-compose.dev.yml run --rm api alembic upgrade head
 docker compose -f docker-compose.dev.yml run --rm api python -m app.dev.seed_runtime \
   --site-id site_smoke \
   --key-id key_default \
-  --secret npcink-cloud-test-secret
+  --secret local-dev-only-change-me
 ```
 
 If cross-arch Docker builds are unstable from your network, you can also export
@@ -1469,7 +1470,6 @@ pnpm run lint
 pnpm run build
 pnpm run bundle
 pnpm run deploy:ssh -- --ssh-host your-cloud-host
-pnpm run env:ssh -- --ssh-host your-cloud-host
 ```
 
 From the repository root, you can also run:
@@ -1504,16 +1504,12 @@ Bundle contents:
 - `dist/api.tar.gz`
 - `dist/worker.tar.gz`
 
-Remote bootstrap order:
-
-```bash
-tar xzf deploy-bundle.tgz
-bash deploy/remote-load-and-up.sh
-bash deploy/remote-migrate.sh
-bash deploy/remote-baseline-status.sh
-bash deploy/remote-seed-runtime.sh --site-id site_smoke --key-id key_default --secret npcink-cloud-test-secret
-bash deploy/remote-smoke.sh --base-url http://127.0.0.1:8010
-```
+Remote phase helpers are not standalone bootstrap commands. Use
+`deploy/deploy-to-ssh-host.sh`, which freezes the exact bundle and enforces the
+only supported sequence: prepare images, stop/prove public and write services,
+start data services, migrate with the staged image, activate the pointer, then
+start API, workers, and traffic in separate proved batches. Directly invoking
+`remote-load-and-up.sh` without an explicit governed phase is rejected.
 
 `remote-smoke.sh` now expects `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` from the deploy
 env file so it can verify `GET /health/ready`, `/docs`, `/redoc`, and internal
@@ -1530,6 +1526,17 @@ smoke.
 
 Remote SSH deploy from your local machine:
 
+Every full deploy example below requires the signed-smoke HMAC secret in the
+protected process environment. It is intentionally not accepted on argv and
+is not read from `.env.deploy`. In an interactive shell, read it without echo
+before invoking the deploy:
+
+```bash
+IFS= read -r -s NPCINK_CLOUD_SECRET
+printf '\n'
+export NPCINK_CLOUD_SECRET
+```
+
 ```bash
 pnpm run deploy:ssh -- \
   --ssh-host your-cloud-host \
@@ -1537,8 +1544,7 @@ pnpm run deploy:ssh -- \
   --remote-dir /opt/npcink-ai-cloud \
   --env-file .env.deploy \
   --site-id site_smoke \
-  --key-id key_default \
-  --secret npcink-cloud-test-secret
+  --key-id key_default
 ```
 
 To also run the buyer-facing portal verification after the standard runtime smoke,
@@ -1567,11 +1573,13 @@ pnpm run deploy:ssh -- \
   --env-file .env.deploy \
   --site-id site_smoke \
   --key-id key_default \
-  --secret npcink-cloud-test-secret \
   --profile-id text.balanced \
   --prompt-text "anthropic remote smoke request" \
   --expected-provider-id anthropic
 ```
+
+After the deploy command finishes, remove the secret from the interactive
+shell with `unset NPCINK_CLOUD_SECRET`.
 
 Notes:
 
@@ -1609,11 +1617,9 @@ Notes:
 - If remote deploy fails while local Docker checks still pass, suspect
   `.env.deploy`, persisted database drift, release carry-forward behavior, or
   provider reachability before suspecting the local source tree.
-- `env-to-ssh-host.sh` updates the remote release `.env.deploy` in place,
-  carries the same values into the shared `/opt/npcink-ai-cloud/.env.deploy`
-  file, and restarts `proxy,api,worker,callback-worker,ops-worker` by default so
-  edge, runtime, callback, and cadence configuration takes effect together
-  without a full redeploy.
+- Ad-hoc remote env mutation is retired. Supply the protected production env
+  file to `deploy/deploy-to-ssh-host.sh`; configuration is applied only inside
+  the same governed release transaction as exact image activation.
 - Final off-machine deploy evidence still requires a real external host; this
   workspace currently records the active target in
   `deploy/WORKSPACE_TARGET.md`, but SSH user, base URL, and deploy env

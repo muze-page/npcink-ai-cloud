@@ -4,16 +4,27 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
 
+npcink_ai_cloud_require_deploy_lock_owner "${ROOT_DIR}"
 npcink_ai_cloud_require_cmd docker
 
-PYTHON_COMMAND=(exec -T api python -)
-if [ "${NPCINK_CLOUD_REFRESH_PROVIDERS_ONE_OFF:-0}" = "1" ]; then
-	# Atomic cutover refreshes provider projections before the public API is
-	# started, so it must use the staged API image without starting dependencies.
-	PYTHON_COMMAND=(run --rm --no-deps --pull never -T api python -)
-fi
+RELEASE_TOOL_PYTHON="$(npcink_ai_cloud_release_tool_python)"
+MANIFEST_HELPER="${ROOT_DIR}/scripts/verify-release-bundle-manifest.py"
+npcink_ai_cloud_require_release_tool_python "${RELEASE_TOOL_PYTHON}"
 
-npcink_ai_cloud_compose "${ROOT_DIR}" "${PYTHON_COMMAND[@]}" <<'PY'
+# Provider refresh mutates database projections. It is therefore a governed
+# release operation, never an ad-hoc command inside the running API container.
+API_DAEMON_IMAGE_ID="$("${RELEASE_TOOL_PYTHON}" "${MANIFEST_HELPER}" \
+	loaded-role-daemon-id --root "${ROOT_DIR}" --role api)"
+PYTHON_COMMAND=(
+	npcink_ai_cloud_compose_run_with_image_proof
+	"${ROOT_DIR}"
+	api
+	npcink-ai-cloud-api:prod
+	"${API_DAEMON_IMAGE_ID}"
+	python -
+)
+
+"${PYTHON_COMMAND[@]}" <<'PY'
 from __future__ import annotations
 
 import json

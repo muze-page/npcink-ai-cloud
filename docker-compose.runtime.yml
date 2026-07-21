@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: npcink-ai-cloud-postgres:prod
+    image: ${NPCINK_CLOUD_POSTGRES_RELEASE_IMAGE:-npcink-ai-cloud-postgres:prod}
+    pull_policy: never
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-npcink_ai_cloud}
@@ -15,7 +16,8 @@ services:
       - cloud-postgres-prod:/var/lib/postgresql/data
 
   redis:
-    image: npcink-ai-cloud-external-redis:prod
+    image: ${NPCINK_CLOUD_REDIS_RELEASE_IMAGE:-npcink-ai-cloud-external-redis:prod}
+    pull_policy: never
     restart: unless-stopped
     command: redis-server --appendonly yes
     healthcheck:
@@ -27,7 +29,8 @@ services:
       - cloud-redis-prod:/data
 
   api:
-    image: npcink-ai-cloud-api:prod
+    image: ${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}
+    pull_policy: never
     restart: unless-stopped
     command: >-
       gunicorn -k uvicorn.workers.UvicornWorker
@@ -52,7 +55,8 @@ services:
       - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   frontend:
-    image: npcink-ai-cloud-frontend:prod
+    image: ${NPCINK_CLOUD_FRONTEND_RELEASE_IMAGE:-npcink-ai-cloud-frontend:prod}
+    pull_policy: never
     restart: unless-stopped
     environment:
       CLOUD_API_BASE_URL: http://api:8000
@@ -63,7 +67,8 @@ services:
       - "3000"
 
   worker:
-    image: npcink-ai-cloud-worker:prod
+    image: ${NPCINK_CLOUD_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-worker:prod}
+    pull_policy: never
     restart: unless-stopped
     command: python -m app.workers.runtime_queue
     env_file:
@@ -79,7 +84,8 @@ services:
       - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   callback-worker:
-    image: npcink-ai-cloud-worker:prod
+    image: ${NPCINK_CLOUD_CALLBACK_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-worker:prod}
+    pull_policy: never
     restart: unless-stopped
     command: python -m app.workers.callback_dispatch
     env_file:
@@ -91,7 +97,8 @@ services:
         condition: service_healthy
 
   ops-worker:
-    image: npcink-ai-cloud-worker:prod
+    image: ${NPCINK_CLOUD_OPS_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-worker:prod}
+    pull_policy: never
     restart: unless-stopped
     command: python -m app.workers.ops_cadence
     env_file:
@@ -107,7 +114,8 @@ services:
       - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   proxy:
-    image: npcink-ai-cloud-external-nginx:prod
+    image: ${NPCINK_CLOUD_PROXY_RELEASE_IMAGE:-npcink-ai-cloud-external-nginx:prod}
+    pull_policy: never
     restart: unless-stopped
     depends_on:
       api:
@@ -122,6 +130,16 @@ services:
     networks:
       default:
         ipv4_address: 172.28.0.10
+
+  release-one-off:
+    extends:
+      service: api
+    profiles: ["release-one-off"]
+    image: ${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}
+    pull_policy: never
+    restart: "no"
+    entrypoint: ["python"]
+    command: ["-c", "import signal; signal.pause()"]
 
 volumes:
   cloud-artifacts-prod:

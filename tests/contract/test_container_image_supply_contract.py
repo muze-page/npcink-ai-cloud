@@ -311,6 +311,120 @@ def test_production_image_lock_matches_every_dockerfile_and_deploy_compose() -> 
         assert {"linux/amd64", "linux/arm64"}.issubset(record["required_platforms"])
 
 
+def test_compose_release_image_variables_resolve_to_governed_defaults(
+    tmp_path: Path,
+) -> None:
+    supply = _supply_module()
+    compose_path = tmp_path / "docker-compose.yml"
+    compose_path.write_text(
+        """services:
+  api:
+    image: ${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}
+  worker:
+    image: "${NPCINK_CLOUD_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-worker:prod}"
+  release-one-off:
+    image: ${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}
+"""
+    )
+
+    assert supply._compose_images(compose_path) == {
+        "api": "npcink-ai-cloud-api:prod",
+        "worker": "npcink-ai-cloud-worker:prod",
+    }
+
+
+@pytest.mark.parametrize(
+    ("image", "error"),
+    [
+        (
+            "${RELEASE_IMAGE:-npcink-ai-cloud-api:prod}",
+            "must use the exact",
+        ),
+        (
+            "${NPCINK_CLOUD_API_RELEASE_IMAGE}",
+            "must use the exact",
+        ),
+        (
+            "${NPCINK_CLOUD_UNGOVERNED_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}",
+            "must use the governed NPCINK_CLOUD_API_RELEASE_IMAGE",
+        ),
+        (
+            "${NPCINK_CLOUD_API_RELEASE_IMAGE:-}",
+            "must use the exact",
+        ),
+    ],
+)
+def test_compose_release_image_variables_reject_ungoverned_forms(
+    tmp_path: Path, image: str, error: str
+) -> None:
+    supply = _supply_module()
+    compose_path = tmp_path / "docker-compose.yml"
+    compose_path.write_text(f"services:\n  api:\n    image: {image}\n")
+
+    with pytest.raises(supply.SupplyError, match=error):
+        supply._compose_images(compose_path)
+
+
+@pytest.mark.parametrize(
+    ("service", "literal_image"),
+    [
+        ("api", "npcink-ai-cloud-api:prod"),
+        ("callback-worker", "npcink-ai-cloud-callback-worker:prod"),
+        ("frontend", "npcink-ai-cloud-frontend:prod"),
+        ("ops-worker", "npcink-ai-cloud-ops-worker:prod"),
+        ("postgres", "npcink-ai-cloud-postgres:prod"),
+        ("proxy", "npcink-ai-cloud-external-nginx:prod"),
+        ("redis", "npcink-ai-cloud-external-redis:prod"),
+        ("release-one-off", "npcink-ai-cloud-api:prod"),
+        ("worker", "npcink-ai-cloud-worker:prod"),
+    ],
+)
+def test_governed_compose_services_reject_literal_mutable_images(
+    tmp_path: Path, service: str, literal_image: str
+) -> None:
+    supply = _supply_module()
+    compose_path = tmp_path / "docker-compose.yml"
+    compose_path.write_text(f"services:\n  {service}:\n    image: {literal_image}\n")
+
+    with pytest.raises(supply.SupplyError, match="must use the exact"):
+        supply._compose_images(compose_path)
+
+
+def test_full_release_compose_requires_release_one_off_image_seam(tmp_path: Path) -> None:
+    supply = _supply_module()
+    compose_path = tmp_path / "docker-compose.yml"
+    compose_path.write_text(
+        "services:\n"
+        + "".join(
+            f"  {service}:\n    image: ${{{variable}:-governed-{service}:prod}}\n"
+            for service, variable in supply.COMPOSE_RELEASE_IMAGE_VARIABLES.items()
+            if service != "release-one-off"
+        )
+    )
+
+    with pytest.raises(
+        supply.SupplyError,
+        match="missing governed release image seams.*release-one-off",
+    ):
+        supply._compose_images(compose_path, require_all_governed_services=True)
+
+
+def test_compose_release_one_off_rejects_api_image_drift(tmp_path: Path) -> None:
+    supply = _supply_module()
+    compose_path = tmp_path / "docker-compose.yml"
+    compose_path.write_text(
+        """services:
+  api:
+    image: ${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}
+  release-one-off:
+    image: ${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-worker:prod}
+"""
+    )
+
+    with pytest.raises(supply.SupplyError, match="exact governed alias of api"):
+        supply._compose_images(compose_path)
+
+
 def test_python_lock_and_extras_smoke_use_the_same_interpreter_line() -> None:
     lock = _lock()
     inputs = {record["key"]: record for record in lock["production_inputs"]}
@@ -674,9 +788,7 @@ def _write_release_receipt(
     )
     report = _scan_report(severity=severity, built=built, image_key=key)
     if key == "api":
-        canonical_allowlist = json.loads(
-            (ROOT / lock["scan_policy"]["allowlist_file"]).read_text()
-        )
+        canonical_allowlist = json.loads((ROOT / lock["scan_policy"]["allowlist_file"]).read_text())
         matches = report["matches"]
         assert isinstance(matches, list)
         for entry in canonical_allowlist["entries"]:
@@ -863,8 +975,7 @@ def test_scanner_binds_sbom_and_cve_report_to_exact_local_image_id() -> None:
         '\t\t"${reference}" --format \'{{.Id}}\')"'
     ) in source
     assert (
-        'docker image inspect --platform "${RELEASE_PLATFORM}" "${reference}" '
-        '>"${inspect_path}"'
+        'docker image inspect --platform "${RELEASE_PLATFORM}" "${reference}" >"${inspect_path}"'
     ) in source
     assert '"docker-archive:/input/${key}.image.tar"' in source
     assert "docker image save" in source
@@ -899,10 +1010,9 @@ def test_formal_bundle_inspects_the_requested_platform_in_multi_platform_stores(
 
     assert "formal bundle builder requires Docker server API 1.49 or newer" in source
     assert (
-        'docker image inspect --platform "${MANIFEST_IMAGE_PLATFORM}" '
-        "--format '{{.Id}}' \"$1\""
+        'docker image inspect --platform "${MANIFEST_IMAGE_PLATFORM}" --format \'{{.Id}}\' "$1"'
     ) in source
     assert (
         'docker image inspect --platform "${MANIFEST_IMAGE_PLATFORM}" \\\n'
-        '\t\t--format \'{{.Os}}/{{.Architecture}}\' "$1"'
+        "\t\t--format '{{.Os}}/{{.Architecture}}' \"$1\""
     ) in source

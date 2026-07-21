@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # Shared compose/env helpers for deploy scripts.
@@ -9,12 +10,13 @@ npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 npcink_ai_cloud_require_cmd curl
 npcink_ai_cloud_require_cmd openssl
 npcink_ai_cloud_require_cmd python3
+npcink_ai_cloud_require_cmd mktemp
 
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
 SITE_ID="${NPCINK_CLOUD_SITE_ID:-site_smoke}"
 KEY_ID="${NPCINK_CLOUD_KEY_ID:-key_default}"
-SECRET="${NPCINK_CLOUD_SECRET:-npcink-cloud-test-secret}"
+SECRET="${NPCINK_CLOUD_SECRET:-}"
 PROFILE_ID="${NPCINK_CLOUD_PROFILE_ID:-text.balanced}"
 ABILITY_NAME="${NPCINK_CLOUD_ABILITY_NAME:-npcink-abilities-toolkit/build-article-block-plan}"
 CHANNEL="${NPCINK_CLOUD_CHANNEL:-openapi}"
@@ -41,8 +43,8 @@ while [ "$#" -gt 0 ]; do
 			shift 2
 			;;
 		--secret)
-			SECRET="$2"
-			shift 2
+			echo "[fail] --secret is forbidden because process arguments are observable; use NPCINK_CLOUD_SECRET from a protected process environment." >&2
+			exit 1
 			;;
 		--profile-id)
 			PROFILE_ID="$2"
@@ -87,6 +89,10 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
+# Keep credentials in this shell only. Child processes receive a credential
+# only through an explicit environment assignment or a protected request file.
+unset NPCINK_CLOUD_INTERNAL_AUTH_TOKEN NPCINK_CLOUD_SECRET
+
 fail() {
 	echo "[fail] $*" >&2
 	exit 1
@@ -95,6 +101,13 @@ fail() {
 ok() {
 	echo "[ok] $*"
 }
+
+if [ -z "${INTERNAL_AUTH_TOKEN}" ]; then
+	fail "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN for internal-only perimeter checks is required"
+fi
+if [ -z "${SECRET}" ]; then
+	fail "NPCINK_CLOUD_SECRET is required for signed runtime smoke"
+fi
 
 json_read_path() {
 	local json_payload="$1"
@@ -136,7 +149,7 @@ assert_status() {
 	local expected="$2"
 	local message="$3"
 	if [ "${actual}" != "${expected}" ]; then
-		fail "${message} (expected ${expected}, got ${actual}; body=${HTTP_BODY})"
+		fail "${message} (expected ${expected}, got ${actual})"
 	fi
 }
 
@@ -220,11 +233,42 @@ build_signature() {
 		"${idempotency_key}" \
 		"${traceparent}" \
 		"${body_digest}")"
-	printf '%s' "${canonical_request}" | openssl dgst -sha256 -hmac "${SECRET}" -r | awk '{print $1}'
+	printf '%s' "${canonical_request}" | NPCINK_CLOUD_HMAC_SECRET="${SECRET}" python3 -c '
+import hashlib
+import hmac
+import os
+import sys
+
+secret = os.environ.pop("NPCINK_CLOUD_HMAC_SECRET", "")
+if not secret:
+    raise SystemExit("[fail] Runtime signing secret is missing.")
+payload = sys.stdin.buffer.read()
+print(hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest())
+'
 }
 
 HTTP_STATUS=""
 HTTP_BODY=""
+umask 077
+TMP_DIR="$(mktemp -d)"
+
+cleanup_tmp_dir() {
+	local exit_status="$?"
+	local cleanup_failed=0
+	trap - EXIT
+	set +e
+	rm -rf -- "${TMP_DIR}" || cleanup_failed=1
+	if [ -e "${TMP_DIR}" ] || [ -L "${TMP_DIR}" ]; then
+		cleanup_failed=1
+	fi
+	if [ "${cleanup_failed}" -ne 0 ]; then
+		echo "[fail] Remote smoke credential-file cleanup did not complete." >&2
+		exit_status=1
+	fi
+	exit "${exit_status}"
+}
+trap cleanup_tmp_dir EXIT
+chmod 0700 "${TMP_DIR}"
 
 http_request() {
 	local method="$1"
@@ -232,8 +276,10 @@ http_request() {
 	local body="${3:-}"
 	shift 3
 
-	local tmp_body
-	tmp_body="$(mktemp)"
+	local request_id="${RANDOM:-0}-$$"
+	local tmp_body="${TMP_DIR}/response-${request_id}.txt"
+	local request_headers="${TMP_DIR}/request-${request_id}.headers"
+	local request_body="${TMP_DIR}/request-${request_id}.body"
 	local status
 	local curl_args=(
 		-sS
@@ -241,25 +287,37 @@ http_request() {
 		-w "%{http_code}"
 		-X "${method}"
 		"${url}"
-		-H "Accept: application/json"
+		--header "@${request_headers}"
 	)
 	local header=""
-	for header in "$@"; do
-		if [ -n "${header}" ]; then
-			curl_args+=(-H "${header}")
+	(
+		umask 077
+		printf '%s\n' "Accept: application/json" >"${request_headers}"
+		for header in "$@"; do
+			if [ -n "${header}" ]; then
+				printf '%s\n' "${header}" >>"${request_headers}"
+			fi
+		done
+		if [ -n "${body}" ]; then
+			printf '%s\n' "Content-Type: application/json" >>"${request_headers}"
+			printf '%s' "${body}" >"${request_body}"
 		fi
-	done
+	)
+	chmod 0600 "${request_headers}"
 	if [ -n "${body}" ]; then
-		curl_args+=(-H "Content-Type: application/json" --data "${body}")
+		chmod 0600 "${request_body}"
+		curl_args+=(--data-binary "@${request_body}")
 	fi
 
 	status="$(curl "${curl_args[@]}")" || {
-		rm -f "${tmp_body}"
+		rm -f -- "${tmp_body}" "${request_headers}" "${request_body}"
 		fail "HTTP request failed: ${method} ${url}"
 	}
 	HTTP_STATUS="${status}"
 	HTTP_BODY="$(cat "${tmp_body}")"
-	rm -f "${tmp_body}"
+	if ! rm -f -- "${tmp_body}" "${request_headers}" "${request_body}"; then
+		fail "Remote smoke request-file cleanup failed"
+	fi
 }
 
 signed_request() {
@@ -293,7 +351,6 @@ ok "Waiting for cloud ready: ${BASE_URL}"
 if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	fail "Cloud API did not become ready"
 fi
-npcink_ai_cloud_require_internal_token
 
 IDEMPOTENCY_SUFFIX_NORMALIZED=""
 if [ -n "${IDEMPOTENCY_SUFFIX}" ]; then
@@ -400,7 +457,7 @@ signed_request "POST" "/v1/runtime/execute" "" "${EXECUTE_BODY}" "idem-deploy-sm
 assert_status "${HTTP_STATUS}" "200" "runtime/execute should succeed"
 EXECUTE_ENVELOPE_STATUS="$(json_read_path "${HTTP_BODY}" "status" 2>/dev/null || true)"
 if [ "${EXECUTE_ENVELOPE_STATUS}" != "ok" ]; then
-	fail "runtime/execute envelope status should be ok (body=${HTTP_BODY})"
+	fail "runtime/execute envelope status should be ok"
 fi
 assert_json_equals "${HTTP_BODY}" "data.status" "succeeded" "runtime/execute data.status should be succeeded"
 assert_json_non_empty "${HTTP_BODY}" "data.run_id" "runtime/execute should return run_id"

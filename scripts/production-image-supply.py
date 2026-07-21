@@ -22,6 +22,21 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCK = ROOT / "deploy" / "image-lock" / "production-images.json"
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_ID_RE = DIGEST_RE
+COMPOSE_RELEASE_IMAGE_VARIABLES = {
+    "api": "NPCINK_CLOUD_API_RELEASE_IMAGE",
+    "callback-worker": "NPCINK_CLOUD_CALLBACK_WORKER_RELEASE_IMAGE",
+    "frontend": "NPCINK_CLOUD_FRONTEND_RELEASE_IMAGE",
+    "ops-worker": "NPCINK_CLOUD_OPS_WORKER_RELEASE_IMAGE",
+    "postgres": "NPCINK_CLOUD_POSTGRES_RELEASE_IMAGE",
+    "proxy": "NPCINK_CLOUD_PROXY_RELEASE_IMAGE",
+    "redis": "NPCINK_CLOUD_REDIS_RELEASE_IMAGE",
+    "release-one-off": "NPCINK_CLOUD_API_RELEASE_IMAGE",
+    "worker": "NPCINK_CLOUD_WORKER_RELEASE_IMAGE",
+}
+COMPOSE_RELEASE_IMAGE_RE = re.compile(
+    r"^\$\{(?P<variable>NPCINK_CLOUD_[A-Z0-9_]+_RELEASE_IMAGE)"
+    r":-(?P<default>[^{}\s]+)\}$"
+)
 SEVERITY_ORDER = {
     "negligible": 0,
     "low": 1,
@@ -167,8 +182,10 @@ def _docker_archive_subject(path: Path, *, archive_reference: str) -> dict[str, 
                     f"[{archive_reference!r}]"
                 )
             layers = entry.get("Layers")
-            if not isinstance(layers, list) or not layers or not all(
-                isinstance(layer, str) and layer for layer in layers
+            if (
+                not isinstance(layers, list)
+                or not layers
+                or not all(isinstance(layer, str) and layer for layer in layers)
             ):
                 raise SupplyError("Docker archive Layers must be a non-empty string array")
             for layer in layers:
@@ -195,9 +212,7 @@ def _docker_archive_subject(path: Path, *, archive_reference: str) -> dict[str, 
     if not isinstance(config, dict):
         raise SupplyError("Docker archive Config must be a JSON object")
     os_name = _required_text(config.get("os"), "docker_archive.config.os")
-    architecture = _required_text(
-        config.get("architecture"), "docker_archive.config.architecture"
-    )
+    architecture = _required_text(config.get("architecture"), "docker_archive.config.architecture")
     if architecture == "aarch64":
         architecture = "arm64"
     elif architecture == "x86_64":
@@ -388,7 +403,26 @@ def _dockerfile_external_froms(path: Path) -> list[str]:
     return external
 
 
-def _compose_images(path: Path) -> dict[str, str]:
+def _compose_image_reference(value: str, *, service: str, path: Path) -> str:
+    expected_variable = COMPOSE_RELEASE_IMAGE_VARIABLES.get(service)
+    if expected_variable is None and "$" not in value:
+        return value
+
+    match = COMPOSE_RELEASE_IMAGE_RE.fullmatch(value)
+    if match is None:
+        raise SupplyError(
+            f"{path.name}:{service} image variable must use the exact "
+            "${NPCINK_CLOUD_*_RELEASE_IMAGE:-governed-default} form"
+        )
+    if match.group("variable") != expected_variable:
+        raise SupplyError(
+            f"{path.name}:{service} image must use the governed "
+            f"{expected_variable or 'literal lock reference'}"
+        )
+    return match.group("default")
+
+
+def _compose_images(path: Path, *, require_all_governed_services: bool = False) -> dict[str, str]:
     section = ""
     service = ""
     images: dict[str, str] = {}
@@ -404,9 +438,26 @@ def _compose_images(path: Path) -> dict[str, str]:
         if service_match:
             service = service_match.group(1)
             continue
-        image_match = re.match(r"^    image:\s*[\"']?([^\"'\s]+)[\"']?\s*$", raw_line)
+        image_match = re.match(r"^    image:\s*([\"']?)([^\"'\s]+)\1\s*$", raw_line)
         if service and image_match:
-            images[service] = image_match.group(1)
+            if service in images:
+                raise SupplyError(f"{path.name}:{service} declares image more than once")
+            images[service] = _compose_image_reference(
+                image_match.group(2), service=service, path=path
+            )
+
+    if require_all_governed_services:
+        missing_services = sorted(set(COMPOSE_RELEASE_IMAGE_VARIABLES) - set(images))
+        if missing_services:
+            raise SupplyError(
+                f"{path.name} is missing governed release image seams for {missing_services!r}"
+            )
+
+    one_off_reference = images.pop("release-one-off", None)
+    if one_off_reference is not None:
+        api_reference = images.get("api")
+        if api_reference is None or one_off_reference != api_reference:
+            raise SupplyError(f"{path.name}:release-one-off must be an exact governed alias of api")
     return images
 
 
@@ -529,9 +580,7 @@ def _repository_from_reference(reference: str) -> str:
     return tagged[:last_colon] if last_colon > last_slash else tagged
 
 
-def _validate_external_repo_digest(
-    *, reference: str, repo_digests: object, field: str
-) -> None:
+def _validate_external_repo_digest(*, reference: str, repo_digests: object, field: str) -> None:
     if "@" not in reference:
         raise SupplyError(f"{field} expected reference must be digest locked")
     digest = reference.rsplit("@", 1)[1]
@@ -773,7 +822,10 @@ def validate_lock(lock_path: Path, *, online: bool) -> dict[str, Any]:
                 expected_compose[source_file][service] = reference
 
     for compose_file, expected in expected_compose.items():
-        actual = _compose_images(ROOT / compose_file)
+        actual = _compose_images(
+            ROOT / compose_file,
+            require_all_governed_services=True,
+        )
         if actual != expected:
             missing = sorted(set(expected.items()) - set(actual.items()))
             unexpected = sorted(set(actual.items()) - set(expected.items()))
@@ -883,11 +935,7 @@ def _blocking_findings(report: dict[str, Any], policy: dict[str, Any]) -> list[d
             continue
         fix = vulnerability.get("fix")
         fix_state = "unknown"
-        if (
-            isinstance(fix, dict)
-            and isinstance(fix.get("state"), str)
-            and fix["state"].strip()
-        ):
+        if isinstance(fix, dict) and isinstance(fix.get("state"), str) and fix["state"].strip():
             fix_state = fix["state"]
         key = (vulnerability_id, package, package_version)
         findings[key] = {
@@ -1023,9 +1071,7 @@ def evaluate_scan(args: argparse.Namespace) -> int:
     if report_target.get("imageID") != sbom_component.get("bom-ref"):
         raise SupplyError("Grype source target imageID does not bind the CycloneDX bom-ref")
     if (
-        _normalize_sha256(
-            report_target.get("manifestDigest"), "grype.source.target.manifestDigest"
-        )
+        _normalize_sha256(report_target.get("manifestDigest"), "grype.source.target.manifestDigest")
         != syft_subject_manifest_digest
     ):
         raise SupplyError("Grype source target does not bind the Syft subject manifest digest")
@@ -1066,10 +1112,7 @@ def evaluate_scan(args: argparse.Namespace) -> int:
         "status": status,
         "scope": args.scope,
         "release_gate": args.scope == "release",
-        "generated_at_utc": _utc_now()
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "generated_at_utc": _utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "image_key": image_key,
         "lock_path": (
             str(lock_path.relative_to(ROOT)) if lock_path.is_relative_to(ROOT) else str(lock_path)
@@ -1183,10 +1226,7 @@ def verify_equivalence(args: argparse.Namespace) -> int:
     payload = {
         "contract_version": "npcink.production-image-equivalence.v1",
         "status": "passed" if all(item["status"] == "passed" for item in receipts) else "failed",
-        "generated_at_utc": _utc_now()
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "generated_at_utc": _utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "images": receipts,
     }
     output = Path(args.output).resolve()
@@ -1254,9 +1294,7 @@ def _validate_index_receipt(
         raise SupplyError("scan receipt generated_at_utc is in the future")
 
     image_key = _required_text(receipt.get("image_key"), "scan_receipt.image_key")
-    recorded_lock_path = Path(
-        _required_text(receipt.get("lock_path"), "scan_receipt.lock_path")
-    )
+    recorded_lock_path = Path(_required_text(receipt.get("lock_path"), "scan_receipt.lock_path"))
     if not recorded_lock_path.is_absolute():
         recorded_lock_path = ROOT / recorded_lock_path
     if recorded_lock_path.resolve() != lock_path.resolve():
@@ -1275,9 +1313,8 @@ def _validate_index_receipt(
         raise SupplyError("release scan receipt allowlist_path is not canonical")
     if release_gate and receipt.get("allowlist_path") != lock["scan_policy"]["allowlist_file"]:
         raise SupplyError("release scan receipt must record the canonical relative allowlist path")
-    if (
-        not recorded_allowlist_path.is_file()
-        or receipt.get("allowlist_sha256") != _sha256(recorded_allowlist_path)
+    if not recorded_allowlist_path.is_file() or receipt.get("allowlist_sha256") != _sha256(
+        recorded_allowlist_path
     ):
         raise SupplyError("scan receipt allowlist_sha256 does not match its governed allowlist")
     targets = _scan_targets(lock)
@@ -1293,14 +1330,10 @@ def _validate_index_receipt(
     )
     if release_gate and archive_reference != targets[image_key]["archive_reference"]:
         raise SupplyError(f"release scan receipt archive reference mismatch for {image_key}")
-    archive_sha256 = _required_text(
-        receipt.get("archive_sha256"), "scan_receipt.archive_sha256"
-    )
+    archive_sha256 = _required_text(receipt.get("archive_sha256"), "scan_receipt.archive_sha256")
     if re.fullmatch(r"[0-9a-f]{64}", archive_sha256) is None:
         raise SupplyError("scan receipt archive_sha256 is invalid")
-    config_image_id = _required_text(
-        receipt.get("config_image_id"), "scan_receipt.config_image_id"
-    )
+    config_image_id = _required_text(receipt.get("config_image_id"), "scan_receipt.config_image_id")
     if IMAGE_ID_RE.fullmatch(config_image_id) is None:
         raise SupplyError("scan receipt config_image_id is invalid")
     subject_digest = _required_text(
@@ -1439,9 +1472,7 @@ def _validate_index_receipt(
     archive_path = receipt_path.parent / f"{image_key}.image.tar"
     if not archive_path.is_file() or _sha256(archive_path) != archive_sha256:
         raise SupplyError("scan receipt image archive hash does not match its retained archive")
-    archive_subject = _docker_archive_subject(
-        archive_path, archive_reference=archive_reference
-    )
+    archive_subject = _docker_archive_subject(archive_path, archive_reference=archive_reference)
     if (
         archive_subject["archive_sha256"] != archive_sha256
         or archive_subject["config_image_id"] != config_image_id
@@ -1477,10 +1508,9 @@ def _validate_index_receipt(
     descriptor = report.get("descriptor")
     if not isinstance(descriptor, dict):
         raise SupplyError("indexed Grype report descriptor is invalid")
-    if (
-        descriptor.get("name") != "grype"
-        or str(descriptor.get("version", "")).lstrip("v") != receipt.get("grype_version")
-    ):
+    if descriptor.get("name") != "grype" or str(descriptor.get("version", "")).lstrip(
+        "v"
+    ) != receipt.get("grype_version"):
         raise SupplyError("scan receipt does not match its Grype report version")
     _validate_grype_configuration(descriptor, report)
     report_source = report.get("source")
@@ -1535,8 +1565,7 @@ def _validate_index_receipt(
         if entry["image"] == image_key
     }
     actual_allowed = {
-        (item["vulnerability_id"], item["package"], item["package_version"])
-        for item in allowed
+        (item["vulnerability_id"], item["package"], item["package_version"]) for item in allowed
     }
     blocker_identities = {
         (item["vulnerability_id"], item["package"], item["package_version"])
@@ -1594,9 +1623,12 @@ def write_index(args: argparse.Namespace) -> int:
             raise SupplyError("invalid image equivalence contract")
         if equivalence.get("status") != "passed":
             raise SupplyError("worker image equivalence did not pass")
-        if _parse_utc_timestamp(
-            equivalence.get("generated_at_utc"), "image_equivalence.generated_at_utc"
-        ) > _utc_now():
+        if (
+            _parse_utc_timestamp(
+                equivalence.get("generated_at_utc"), "image_equivalence.generated_at_utc"
+            )
+            > _utc_now()
+        ):
             raise SupplyError("image equivalence evidence is from the future")
         expected_equivalent_keys = {
             record["key"]
@@ -1686,10 +1718,7 @@ def write_index(args: argparse.Namespace) -> int:
         "status": status,
         "scope": args.scope,
         "release_gate": release_gate,
-        "generated_at_utc": _utc_now()
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "generated_at_utc": _utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "lock_path": receipts[0]["lock_path"],
         "lock_sha256": receipts[0]["lock_sha256"],
         "allowlist_path": receipts[0]["allowlist_path"],
@@ -1705,9 +1734,7 @@ def write_index(args: argparse.Namespace) -> int:
                 "archive_reference": receipt.get("archive_reference"),
                 "archive_sha256": receipt.get("archive_sha256"),
                 "config_image_id": receipt.get("config_image_id"),
-                "syft_subject_manifest_digest": receipt.get(
-                    "syft_subject_manifest_digest"
-                ),
+                "syft_subject_manifest_digest": receipt.get("syft_subject_manifest_digest"),
                 "source_daemon_image_id": receipt.get("source_daemon_image_id"),
                 "platform": receipt.get("platform"),
                 "scanner_docker_context": receipt.get("scanner_docker_context"),

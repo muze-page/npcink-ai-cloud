@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
@@ -43,8 +44,25 @@ ok() {
 	echo "[ok] $*"
 }
 
+umask 077
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "${TMP_DIR}"' EXIT
+cleanup_tmp_dir() {
+	local exit_status="$?"
+	local cleanup_failed=0
+	trap - EXIT
+	set +e
+	rm -rf -- "${TMP_DIR}" || cleanup_failed=1
+	if [ -e "${TMP_DIR}" ] || [ -L "${TMP_DIR}" ]; then
+		cleanup_failed=1
+	fi
+	if [ "${cleanup_failed}" -ne 0 ]; then
+		echo "[fail] Secret-rotation request-file cleanup did not complete." >&2
+		exit_status=1
+	fi
+	exit "${exit_status}"
+}
+trap cleanup_tmp_dir EXIT
+chmod 0700 "${TMP_DIR}"
 
 HTTP_STATUS=""
 HTTP_BODY=""
@@ -56,8 +74,11 @@ http_request() {
 	local body="${3:-}"
 	shift 3 || true
 
-	local tmp_body="${TMP_DIR}/body.txt"
-	local tmp_headers="${TMP_DIR}/headers.txt"
+	local request_id="${RANDOM:-0}-$$"
+	local tmp_body="${TMP_DIR}/body-${request_id}.txt"
+	local tmp_headers="${TMP_DIR}/headers-${request_id}.txt"
+	local request_headers="${TMP_DIR}/request-${request_id}.headers"
+	local request_body="${TMP_DIR}/request-${request_id}.body"
 	local status
 	local curl_args=(
 		-sS
@@ -66,21 +87,35 @@ http_request() {
 		-w "%{http_code}"
 		-X "${method}"
 		"${url}"
+		--header "@${request_headers}"
 	)
 	local header=""
-	for header in "$@"; do
-		if [ -n "${header}" ]; then
-			curl_args+=(-H "${header}")
+	(
+		umask 077
+		: >"${request_headers}"
+		for header in "$@"; do
+			if [ -n "${header}" ]; then
+				printf '%s\n' "${header}" >>"${request_headers}"
+			fi
+		done
+		if [ -n "${body}" ]; then
+			printf '%s\n' "Content-Type: application/json" >>"${request_headers}"
+			printf '%s' "${body}" >"${request_body}"
 		fi
-	done
+	)
+	chmod 0600 "${request_headers}"
 	if [ -n "${body}" ]; then
-		curl_args+=(-H "Content-Type: application/json" --data "${body}")
+		chmod 0600 "${request_body}"
+		curl_args+=(--data-binary "@${request_body}")
 	fi
 
 	status="$(curl "${curl_args[@]}")" || fail "HTTP request failed: ${method} ${url}"
 	HTTP_STATUS="${status}"
 	HTTP_BODY="$(cat "${tmp_body}")"
 	HTTP_HEADERS="$(cat "${tmp_headers}")"
+	if ! rm -f -- "${tmp_body}" "${tmp_headers}" "${request_headers}" "${request_body}"; then
+		fail "Secret-rotation request-file cleanup failed"
+	fi
 }
 
 assert_status() {
@@ -88,7 +123,7 @@ assert_status() {
 	local expected="$2"
 	local message="$3"
 	if [ "${actual}" != "${expected}" ]; then
-		fail "${message} (expected ${expected}, got ${actual}; body=${HTTP_BODY})"
+		fail "${message} (expected ${expected}, got ${actual})"
 	fi
 }
 
@@ -167,6 +202,7 @@ assert_header_contains() {
 }
 
 npcink_ai_cloud_require_internal_token
+INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 
 if [ "${RUN_LOCAL_TESTS}" = "1" ] && [ -x "${ROOT_DIR}/.venv/bin/python" ]; then
 	ok "Running local compile and targeted security tests"
@@ -181,6 +217,8 @@ if [ "${RUN_LOCAL_TESTS}" = "1" ] && [ -x "${ROOT_DIR}/.venv/bin/python" ]; then
 		"${ROOT_DIR}/tests/api/test_web_routes.py" -q
 fi
 
+unset NPCINK_CLOUD_INTERNAL_AUTH_TOKEN
+
 ok "Waiting for cloud ready: ${BASE_URL}"
 if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	fail "Cloud API did not become ready"
@@ -193,21 +231,21 @@ http_request \
 	"GET" \
 	"${BASE_URL%/}/health/ready" \
 	"" \
-	"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "internal readiness check should succeed"
 
 http_request \
 	"GET" \
 	"${BASE_URL%/}/health/operational-ready" \
 	"" \
-	"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "operational readiness should succeed with the rotated internal token"
 
 http_request \
 	"GET" \
 	"${BASE_URL%/}/internal/service/observability/summary" \
 	"" \
-	"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "observability summary should succeed with the rotated internal token"
 assert_json_non_empty "${HTTP_BODY}" "data.tracing.otlp_configured" "observability summary should expose the external exporter configuration fact"
 assert_json_non_empty "${HTTP_BODY}" "data.tracing.trace_query_configured" "observability summary should expose the external query configuration fact"
@@ -240,7 +278,7 @@ if [ "${HTTP_STATUS}" = "200" ]; then
 elif [ "${HTTP_STATUS}" = "503" ] && [ "$(json_get "${HTTP_BODY}" "error_code")" = "portal.email_delivery_unavailable" ]; then
 	ok "Portal login-code enumeration guard skipped because portal email delivery is not configured"
 else
-	fail "login-code request produced unexpected response (status=${HTTP_STATUS}; body=${HTTP_BODY})"
+	fail "login-code request produced unexpected response (status=${HTTP_STATUS})"
 fi
 
 http_request \

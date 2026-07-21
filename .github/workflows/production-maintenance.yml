@@ -15,9 +15,14 @@ on:
         description: "Number of release-* directories to keep when pruning old releases."
         required: false
         default: "4"
+      safe_prune_confirmation:
+        description: "For safe-prune only, type: Prune production images and old releases."
+        required: false
+        default: ""
+        type: string
 
 concurrency:
-  group: production-maintenance
+  group: production-host-mutation
   cancel-in-progress: false
 
 jobs:
@@ -26,33 +31,42 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/production'
     environment: production
-    permissions:
-      contents: read
+    permissions: {}
     steps:
       - name: Install SSH key
         env:
           PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
           PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           test -n "${PROD_SSH_KEY}"
           test -n "${PROD_SSH_HOST}"
+          test -n "${PROD_SSH_KNOWN_HOSTS}"
           mkdir -p ~/.ssh
           printf '%s\n' "${PROD_SSH_KEY}" > ~/.ssh/npcink_prod_maintenance_key
           chmod 600 ~/.ssh/npcink_prod_maintenance_key
-          ssh-keyscan -p "${PROD_SSH_PORT}" -H "${PROD_SSH_HOST}" >> ~/.ssh/known_hosts
+          printf '%s\n' "${PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          known_host_lookup="${PROD_SSH_HOST}"
+          if [ "${PROD_SSH_PORT}" != "22" ]; then
+            known_host_lookup="[${PROD_SSH_HOST}]:${PROD_SSH_PORT}"
+          fi
+          ssh-keygen -F "${known_host_lookup}" -f ~/.ssh/known_hosts >/dev/null
 
       - name: Run maintenance
         env:
           MAINTENANCE_ACTION: ${{ inputs.action }}
           RELEASE_RETENTION_COUNT: ${{ inputs.release_retention_count }}
+          SAFE_PRUNE_CONFIRMATION: ${{ inputs.safe_prune_confirmation }}
           PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER || 'deploy' }}
+          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
           PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
           PROD_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
         run: |
           set -euo pipefail
+          test "${PROD_SSH_USER}" = "root"
           case "${MAINTENANCE_ACTION}" in
             disk-report|safe-prune) ;;
             *)
@@ -60,6 +74,11 @@ jobs:
               exit 1
               ;;
           esac
+          if [ "${MAINTENANCE_ACTION}" = "safe-prune" ] && \
+            [ "${SAFE_PRUNE_CONFIRMATION}" != "Prune production images and old releases." ]; then
+            echo "[fail] safe-prune requires the exact human confirmation phrase." >&2
+            exit 1
+          fi
           case "${RELEASE_RETENTION_COUNT}" in
             ''|*[!0-9]*)
               echo "[fail] release_retention_count must be a positive integer" >&2
@@ -71,24 +90,47 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "${PROD_REMOTE_DIR}" =~ ^/[A-Za-z0-9._/-]+$ ]] || \
+            [[ "/${PROD_REMOTE_DIR#/}/" = */../* ]] || \
+            [[ "/${PROD_REMOTE_DIR#/}/" = */./* ]]; then
+            echo "[fail] PROD_REMOTE_DIR must be a safe absolute path without dot traversal." >&2
+            exit 1
+          fi
+
+          remote_shell_arg() {
+            printf '%q' "$1"
+          }
+
           ssh_args=(
             -p "${PROD_SSH_PORT}"
             -i /home/runner/.ssh/npcink_prod_maintenance_key
-            -o StrictHostKeyChecking=accept-new
+            -o StrictHostKeyChecking=yes
             -o BatchMode=yes
             -o ConnectTimeout=10
           )
           ssh_target="${PROD_SSH_USER}@${PROD_SSH_HOST}"
+          remote_command="bash -s -- $(remote_shell_arg "${MAINTENANCE_ACTION}") $(remote_shell_arg "${PROD_REMOTE_DIR}") $(remote_shell_arg "${RELEASE_RETENTION_COUNT}")"
 
-          ssh "${ssh_args[@]}" "${ssh_target}" bash -s -- \
-            "${MAINTENANCE_ACTION}" \
-            "${PROD_REMOTE_DIR}" \
-            "${RELEASE_RETENTION_COUNT}" <<'REMOTE'
+          ssh "${ssh_args[@]}" "${ssh_target}" "${remote_command}" <<'REMOTE'
           set -euo pipefail
 
           action="$1"
           remote_dir="$2"
           keep_count="$3"
+          maintenance_lock_held=0
+
+          cleanup_maintenance_lock() {
+            exit_status="$?"
+            trap - EXIT
+            if [ "${maintenance_lock_held}" = "1" ]; then
+              if ! rmdir -- "${remote_dir}/.deploy-lock"; then
+                echo "[fail] Production maintenance lock cleanup failed." >&2
+                exit 1
+              fi
+            fi
+            exit "${exit_status}"
+          }
+          trap cleanup_maintenance_lock EXIT
 
           disk_report() {
             echo "[info] Disk usage"
@@ -133,6 +175,15 @@ jobs:
 
           disk_report
           if [ "${action}" = "safe-prune" ]; then
+            [ -d "${remote_dir}" ] || {
+              echo "[fail] Remote directory missing: ${remote_dir}" >&2
+              exit 1
+            }
+            if ! mkdir -- "${remote_dir}/.deploy-lock"; then
+              echo "[fail] Production deploy or another mutating operation holds the lock." >&2
+              exit 1
+            fi
+            maintenance_lock_held=1
             echo "[info] Pruning stopped containers, unused images, and build cache"
             docker container prune -f || true
             docker image prune -af || true
@@ -141,4 +192,5 @@ jobs:
             echo "[info] Disk usage after safe prune"
             disk_report
           fi
+          cleanup_maintenance_lock
           REMOTE

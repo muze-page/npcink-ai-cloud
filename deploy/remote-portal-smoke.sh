@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
@@ -37,8 +38,8 @@ while [ "$#" -gt 0 ]; do
 			shift 2
 			;;
 		--login-code)
-			LOGIN_CODE="$2"
-			shift 2
+			echo "[fail] --login-code is forbidden because process arguments are observable; use NPCINK_CLOUD_PORTAL_LOGIN_CODE or a protected environment file." >&2
+			exit 1
 			;;
 		*)
 			echo "[fail] Unknown argument: $1" >&2
@@ -46,6 +47,8 @@ while [ "$#" -gt 0 ]; do
 			;;
 	esac
 done
+
+unset NPCINK_CLOUD_PORTAL_LOGIN_CODE
 
 fail() {
 	echo "[fail] $*" >&2
@@ -106,7 +109,7 @@ assert_status() {
 	local expected="$2"
 	local message="$3"
 	if [ "${actual}" != "${expected}" ]; then
-		fail "${message} (expected ${expected}, got ${actual}; body=${HTTP_BODY})"
+		fail "${message} (expected ${expected}, got ${actual})"
 	fi
 }
 
@@ -137,9 +140,29 @@ assert_json_non_empty() {
 	fi
 }
 
+umask 077
 TMP_DIR="$(mktemp -d)"
+TMP_CLEANUP_ARMED=1
+cleanup_tmp_dir() {
+	local exit_status="$?"
+	local cleanup_failed=0
+	trap - EXIT
+	set +e
+	if [ "${TMP_CLEANUP_ARMED}" = "1" ]; then
+		rm -rf -- "${TMP_DIR}" || cleanup_failed=1
+		if [ -e "${TMP_DIR}" ] || [ -L "${TMP_DIR}" ]; then
+			cleanup_failed=1
+		fi
+	fi
+	if [ "${cleanup_failed}" -ne 0 ]; then
+		echo "[fail] Portal smoke credential-file cleanup did not complete." >&2
+		exit_status=1
+	fi
+	exit "${exit_status}"
+}
+trap cleanup_tmp_dir EXIT
+chmod 0700 "${TMP_DIR}"
 COOKIE_JAR="${TMP_DIR}/cookies.txt"
-trap 'rm -rf "${TMP_DIR}"' EXIT
 
 HTTP_STATUS=""
 HTTP_BODY=""
@@ -156,8 +179,11 @@ http_request() {
 		shift "$#"
 	fi
 
-	local tmp_body="${TMP_DIR}/body.txt"
-	local tmp_headers="${TMP_DIR}/headers.txt"
+	local request_id="${RANDOM:-0}-$$"
+	local tmp_body="${TMP_DIR}/body-${request_id}.txt"
+	local tmp_headers="${TMP_DIR}/headers-${request_id}.txt"
+	local request_headers="${TMP_DIR}/request-${request_id}.headers"
+	local request_body="${TMP_DIR}/request-${request_id}.body"
 	local status
 	local curl_args=(
 		-sS
@@ -168,22 +194,35 @@ http_request() {
 		-w "%{http_code}"
 		-X "${method}"
 		"${url}"
-		-H "Accept: application/json"
+		--header "@${request_headers}"
 	)
 	local header=""
-	for header in "$@"; do
-		if [ -n "${header}" ]; then
-			curl_args+=(-H "${header}")
+	(
+		umask 077
+		printf '%s\n' "Accept: application/json" >"${request_headers}"
+		for header in "$@"; do
+			if [ -n "${header}" ]; then
+				printf '%s\n' "${header}" >>"${request_headers}"
+			fi
+		done
+		if [ -n "${body}" ]; then
+			printf '%s\n' "Content-Type: application/json" >>"${request_headers}"
+			printf '%s' "${body}" >"${request_body}"
 		fi
-	done
+	)
+	chmod 0600 "${request_headers}"
 	if [ -n "${body}" ]; then
-		curl_args+=(-H "Content-Type: application/json" --data "${body}")
+		chmod 0600 "${request_body}"
+		curl_args+=(--data-binary "@${request_body}")
 	fi
 
 	status="$(curl "${curl_args[@]}")" || fail "HTTP request failed: ${method} ${url}"
 	HTTP_STATUS="${status}"
 	HTTP_BODY="$(cat "${tmp_body}")"
 	HTTP_HEADERS="$(cat "${tmp_headers}")"
+	if ! rm -f -- "${tmp_body}" "${tmp_headers}" "${request_headers}" "${request_body}"; then
+		fail "Portal smoke request-file cleanup failed"
+	fi
 }
 
 ok "Waiting for cloud ready: ${BASE_URL}"
@@ -197,10 +236,10 @@ assert_status "${HTTP_STATUS}" "200" "buyer-facing home page should load"
 http_request "GET" "${BASE_URL%/}/portal/login"
 assert_status "${HTTP_STATUS}" "200" "portal login page should load"
 
-LOGIN_BODY="$(printf '{"email":%s}' "$(python3 - <<'PY' "${MEMBER_EMAIL}"
+LOGIN_BODY="$(printf '{"email":%s}' "$(MEMBER_EMAIL_VALUE="${MEMBER_EMAIL}" python3 - <<'PY'
 import json
-import sys
-print(json.dumps(sys.argv[1], ensure_ascii=True))
+import os
+print(json.dumps(os.environ["MEMBER_EMAIL_VALUE"], ensure_ascii=True))
 PY
 )")"
 http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/request" "${LOGIN_BODY}"
@@ -219,7 +258,7 @@ PY
 	http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/verify" "${LOGIN_VERIFY_BODY}"
 	assert_status "${HTTP_STATUS}" "200" "portal login code verification should succeed"
 else
-	fail "portal login code is required to continue; pass NPCINK_CLOUD_PORTAL_LOGIN_CODE or --login-code."
+	fail "portal login code is required to continue; supply NPCINK_CLOUD_PORTAL_LOGIN_CODE through a protected environment file."
 fi
 
 http_request "GET" "${BASE_URL%/}/portal/v1/session"

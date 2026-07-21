@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.postgres
-    image: npcink-ai-cloud-postgres:prod
+    image: ${NPCINK_CLOUD_POSTGRES_RELEASE_IMAGE:-npcink-ai-cloud-postgres:prod}
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-npcink_ai_cloud}
@@ -18,7 +18,7 @@ services:
       - cloud-postgres-prod:/var/lib/postgresql/data
 
   redis:
-    image: npcink-ai-cloud-external-redis:prod
+    image: ${NPCINK_CLOUD_REDIS_RELEASE_IMAGE:-npcink-ai-cloud-external-redis:prod}
     restart: unless-stopped
     command: redis-server --appendonly yes
     healthcheck:
@@ -30,7 +30,7 @@ services:
       - cloud-redis-prod:/data
 
   proxy:
-    image: npcink-ai-cloud-external-nginx:prod
+    image: ${NPCINK_CLOUD_PROXY_RELEASE_IMAGE:-npcink-ai-cloud-external-nginx:prod}
     restart: unless-stopped
     depends_on:
       api:
@@ -52,7 +52,7 @@ services:
       dockerfile: Dockerfile
       args:
         PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
-    image: npcink-ai-cloud-api:prod
+    image: ${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}
     restart: unless-stopped
     command: >-
       gunicorn -k uvicorn.workers.UvicornWorker
@@ -72,6 +72,7 @@ services:
       NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
       NPCINK_CLOUD_ADMIN_SESSION_SECRET: ${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-}
       NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: ${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-}
+      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-}
       NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET:-}
       NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID:-}
       NPCINK_CLOUD_ADMIN_SESSION_TTL_SECONDS: ${NPCINK_CLOUD_ADMIN_SESSION_TTL_SECONDS:-28800}
@@ -156,7 +157,7 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-    image: npcink-ai-cloud-frontend:prod
+    image: ${NPCINK_CLOUD_FRONTEND_RELEASE_IMAGE:-npcink-ai-cloud-frontend:prod}
     restart: unless-stopped
     environment:
       CLOUD_API_BASE_URL: http://api:8000
@@ -172,7 +173,7 @@ services:
       dockerfile: Dockerfile
       args:
         PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
-    image: npcink-ai-cloud-worker:prod
+    image: ${NPCINK_CLOUD_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-worker:prod}
     restart: unless-stopped
     command: python -m app.workers.runtime_queue
     extra_hosts:
@@ -189,6 +190,7 @@ services:
       NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
       NPCINK_CLOUD_ADMIN_SESSION_SECRET: ${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-}
       NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: ${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-}
+      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-}
       NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET:-}
       NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID:-}
       NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-}
@@ -258,7 +260,7 @@ services:
       dockerfile: Dockerfile
       args:
         PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
-    image: npcink-ai-cloud-callback-worker:prod
+    image: ${NPCINK_CLOUD_CALLBACK_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-callback-worker:prod}
     restart: unless-stopped
     command: python -m app.workers.callback_dispatch
     extra_hosts:
@@ -274,6 +276,7 @@ services:
       NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
       NPCINK_CLOUD_ADMIN_SESSION_SECRET: ${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-}
       NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: ${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-}
+      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-}
       NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET:-}
       NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID:-}
       NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-}
@@ -291,7 +294,7 @@ services:
       dockerfile: Dockerfile
       args:
         PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
-    image: npcink-ai-cloud-ops-worker:prod
+    image: ${NPCINK_CLOUD_OPS_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-ops-worker:prod}
     restart: unless-stopped
     command: python -m app.workers.ops_cadence
     extra_hosts:
@@ -305,6 +308,7 @@ services:
       NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
       NPCINK_CLOUD_ADMIN_SESSION_SECRET: ${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-}
       NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: ${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-}
+      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-}
       NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET:-}
       NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID:-}
       NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-}
@@ -395,6 +399,16 @@ services:
         condition: service_healthy
     volumes:
       - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
+
+  release-one-off:
+    extends:
+      service: api
+    profiles: ["release-one-off"]
+    image: ${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}
+    pull_policy: never
+    restart: "no"
+    entrypoint: ["python"]
+    command: ["-c", "import signal; signal.pause()"]
 
 volumes:
   cloud-artifacts-prod:

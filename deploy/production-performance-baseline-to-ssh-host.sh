@@ -12,7 +12,6 @@ SSH_PORT="${NPCINK_CLOUD_DEPLOY_SSH_PORT:-22}"
 SSH_IDENTITY_FILE="${NPCINK_CLOUD_DEPLOY_IDENTITY_FILE:-}"
 SSH_CONNECT_TIMEOUT_SECONDS="${NPCINK_CLOUD_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-10}"
 REMOTE_DIR="${NPCINK_CLOUD_DEPLOY_REMOTE_DIR:-/opt/npcink-ai-cloud}"
-WITH_SYNTHETIC_SMOKE=0
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -35,10 +34,6 @@ while [ "$#" -gt 0 ]; do
 		--remote-dir)
 			REMOTE_DIR="$2"
 			shift 2
-			;;
-		--with-synthetic-smoke)
-			WITH_SYNTHETIC_SMOKE=1
-			shift
 			;;
 		*)
 			echo "[fail] Unknown argument: $1" >&2
@@ -64,7 +59,7 @@ fi
 
 SSH_ARGS=(
 	-p "${SSH_PORT}"
-	-o StrictHostKeyChecking=accept-new
+	-o StrictHostKeyChecking=yes
 	-o BatchMode=yes
 	-o ConnectTimeout="${SSH_CONNECT_TIMEOUT_SECONDS}"
 )
@@ -80,10 +75,3 @@ run_remote() {
 
 echo "[info] Running read-only production performance baseline on ${SSH_TARGET}:${REMOTE_DIR}/current"
 run_remote "bash deploy/remote-performance-baseline.sh"
-
-if [ "${WITH_SYNTHETIC_SMOKE}" = "1" ]; then
-	echo "[info] Running one explicit synthetic runtime smoke"
-	run_remote "NPCINK_CLOUD_IDEMPOTENCY_SUFFIX=perf-baseline-\$(date -u +%Y%m%d%H%M%S) NPCINK_CLOUD_PROMPT_TEXT='production performance baseline synthetic request' bash deploy/remote-smoke.sh"
-	echo "[info] Re-running read-only baseline after synthetic smoke"
-	run_remote "bash deploy/remote-performance-baseline.sh"
-fi

@@ -42,6 +42,52 @@ def run_helper(*args: str, env: dict[str, str] | None = None) -> subprocess.Comp
     )
 
 
+def target_daemon_state_dir(release: Path) -> Path:
+    return release.parent / ".release-state" / release.name
+
+
+def install_deploy_lock_owner(release: Path, environment: dict[str, str]) -> None:
+    owner = "f" * 64
+    deploy_lock = release.parent / ".deploy-lock"
+    deploy_lock.mkdir(mode=0o700)
+    owner_file = deploy_lock / "one-off-owner"
+    owner_file.write_text(owner + "\n", encoding="utf-8")
+    owner_file.chmod(0o600)
+    environment["NPCINK_CLOUD_DEPLOY_LOCK_OWNER"] = owner
+
+
+def test_target_daemon_map_rejects_nonstandard_release_directory(tmp_path: Path) -> None:
+    helper = load_helper_module()
+
+    with pytest.raises(helper.BundleError, match="must match release-<safe-id>"):
+        helper.target_daemon_map_path(tmp_path / "release")
+
+
+def test_target_daemon_map_rejects_writable_release_root(tmp_path: Path) -> None:
+    helper = load_helper_module()
+    release = tmp_path / "release-fixture"
+    release.mkdir()
+    release.chmod(0o775)
+
+    with pytest.raises(helper.BundleError, match="operator-owned and not group/world writable"):
+        helper.target_daemon_map_path(release)
+
+
+def test_target_daemon_map_cli_has_no_arbitrary_path_override(tmp_path: Path) -> None:
+    completed = run_helper(
+        "loaded-role-daemon-id",
+        "--root",
+        str(tmp_path / "release-fixture"),
+        "--role",
+        "api",
+        "--target-daemon-map",
+        str(tmp_path / "attacker-controlled.json"),
+    )
+
+    assert completed.returncode == 2
+    assert "unrecognized arguments: --target-daemon-map" in completed.stderr
+
+
 def write(path: Path, content: str = "fixture\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -53,6 +99,7 @@ def write_fixture_docker_archive(
     key: str,
     reference: str,
     extra_references: tuple[str, ...] = (),
+    layer_sources: bool = False,
 ) -> None:
     layer = io.BytesIO()
     with tarfile.open(fileobj=layer, mode="w") as layer_archive:
@@ -77,16 +124,14 @@ def write_fixture_docker_archive(
         separators=(",", ":"),
     ).encode()
     config_hex = hashlib.sha256(config).hexdigest()
-    manifest = json.dumps(
-        [
-            {
-                "Config": f"{config_hex}.json",
-                "RepoTags": [reference, *extra_references],
-                "Layers": ["layer.tar"],
-            }
-        ],
-        separators=(",", ":"),
-    ).encode()
+    manifest_entry: dict[str, object] = {
+        "Config": f"{config_hex}.json",
+        "RepoTags": [reference, *extra_references],
+        "Layers": ["layer.tar"],
+    }
+    if layer_sources:
+        manifest_entry["LayerSources"] = {}
+    manifest = json.dumps([manifest_entry], separators=(",", ":")).encode()
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w") as archive:
         for name, content in (
@@ -129,6 +174,58 @@ def test_docker_archive_rejects_undeclared_repo_tags(tmp_path: Path) -> None:
 
     with pytest.raises(helper.BundleError, match="RepoTags must contain only"):
         helper.docker_archive_subject(archive, archive_reference=reference)
+
+
+def test_target_daemon_reexport_accepts_docker_26_layer_sources_only_locally(
+    tmp_path: Path,
+) -> None:
+    helper = load_helper_module()
+    archive = tmp_path / "docker26-api.tar.gz"
+    reference = "npcink-ai-cloud-api:prod"
+    write_fixture_docker_archive(
+        archive,
+        key="docker26-api",
+        reference=reference,
+        layer_sources=True,
+    )
+
+    subject = helper.docker_archive_subject(archive, archive_reference=None)
+    assert subject["platform"] == "linux/amd64"
+    with pytest.raises(helper.BundleError, match="manifest entry is invalid"):
+        helper.docker_archive_subject(archive, archive_reference=reference)
+
+
+def test_target_daemon_map_rejects_tag_change_during_portable_identity_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = load_helper_module()
+    original_id = "sha256:" + "a" * 64
+    drifted_id = "sha256:" + "b" * 64
+    observed_ids = iter((original_id, drifted_id))
+    monkeypatch.setattr(helper, "loaded_image_id", lambda _reference, _role: next(observed_ids))
+    monkeypatch.setattr(
+        helper,
+        "save_loaded_image_subject",
+        lambda _image_id, _role, _path: {
+            "config_image_id": "sha256:" + "c" * 64,
+            "platform": "linux/amd64",
+        },
+    )
+    archives = [
+        {
+            "images": [
+                {
+                    "expected_image_id": "sha256:" + "c" * 64,
+                    "primary": True,
+                    "reference": "npcink-ai-cloud-api:prod",
+                    "role": "api",
+                }
+            ]
+        }
+    ]
+
+    with pytest.raises(helper.BundleError, match="tag changed during identity proof"):
+        helper.verify_loaded_images(archives, "linux/amd64")
 
 
 def image_lock() -> dict[str, object]:
@@ -238,9 +335,7 @@ def create_scan_evidence(bundle: Path, lock: dict[str, object]) -> dict[str, str
         "redis": bundle / "dist/external-redis.tar.gz",
         "nginx": bundle / "dist/external-nginx.tar.gz",
     }
-    config_ids = {
-        key: fixture_archive_config_id(path) for key, path in archive_paths.items()
-    }
+    config_ids = {key: fixture_archive_config_id(path) for key, path in archive_paths.items()}
     lock_sha256 = hashlib.sha256(
         (bundle / "deploy/image-lock/production-images.json").read_bytes()
     ).hexdigest()
@@ -250,8 +345,7 @@ def create_scan_evidence(bundle: Path, lock: dict[str, object]) -> dict[str, str
     database_identity = {
         "schema_version": "6",
         "built": timestamp,
-        "source": "https://grype.anchore.io/databases/v6/latest.json?checksum=sha256%3A"
-        + "d" * 64,
+        "source": "https://grype.anchore.io/databases/v6/latest.json?checksum=sha256%3A" + "d" * 64,
         "checksum_sha256": "d" * 64,
         "valid": True,
         "providers": {
@@ -291,9 +385,7 @@ def create_scan_evidence(bundle: Path, lock: dict[str, object]) -> dict[str, str
             "syft_subject_manifest_digest": "sha256:" + "d" * 64,
             "source_daemon_image_id": source_ids[key],
             "repo_digests": (
-                [fixture_repo_digest(references[key])]
-                if key in {"redis", "nginx"}
-                else []
+                [fixture_repo_digest(references[key])] if key in {"redis", "nginx"} else []
             ),
             "platform": "linux/amd64",
             "scanner_docker_context": "default",
@@ -378,7 +470,7 @@ def create_scan_evidence(bundle: Path, lock: dict[str, object]) -> dict[str, str
 @pytest.fixture()
 def exact_bundle_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     source = tmp_path / "source"
-    bundle = tmp_path / "bundle with spaces"
+    bundle = tmp_path / "parent with spaces" / "release-fixture"
     bundle.mkdir(parents=True)
     files = {
         "uv.lock": "uv\n",
@@ -400,10 +492,13 @@ def exact_bundle_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         write(source / relative, content)
     lock = image_lock()
     lock_text = json.dumps(lock, sort_keys=True) + "\n"
-    allowlist_text = json.dumps(
-        {"schema_version": "npcink.production-image-cve-allowlist.v1", "entries": []},
-        sort_keys=True,
-    ) + "\n"
+    allowlist_text = (
+        json.dumps(
+            {"schema_version": "npcink.production-image-cve-allowlist.v1", "entries": []},
+            sort_keys=True,
+        )
+        + "\n"
+    )
     write(source / "deploy/image-lock/production-images.json", lock_text)
     write(source / "deploy/image-lock/cve-allowlist.json", allowlist_text)
     subprocess.run(["git", "init", "-q"], cwd=source, check=True)
@@ -488,6 +583,8 @@ def install_real_prepare_only_loader(
     bundle: Path,
     records: Path,
 ) -> None:
+    for relative in ("docker-compose.prod.yml", "docker-compose.runtime.yml"):
+        write(bundle / relative, (source / relative).read_text(encoding="utf-8"))
     runtime_files = (
         "deploy/common.sh",
         "deploy/remote-load-and-up.sh",
@@ -532,7 +629,7 @@ def install_real_prepare_only_loader(
 def install_stateful_fake_docker(fake_bin: Path) -> None:
     docker = fake_bin / "docker"
     docker.write_text(
-        r'''#!/usr/bin/env python3
+        r"""#!/usr/bin/env python3
 from __future__ import annotations
 
 import hashlib
@@ -605,6 +702,11 @@ if args[:3] == ["image", "save", "--output"] and len(args) == 5:
     output, reference = args[3:]
     record = references.get(reference)
     if record is None:
+        record = next(
+            (candidate for candidate in references.values() if candidate["image_id"] == reference),
+            None,
+        )
+    if record is None:
         raise SystemExit(1)
     shutil.copyfile(record["archive"], output)
     raise SystemExit(0)
@@ -616,7 +718,7 @@ if args[:2] == ["image", "rm"]:
     raise SystemExit(0)
 
 raise SystemExit(2)
-''',
+""",
         encoding="utf-8",
     )
     docker.chmod(0o755)
@@ -970,11 +1072,11 @@ def test_exact_bundle_post_load_uses_portable_archive_config_identity(
 ) -> None:
     _, bundle, _ = exact_bundle_fixture
     manifest = json.loads((bundle / "release-bundle-manifest.json").read_text())
-    archive_by_reference: dict[str, str] = {}
+    archive_by_daemon_id: dict[str, str] = {}
     daemon_id_by_reference: dict[str, str] = {}
     for archive in manifest["archives"]:
         primary = next(image for image in archive["images"] if image["primary"])
-        archive_by_reference[primary["reference"]] = str(bundle / archive["path"])
+        archive_by_daemon_id[primary["source_daemon_image_id"]] = str(bundle / archive["path"])
         for image in archive["images"]:
             daemon_id_by_reference[image["reference"]] = image["source_daemon_image_id"]
     fake_bin = tmp_path / "bin"
@@ -991,7 +1093,7 @@ import sys
 args = sys.argv[1:]
 if args[:2] == ["image", "inspect"]:
     print(json.loads(os.environ["FAKE_DOCKER_IDS"])[args[-1]])
-elif args[:2] == ["image", "save"] and args[2] == "--output":
+elif args[:3] == ["image", "save", "--output"]:
     source = json.loads(os.environ["FAKE_DOCKER_ARCHIVES"])[args[4]]
     with gzip.open(source, "rb") as input_handle, open(args[3], "wb") as output_handle:
         shutil.copyfileobj(input_handle, output_handle)
@@ -1004,19 +1106,227 @@ else:
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
     env["FAKE_DOCKER_IDS"] = json.dumps(daemon_id_by_reference)
-    env["FAKE_DOCKER_ARCHIVES"] = json.dumps(archive_by_reference)
-    completed = run_helper("verify-directory", "--root", str(bundle), "--post-load", env=env)
+    env["FAKE_DOCKER_ARCHIVES"] = json.dumps(archive_by_daemon_id)
+    state_root = bundle.parent / ".release-state"
+    state_root.mkdir(mode=0o700)
+    state_dir = target_daemon_state_dir(bundle)
+    state_dir.mkdir(mode=0o700)
+    target_daemon_map = state_dir / "target-daemon-images.json"
+    completed = run_helper(
+        "verify-directory",
+        "--root",
+        str(bundle),
+        "--post-load",
+        env=env,
+    )
     assert completed.returncode == 0, completed.stderr
+    loaded_role = run_helper(
+        "loaded-role-daemon-id",
+        "--root",
+        str(bundle),
+        "--role",
+        "api",
+        env=env,
+    )
+    assert loaded_role.returncode == 0, loaded_role.stderr
+    assert loaded_role.stdout.strip() == daemon_id_by_reference["npcink-ai-cloud-api:prod"]
+    assert target_daemon_map.stat().st_mode & 0o777 == 0o600
+    drifted_ids = dict(daemon_id_by_reference)
+    drifted_ids["npcink-ai-cloud-api:prod"] = "sha256:" + "f" * 64
+    env["FAKE_DOCKER_IDS"] = json.dumps(drifted_ids)
+    drifted_role = run_helper(
+        "loaded-role-daemon-id",
+        "--root",
+        str(bundle),
+        "--role",
+        "api",
+        env=env,
+    )
+    assert drifted_role.returncode == 1
+    assert "changed after target-daemon map publication" in drifted_role.stderr
+    env["FAKE_DOCKER_IDS"] = json.dumps(daemon_id_by_reference)
 
     wrong_api = tmp_path / "wrong-api.tar.gz"
-    write_fixture_docker_archive(
-        wrong_api, key="wrong-api", reference="npcink-ai-cloud-api:prod"
+    write_fixture_docker_archive(wrong_api, key="wrong-api", reference="npcink-ai-cloud-api:prod")
+    api_daemon_id = daemon_id_by_reference["npcink-ai-cloud-api:prod"]
+    archive_by_daemon_id[api_daemon_id] = str(wrong_api)
+    env["FAKE_DOCKER_ARCHIVES"] = json.dumps(archive_by_daemon_id)
+    completed = run_helper(
+        "verify-directory",
+        "--root",
+        str(bundle),
+        "--post-load",
+        env=env,
     )
-    archive_by_reference["npcink-ai-cloud-api:prod"] = str(wrong_api)
-    env["FAKE_DOCKER_ARCHIVES"] = json.dumps(archive_by_reference)
-    completed = run_helper("verify-directory", "--root", str(bundle), "--post-load", env=env)
     assert completed.returncode == 1
     assert "loaded Docker archive identity mismatch for api" in completed.stderr
+
+
+def test_target_daemon_map_refuses_to_overwrite_invalid_existing_state(
+    exact_bundle_fixture: tuple[Path, Path, Path],
+) -> None:
+    helper = load_helper_module()
+    _, bundle, _ = exact_bundle_fixture
+    state_root = bundle.parent / ".release-state"
+    state_root.mkdir(mode=0o700)
+    state_dir = target_daemon_state_dir(bundle)
+    state_dir.mkdir(mode=0o700)
+    target_daemon_map = state_dir / "target-daemon-images.json"
+    target_daemon_map.write_text("not-json\n", encoding="utf-8")
+    target_daemon_map.chmod(0o600)
+    manifest = json.loads((bundle / "release-bundle-manifest.json").read_text())
+
+    with pytest.raises(
+        helper.BundleError, match="existing target-daemon image map is invalid JSON"
+    ):
+        helper.write_target_daemon_map(bundle, manifest, {})
+
+    assert target_daemon_map.read_text(encoding="utf-8") == "not-json\n"
+
+
+def test_target_daemon_map_rejects_oversized_existing_and_outgoing_state(
+    exact_bundle_fixture: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = load_helper_module()
+    _, bundle, _ = exact_bundle_fixture
+    state_root = bundle.parent / ".release-state"
+    state_root.mkdir(mode=0o700)
+    state_dir = target_daemon_state_dir(bundle)
+    state_dir.mkdir(mode=0o700)
+    target_daemon_map = state_dir / "target-daemon-images.json"
+    target_daemon_map.write_bytes(b"x" * (helper.MAX_TARGET_DAEMON_MAP_BYTES + 1))
+    target_daemon_map.chmod(0o600)
+
+    with pytest.raises(helper.BundleError, match="existing target-daemon image map is oversized"):
+        helper.write_target_daemon_map(
+            bundle,
+            json.loads((bundle / "release-bundle-manifest.json").read_text()),
+            {},
+        )
+
+    target_daemon_map.unlink()
+    manifest = json.loads((bundle / "release-bundle-manifest.json").read_text())
+    _, manifest_roles = helper.target_map_manifest_subjects(bundle, manifest)
+    target_roles = {
+        role: {
+            "reference": record["reference"],
+            "portable_config_image_id": record["expected_image_id"],
+            "target_daemon_image_id": "sha256:" + "c" * 64,
+        }
+        for role, record in manifest_roles.items()
+    }
+    monkeypatch.setattr(helper, "MAX_TARGET_DAEMON_MAP_BYTES", 1)
+    with pytest.raises(helper.BundleError, match="new target-daemon image map is oversized"):
+        helper.write_target_daemon_map(bundle, manifest, target_roles)
+    assert not target_daemon_map.exists()
+
+
+def test_target_daemon_map_refuses_to_overwrite_malformed_existing_roles(
+    exact_bundle_fixture: tuple[Path, Path, Path],
+) -> None:
+    helper = load_helper_module()
+    _, bundle, _ = exact_bundle_fixture
+    state_root = bundle.parent / ".release-state"
+    state_root.mkdir(mode=0o700)
+    state_dir = target_daemon_state_dir(bundle)
+    state_dir.mkdir(mode=0o700)
+    target_daemon_map = state_dir / "target-daemon-images.json"
+    manifest = json.loads((bundle / "release-bundle-manifest.json").read_text())
+    bundle_binding, manifest_roles = helper.target_map_manifest_subjects(bundle, manifest)
+    target_roles = {
+        role: {
+            "reference": record["reference"],
+            "portable_config_image_id": record["expected_image_id"],
+            "target_daemon_image_id": "sha256:" + "d" * 64,
+        }
+        for role, record in manifest_roles.items()
+    }
+    target_daemon_map.write_text(
+        json.dumps(
+            {
+                "schema_version": helper.TARGET_DAEMON_MAP_SCHEMA,
+                "bundle": bundle_binding,
+                "roles": "malformed",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    target_daemon_map.chmod(0o600)
+
+    with pytest.raises(helper.BundleError, match="role set is incomplete or unexpected"):
+        helper.write_target_daemon_map(bundle, manifest, target_roles)
+
+    assert json.loads(target_daemon_map.read_text(encoding="utf-8"))["roles"] == "malformed"
+
+
+def test_target_daemon_map_is_bound_to_release_instance_name(
+    exact_bundle_fixture: tuple[Path, Path, Path],
+) -> None:
+    helper = load_helper_module()
+    _, bundle, _ = exact_bundle_fixture
+    state_root = bundle.parent / ".release-state"
+    state_root.mkdir(mode=0o700)
+    state_dir = target_daemon_state_dir(bundle)
+    state_dir.mkdir(mode=0o700)
+    manifest = json.loads((bundle / "release-bundle-manifest.json").read_text())
+    _, manifest_roles = helper.target_map_manifest_subjects(bundle, manifest)
+    target_roles = {
+        role: {
+            "reference": record["reference"],
+            "portable_config_image_id": record["expected_image_id"],
+            "target_daemon_image_id": "sha256:" + "e" * 64,
+        }
+        for role, record in manifest_roles.items()
+    }
+    helper.write_target_daemon_map(bundle, manifest, target_roles)
+
+    copied_bundle = bundle.parent / "release-copy"
+    shutil.copytree(bundle, copied_bundle)
+    copied_state = target_daemon_state_dir(copied_bundle)
+    copied_state.mkdir(mode=0o700)
+    copied_map = copied_state / "target-daemon-images.json"
+    shutil.copy2(state_dir / "target-daemon-images.json", copied_map)
+    copied_map.chmod(0o600)
+
+    with pytest.raises(helper.BundleError, match="does not match the extracted release instance"):
+        helper.read_target_daemon_map(copied_bundle, "api")
+
+
+def test_target_daemon_map_is_bound_to_canonical_release_path(
+    exact_bundle_fixture: tuple[Path, Path, Path],
+) -> None:
+    helper = load_helper_module()
+    _, bundle, _ = exact_bundle_fixture
+    state_root = bundle.parent / ".release-state"
+    state_root.mkdir(mode=0o700)
+    state_dir = target_daemon_state_dir(bundle)
+    state_dir.mkdir(mode=0o700)
+    manifest = json.loads((bundle / "release-bundle-manifest.json").read_text())
+    _, manifest_roles = helper.target_map_manifest_subjects(bundle, manifest)
+    target_roles = {
+        role: {
+            "reference": record["reference"],
+            "portable_config_image_id": record["expected_image_id"],
+            "target_daemon_image_id": "sha256:" + "e" * 64,
+        }
+        for role, record in manifest_roles.items()
+    }
+    helper.write_target_daemon_map(bundle, manifest, target_roles)
+
+    copied_parent = bundle.parent / "copied-parent"
+    copied_bundle = copied_parent / bundle.name
+    shutil.copytree(bundle, copied_bundle)
+    copied_state_root = copied_parent / ".release-state"
+    copied_state_root.mkdir(mode=0o700)
+    copied_state = target_daemon_state_dir(copied_bundle)
+    copied_state.mkdir(mode=0o700)
+    copied_map = copied_state / "target-daemon-images.json"
+    shutil.copy2(state_dir / "target-daemon-images.json", copied_map)
+    copied_map.chmod(0o600)
+
+    with pytest.raises(helper.BundleError, match="does not match the extracted release instance"):
+        helper.read_target_daemon_map(copied_bundle, "api")
 
 
 def test_real_prepare_only_loader_preserves_exact_payload_and_writes_external_state(
@@ -1029,6 +1339,10 @@ def test_real_prepare_only_loader_preserves_exact_payload_and_writes_external_st
     fake_bin.mkdir()
     install_stateful_fake_docker(fake_bin)
     state_dir = tmp_path / "fake-docker-state"
+    state_root = bundle.parent / ".release-state"
+    state_root.mkdir(mode=0o700, exist_ok=True)
+    target_state_dir = target_daemon_state_dir(bundle)
+    target_state_dir.mkdir(mode=0o700, exist_ok=True)
     rollback_map = tmp_path / "release-state" / "rollback-images.tsv"
     env_file = tmp_path / "release-state" / "env.deploy"
     write(
@@ -1058,6 +1372,7 @@ def test_real_prepare_only_loader_preserves_exact_payload_and_writes_external_st
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
         }
     )
+    install_deploy_lock_owner(bundle, env)
     before = bundle_file_hashes(bundle)
 
     completed = subprocess.run(
@@ -1132,6 +1447,7 @@ def test_real_prepare_only_loader_does_not_treat_docker_failure_as_missing_image
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
         }
     )
+    install_deploy_lock_owner(bundle, env)
     before = bundle_file_hashes(bundle)
 
     completed = subprocess.run(
@@ -1321,8 +1637,7 @@ def test_release_scripts_enforce_pre_and_post_load_and_same_bundle_replay() -> N
         '\tarchive_path="${LOCAL_SCAN_DIR}/${key}.image.tar"'
     ) in bundle
     assert (
-        'local key="$1" relative_output="$2" '
-        'archive_path="${LOCAL_SCAN_DIR}/${key}.image.tar"'
+        'local key="$1" relative_output="$2" archive_path="${LOCAL_SCAN_DIR}/${key}.image.tar"'
     ) not in bundle
     assert "docker save" not in bundle
     assert 'gzip -n "-${GZIP_LEVEL}" -c "${archive_path}"' in bundle
@@ -1330,10 +1645,12 @@ def test_release_scripts_enforce_pre_and_post_load_and_same_bundle_replay() -> N
     pre_index = loader.index("verify exact bundle before load")
     load_index = loader.index("gzip -dc")
     post_index = loader.index("verify loaded image IDs")
-    up_index = loader.index("compose up services")
-    assert pre_index < load_index < post_index < up_index
+    candidate_index = loader.index("up --no-start --pull never --no-build")
+    assert pre_index < load_index < post_index < candidate_index
     assert "load-plan" in loader and "alias-plan" in loader
     assert "--pull never --no-build" in loader
+    assert 'docker start "${container_ids_to_start[@]}"' in loader
+    assert 'LOAD_MODE="${NPCINK_CLOUD_LOAD_MODE:-}"' in loader
 
     remote_verify_index = ssh_deploy.index("verify remote deploy bundle before extraction")
     remote_extract_index = ssh_deploy.index("remote extract bundle")
@@ -1349,7 +1666,15 @@ def test_release_scripts_enforce_pre_and_post_load_and_same_bundle_replay() -> N
     assert 'CURRENT_REVISION="$(git rev-parse HEAD)"' in smoke
     assert "does not match current HEAD" in smoke
     assert verify_index < extract_index
-    assert smoke.count("run_deploy_command bash deploy/remote-load-and-up.sh") == 2
+    assert smoke.count("run_deploy_command bash deploy/remote-load-and-up.sh") == 5
+    assert smoke.count("replay_staged_release") == 3
+    data_index = smoke.index("NPCINK_CLOUD_LOAD_MODE=data-only")
+    migrate_index = smoke.index("run_deploy_command bash deploy/remote-migrate.sh")
+    api_index = smoke.index("NPCINK_CLOUD_LOAD_MODE=api-only")
+    workers_index = smoke.index("NPCINK_CLOUD_LOAD_MODE=workers-only")
+    traffic_index = smoke.index("NPCINK_CLOUD_LOAD_MODE=traffic-only")
+    assert data_index < migrate_index < api_index < workers_index < traffic_index
+    assert smoke.index("stop_replay_application_services") < data_index
     assert "same exact bundle receipt was reused" in smoke
     assert "preflight_status=\\$?" in ssh_deploy
     assert 'rm -rf $(remote_shell_arg "${REMOTE_PREFLIGHT_DIR}")' in ssh_deploy

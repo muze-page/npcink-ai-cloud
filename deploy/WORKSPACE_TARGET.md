@@ -65,11 +65,11 @@ source deploy/workspace-target.env.sh
 pnpm run deploy:ssh -- --skip-bundle-build --skip-seed
 ```
 
-If only env values changed:
+If env values changed, apply them through the same governed release:
 
 ```bash
 source deploy/workspace-target.env.sh
-pnpm run env:ssh
+pnpm run deploy:ssh -- --env-file /absolute/path/to/protected.env.deploy
 ```
 
 ## Current release verification

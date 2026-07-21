@@ -1,19 +1,45 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 SSH_HOST="${NPCINK_CLOUD_DEPLOY_SSH_HOST:-}"
 SSH_USER="${NPCINK_CLOUD_DEPLOY_SSH_USER:-}"
 SSH_PORT="${NPCINK_CLOUD_DEPLOY_SSH_PORT:-22}"
 SSH_IDENTITY_FILE="${NPCINK_CLOUD_DEPLOY_IDENTITY_FILE:-}"
 DOMAIN="${NPCINK_CLOUD_DOMAIN_NAME:-}"
-LOCAL_CERT_PATH="${NPCINK_CLOUD_DOMAIN_CERT_PATH:-}"
-LOCAL_KEY_PATH="${NPCINK_CLOUD_DOMAIN_KEY_PATH:-}"
-REMOTE_CERT_DIR="${NPCINK_CLOUD_DOMAIN_REMOTE_CERT_DIR:-}"
+CERTIFICATE_PATH=""
+PRIVATE_KEY_PATH=""
 UPSTREAM_URL="${NPCINK_CLOUD_DOMAIN_UPSTREAM_URL:-http://127.0.0.1:8010}"
 COMPOSE_PROJECT_NAME_EFFECTIVE="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-npcink-ai-cloud}}"
+REMOTE_DIR="/opt/npcink-ai-cloud"
 PREPARE_ONLY=0
+
+usage() {
+	cat <<'EOF'
+Usage:
+  deploy/bind-domain-to-ssh-host.sh \
+    --ssh-host 203.0.113.10 \
+    --ssh-user root \
+    --domain cloud.example.com \
+    [--certificate-path /etc/letsencrypt/live/cloud.example.com/fullchain.pem] \
+    [--private-key-path /etc/letsencrypt/live/cloud.example.com/privkey.pem] \
+    [--prepare-only]
+
+The certificate and private key are remote Certbot live-lineage symlinks. This
+helper never uploads or copies TLS material. Activation holds the shared
+/opt/npcink-ai-cloud/.deploy-lock while it snapshots NGINX and the exact running
+project Caddy IDs, stops those IDs, activates NGINX, and validates loopback HTTPS.
+Any activation failure restores NGINX and restarts/verifies those exact Caddy IDs.
+Prepare-only temporarily installs the candidate only for nginx -t, restores the
+original files before returning, and never stops Caddy or switches traffic.
+EOF
+}
+
+fail() {
+	printf '[edge-bind:fail] %s\n' "$*" >&2
+	exit 1
+}
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -21,42 +47,47 @@ while [ "$#" -gt 0 ]; do
 			shift
 			;;
 		--ssh-host)
+			[ "$#" -ge 2 ] || fail "--ssh-host requires a value"
 			SSH_HOST="$2"
 			shift 2
 			;;
 		--ssh-user)
+			[ "$#" -ge 2 ] || fail "--ssh-user requires a value"
 			SSH_USER="$2"
 			shift 2
 			;;
 		--ssh-port)
+			[ "$#" -ge 2 ] || fail "--ssh-port requires a value"
 			SSH_PORT="$2"
 			shift 2
 			;;
 		--identity-file)
+			[ "$#" -ge 2 ] || fail "--identity-file requires a value"
 			SSH_IDENTITY_FILE="$2"
 			shift 2
 			;;
 		--domain)
+			[ "$#" -ge 2 ] || fail "--domain requires a value"
 			DOMAIN="$2"
 			shift 2
 			;;
-		--cert-path)
-			LOCAL_CERT_PATH="$2"
+		--certificate-path)
+			[ "$#" -ge 2 ] || fail "--certificate-path requires a value"
+			CERTIFICATE_PATH="$2"
 			shift 2
 			;;
-		--key-path)
-			LOCAL_KEY_PATH="$2"
-			shift 2
-			;;
-		--remote-cert-dir)
-			REMOTE_CERT_DIR="$2"
+		--private-key-path)
+			[ "$#" -ge 2 ] || fail "--private-key-path requires a value"
+			PRIVATE_KEY_PATH="$2"
 			shift 2
 			;;
 		--upstream-url)
+			[ "$#" -ge 2 ] || fail "--upstream-url requires a value"
 			UPSTREAM_URL="$2"
 			shift 2
 			;;
 		--compose-project-name)
+			[ "$#" -ge 2 ] || fail "--compose-project-name requires a value"
 			COMPOSE_PROJECT_NAME_EFFECTIVE="$2"
 			shift 2
 			;;
@@ -64,128 +95,130 @@ while [ "$#" -gt 0 ]; do
 			PREPARE_ONLY=1
 			shift
 			;;
-		*)
-			echo "[fail] Unknown argument: $1" >&2
-			exit 1
+		-h|--help)
+			usage
+			exit 0
 			;;
+		*) fail "unknown argument: $1" ;;
 	esac
 done
 
 require_cmd() {
-	command -v "$1" >/dev/null 2>&1 || {
-		echo "[fail] Missing required command: $1" >&2
-		exit 1
-	}
+	command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
-require_cmd ssh
-require_cmd scp
-require_cmd python3
-require_cmd openssl
-require_cmd awk
-require_cmd stat
-require_cmd uname
+for command_name in python3 scp ssh; do
+	require_cmd "${command_name}"
+done
 
-[ -n "${SSH_HOST}" ] || { echo "[fail] Missing SSH host" >&2; exit 1; }
-[ -n "${DOMAIN}" ] || { echo "[fail] Missing domain" >&2; exit 1; }
-[ -n "${LOCAL_CERT_PATH}" ] || { echo "[fail] Missing cert path" >&2; exit 1; }
-[ -n "${LOCAL_KEY_PATH}" ] || { echo "[fail] Missing key path" >&2; exit 1; }
-[ -f "${LOCAL_CERT_PATH}" ] || { echo "[fail] Cert file not found: ${LOCAL_CERT_PATH}" >&2; exit 1; }
-[ -f "${LOCAL_KEY_PATH}" ] || { echo "[fail] Key file not found: ${LOCAL_KEY_PATH}" >&2; exit 1; }
-
-case "$(uname -s)" in
-	Darwin)
-		LOCAL_KEY_MODE="$(stat -f '%Lp' "${LOCAL_KEY_PATH}")"
-		;;
-	*)
-		LOCAL_KEY_MODE="$(stat -c '%a' "${LOCAL_KEY_PATH}")"
-		;;
-esac
-case "${LOCAL_KEY_MODE}" in
-	"" | *[!0-7]*)
-		echo "[fail] Could not determine private-key permissions." >&2
-		exit 1
-		;;
-esac
-if (( (8#${LOCAL_KEY_MODE}) & 0077 )); then
-	echo "[fail] TLS private key must not grant any group or other permissions (expected 0600 or stricter)." >&2
-	exit 1
+[ -n "${SSH_HOST}" ] || fail "missing SSH host"
+[ -n "${DOMAIN}" ] || fail "missing domain"
+if [ -z "${CERTIFICATE_PATH}" ]; then
+	CERTIFICATE_PATH="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+fi
+if [ -z "${PRIVATE_KEY_PATH}" ]; then
+	PRIVATE_KEY_PATH="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
 fi
 
-if [[ ! "${COMPOSE_PROJECT_NAME_EFFECTIVE}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
-	echo "[fail] Compose project name contains unsupported characters." >&2
-	exit 1
-fi
-
-python3 - "${DOMAIN}" "${UPSTREAM_URL}" <<'PY'
+python3 - \
+	"${SSH_HOST}" \
+	"${SSH_USER}" \
+	"${SSH_PORT}" \
+	"${DOMAIN}" \
+	"${CERTIFICATE_PATH}" \
+	"${PRIVATE_KEY_PATH}" \
+	"${UPSTREAM_URL}" \
+	"${COMPOSE_PROJECT_NAME_EFFECTIVE}" <<'PY'
 from __future__ import annotations
 
 import re
 import sys
 from urllib.parse import urlsplit
 
-domain = sys.argv[1].strip().lower().rstrip(".")
-upstream = sys.argv[2].strip()
+(
+    ssh_host,
+    ssh_user,
+    ssh_port,
+    domain,
+    certificate_path,
+    private_key_path,
+    upstream,
+    compose_project,
+) = sys.argv[1:]
 
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", ssh_host):
+    raise SystemExit("[edge-bind:fail] SSH host contains unsupported characters")
+if ssh_user and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", ssh_user):
+    raise SystemExit("[edge-bind:fail] SSH user contains unsupported characters")
+if not ssh_port.isdigit() or not 1 <= int(ssh_port) <= 65535:
+    raise SystemExit("[edge-bind:fail] SSH port must be between 1 and 65535")
+
+domain = domain.strip().lower().rstrip(".")
 if len(domain) > 253 or not re.fullmatch(
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+",
     domain,
 ):
-    raise SystemExit("[fail] Domain must be a valid lowercase-compatible DNS hostname.")
+    raise SystemExit("[edge-bind:fail] domain must be a valid lowercase-compatible DNS hostname")
+
+certificate_match = re.fullmatch(
+    r"/etc/letsencrypt/live/([A-Za-z0-9][A-Za-z0-9_.-]*)/fullchain\.pem",
+    certificate_path,
+)
+if certificate_match is None:
+    raise SystemExit("[edge-bind:fail] certificate path must name a Certbot live fullchain.pem")
+expected_key = f"/etc/letsencrypt/live/{certificate_match.group(1)}/privkey.pem"
+if private_key_path != expected_key:
+    raise SystemExit("[edge-bind:fail] private-key path must name privkey.pem in the same Certbot live lineage")
 
 try:
     parsed = urlsplit(upstream)
     port = parsed.port
 except ValueError as exc:
-    raise SystemExit(f"[fail] Invalid upstream URL: {exc}") from exc
-
+    raise SystemExit(f"[edge-bind:fail] invalid upstream URL: {exc}") from exc
 if parsed.scheme.lower() != "http" or parsed.hostname != "127.0.0.1" or port != 8010:
-    raise SystemExit("[fail] External edge upstream must be exactly loopback HTTP on 127.0.0.1:8010.")
+    raise SystemExit("[edge-bind:fail] external edge upstream must be exactly loopback HTTP on 127.0.0.1:8010")
 if parsed.username is not None or parsed.password is not None:
-    raise SystemExit("[fail] External edge upstream must not contain userinfo.")
+    raise SystemExit("[edge-bind:fail] external edge upstream must not contain userinfo")
 if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
-    raise SystemExit("[fail] External edge upstream must be an origin without path, query, or fragment.")
+    raise SystemExit("[edge-bind:fail] external edge upstream must be an origin without path, query, or fragment")
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", compose_project):
+    raise SystemExit("[edge-bind:fail] Compose project name contains unsupported characters")
 PY
 
-openssl x509 -in "${LOCAL_CERT_PATH}" -noout >/dev/null
-openssl x509 -in "${LOCAL_CERT_PATH}" -checkend 86400 -noout >/dev/null || {
-	echo "[fail] TLS certificate expires within 24 hours." >&2
-	exit 1
-}
-openssl pkey -in "${LOCAL_KEY_PATH}" -check -noout >/dev/null
-CERT_PUBLIC_KEY_SHA256="$(openssl x509 -in "${LOCAL_CERT_PATH}" -pubkey -noout |
-	openssl pkey -pubin -outform DER 2>/dev/null |
-	openssl dgst -sha256 -r |
-	awk '{print $1}')"
-KEY_PUBLIC_KEY_SHA256="$(openssl pkey -in "${LOCAL_KEY_PATH}" -pubout -outform DER 2>/dev/null |
-	openssl dgst -sha256 -r |
-	awk '{print $1}')"
-if [ -z "${CERT_PUBLIC_KEY_SHA256}" ] || [ "${CERT_PUBLIC_KEY_SHA256}" != "${KEY_PUBLIC_KEY_SHA256}" ]; then
-	echo "[fail] TLS certificate and private key do not match." >&2
-	exit 1
-fi
-
-if [ -z "${REMOTE_CERT_DIR}" ]; then
-	REMOTE_CERT_DIR="/etc/nginx/ssl/${DOMAIN}"
-fi
-
 TEMPLATE_PATH="${ROOT_DIR}/deploy/magick-domain-nginx.conf.template"
+[ -f "${TEMPLATE_PATH}" ] || fail "NGINX template is missing: ${TEMPLATE_PATH}"
 TMP_DIR="$(mktemp -d)"
+TMP_CONF="${TMP_DIR}/${DOMAIN}.conf"
 REMOTE_CLEANUP_ARMED=0
 SSH_TARGET=""
-SSH_ARGS=()
 REMOTE_TMP_DIR=""
+
+remote_shell_arg() {
+	python3 - "$1" <<'PY'
+import shlex
+import sys
+
+print(shlex.quote(sys.argv[1]), end="")
+PY
+}
+
 cleanup() {
-	rm -rf "${TMP_DIR}"
-	if [ "${REMOTE_CLEANUP_ARMED}" = "1" ] && [ -n "${SSH_TARGET}" ] && [ -n "${REMOTE_TMP_DIR}" ]; then
-		ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" bash -s -- "${REMOTE_TMP_DIR}" \
+	local remote_command=""
+	rm -rf -- "${TMP_DIR}"
+	if [ "${REMOTE_CLEANUP_ARMED}" = "1" ] && \
+		[ -n "${SSH_TARGET}" ] && [ -n "${REMOTE_TMP_DIR}" ]; then
+		remote_command="bash -s -- $(remote_shell_arg "${REMOTE_TMP_DIR}")"
+		ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "${remote_command}" \
 			>/dev/null 2>&1 <<'EOF' || true
-set -euo pipefail
+set -Eeuo pipefail
 REMOTE_TMP_DIR="$1"
 case "${REMOTE_TMP_DIR}" in
 	/tmp/npcink-edge-[0-9a-f]*) ;;
 	*) exit 1 ;;
 esac
+if [ -e "${REMOTE_TMP_DIR}/RETAIN_ROLLBACK_EVIDENCE" ]; then
+	exit 0
+fi
 if [ -d "${REMOTE_TMP_DIR}" ]; then
 	find "${REMOTE_TMP_DIR}" -depth -delete
 fi
@@ -193,39 +226,38 @@ EOF
 	fi
 }
 trap cleanup EXIT
-TMP_CONF="${TMP_DIR}/${DOMAIN}.conf"
 
-SSL_CERT_REMOTE="${REMOTE_CERT_DIR}/$(basename "${LOCAL_CERT_PATH}")"
-SSL_KEY_REMOTE="${REMOTE_CERT_DIR}/$(basename "${LOCAL_KEY_PATH}")"
-
-python3 - "${TEMPLATE_PATH}" "${TMP_CONF}" "${DOMAIN}" "${SSL_CERT_REMOTE}" "${SSL_KEY_REMOTE}" "${UPSTREAM_URL}" <<'PY'
+python3 - \
+	"${TEMPLATE_PATH}" \
+	"${TMP_CONF}" \
+	"${DOMAIN}" \
+	"${CERTIFICATE_PATH}" \
+	"${PRIVATE_KEY_PATH}" \
+	"${UPSTREAM_URL}" <<'PY'
 from __future__ import annotations
+
 import pathlib
 import sys
 
-template = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-target = pathlib.Path(sys.argv[2])
-domain = sys.argv[3]
-ssl_cert = sys.argv[4]
-ssl_key = sys.argv[5]
-upstream = sys.argv[6]
-
+template_path, target_path, domain, certificate_path, private_key_path, upstream = sys.argv[1:]
+template = pathlib.Path(template_path).read_text(encoding="utf-8")
 rendered = (
     template.replace("__DOMAIN__", domain)
-    .replace("__SSL_CERT__", ssl_cert)
-    .replace("__SSL_KEY__", ssl_key)
+    .replace("__SSL_CERT__", certificate_path)
+    .replace("__SSL_KEY__", private_key_path)
     .replace("__UPSTREAM__", upstream)
 )
-target.write_text(rendered, encoding="utf-8")
+if any(marker in rendered for marker in ("__DOMAIN__", "__SSL_CERT__", "__SSL_KEY__", "__UPSTREAM__")):
+    raise SystemExit("[edge-bind:fail] NGINX template rendering left an unresolved marker")
+pathlib.Path(target_path).write_text(rendered, encoding="utf-8")
 PY
 
 SSH_TARGET="${SSH_HOST}"
 if [ -n "${SSH_USER}" ]; then
 	SSH_TARGET="${SSH_USER}@${SSH_HOST}"
 fi
-
-SSH_ARGS=(-p "${SSH_PORT}" -o StrictHostKeyChecking=accept-new)
-SCP_ARGS=(-P "${SSH_PORT}" -o StrictHostKeyChecking=accept-new)
+SSH_ARGS=(-p "${SSH_PORT}" -o StrictHostKeyChecking=yes)
+SCP_ARGS=(-P "${SSH_PORT}" -o StrictHostKeyChecking=yes)
 if [ -n "${SSH_IDENTITY_FILE}" ]; then
 	SSH_ARGS+=(-i "${SSH_IDENTITY_FILE}")
 	SCP_ARGS+=(-i "${SSH_IDENTITY_FILE}")
@@ -239,11 +271,10 @@ PY
 )"
 REMOTE_TMP_DIR="/tmp/npcink-edge-${REMOTE_TMP_TOKEN}"
 REMOTE_TMP_CONF="${REMOTE_TMP_DIR}/edge.conf"
-REMOTE_TMP_CERT="${REMOTE_TMP_DIR}/edge.crt"
-REMOTE_TMP_KEY="${REMOTE_TMP_DIR}/edge.key"
 
-ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" bash -s -- "${REMOTE_TMP_DIR}" <<'EOF'
-set -euo pipefail
+remote_command="bash -s -- $(remote_shell_arg "${REMOTE_TMP_DIR}")"
+ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "${remote_command}" <<'EOF'
+set -Eeuo pipefail
 umask 077
 REMOTE_TMP_DIR="$1"
 case "${REMOTE_TMP_DIR}" in
@@ -254,55 +285,183 @@ install -d -m 700 -- "${REMOTE_TMP_DIR}"
 EOF
 REMOTE_CLEANUP_ARMED=1
 
-echo "[info] Uploading certs and nginx config to ${SSH_TARGET}"
-scp "${SCP_ARGS[@]}" "${LOCAL_CERT_PATH}" "${SSH_TARGET}:${REMOTE_TMP_CERT}"
-scp "${SCP_ARGS[@]}" "${LOCAL_KEY_PATH}" "${SSH_TARGET}:${REMOTE_TMP_KEY}"
+printf '[edge-bind:info] uploading candidate NGINX config to %s\n' "${SSH_TARGET}"
 scp "${SCP_ARGS[@]}" "${TMP_CONF}" "${SSH_TARGET}:${REMOTE_TMP_CONF}"
 
-ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" bash -s -- \
+remote_command="bash -s --"
+for remote_arg in \
 	"${DOMAIN}" \
-	"${REMOTE_CERT_DIR}" \
-	"${REMOTE_TMP_CERT}" \
-	"${REMOTE_TMP_KEY}" \
+	"${CERTIFICATE_PATH}" \
+	"${PRIVATE_KEY_PATH}" \
 	"${REMOTE_TMP_CONF}" \
 	"${UPSTREAM_URL}" \
-	"${SSL_CERT_REMOTE}" \
-	"${SSL_KEY_REMOTE}" \
 	"${REMOTE_TMP_DIR}" \
 	"${PREPARE_ONLY}" \
-	"${COMPOSE_PROJECT_NAME_EFFECTIVE}" <<'EOF'
-set -euo pipefail
+	"${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
+	"${REMOTE_DIR}"; do
+	remote_command+=" $(remote_shell_arg "${remote_arg}")"
+done
+
+ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "${remote_command}" <<'EOF'
+set -Eeuo pipefail
+umask 077
 
 DOMAIN="$1"
-REMOTE_CERT_DIR="$2"
-REMOTE_TMP_CERT="$3"
-REMOTE_TMP_KEY="$4"
-REMOTE_TMP_CONF="$5"
-UPSTREAM_URL="$6"
-SSL_CERT_REMOTE="$7"
-SSL_KEY_REMOTE="$8"
-REMOTE_TMP_DIR="$9"
-PREPARE_ONLY="${10}"
-COMPOSE_PROJECT_NAME_EFFECTIVE="${11}"
+CERTIFICATE_PATH="$2"
+PRIVATE_KEY_PATH="$3"
+REMOTE_TMP_CONF="$4"
+UPSTREAM_URL="$5"
+REMOTE_TMP_DIR="$6"
+PREPARE_ONLY="$7"
+COMPOSE_PROJECT_NAME_EFFECTIVE="$8"
+REMOTE_DIR="$9"
+
+[ "$(id -u)" = "0" ] || {
+	echo "[edge-bind:fail] the remote Edge transaction must run as root" >&2
+	exit 1
+}
+[ "${REMOTE_DIR}" = "/opt/npcink-ai-cloud" ] || {
+	echo "[edge-bind:fail] managed remote root must be /opt/npcink-ai-cloud" >&2
+	exit 1
+}
+case "${REMOTE_TMP_DIR}" in
+	/tmp/npcink-edge-[0-9a-f]*) ;;
+	*) echo "[edge-bind:fail] invalid remote temporary directory" >&2; exit 1 ;;
+esac
 
 SITE_AVAILABLE="/etc/nginx/sites-available/${DOMAIN}.conf"
 SITE_ENABLED="/etc/nginx/sites-enabled/${DOMAIN}.conf"
 DEFAULT_ENABLED="/etc/nginx/sites-enabled/default"
 ROLLBACK_DIR="${REMOTE_TMP_DIR}/rollback"
+DEPLOY_LOCK_DIR="${REMOTE_DIR}/.deploy-lock"
 TRANSACTION_COMMITTED=0
+ROLLBACK_REQUIRED=0
+LOCK_HELD=0
+PRESERVE_ROLLBACK_EVIDENCE=0
+EDGE_SERVICE_MUTATION_STARTED=0
 NGINX_WAS_ACTIVE=0
 NGINX_WAS_ENABLED=0
-CERT_EXISTED=0
-KEY_EXISTED=0
+NGINX_ENABLEMENT_STATE=""
 SITE_AVAILABLE_EXISTED=0
 SITE_ENABLED_EXISTED=0
 DEFAULT_ENABLED_EXISTED=0
+ORIGINAL_CADDY_IDS=()
+
+fail_remote() {
+	printf '[edge-bind:fail] %s\n' "$*" >&2
+	exit 1
+}
+
+mode_of() {
+	stat -c '%a' -- "$1"
+}
+
+owner_uid_of() {
+	stat -c '%u' -- "$1"
+}
+
+file_type_of() {
+	stat -c '%F' -- "$1"
+}
+
+assert_safe_directory() {
+	local path="$1"
+	local label="$2"
+	local mode=""
+	[ -d "${path}" ] && [ ! -L "${path}" ] || fail_remote "${label} must be a real directory: ${path}"
+	[ "$(owner_uid_of "${path}")" = "0" ] || fail_remote "${label} must be owned by root: ${path}"
+	mode="$(mode_of "${path}")"
+	[[ "${mode}" =~ ^[0-7]{3,4}$ ]] || fail_remote "${label} mode is invalid: ${path}"
+	(( (8#${mode} & 0022) == 0 )) || fail_remote "${label} must not be group/world writable: ${path}"
+}
+
+assert_safe_parent_chain() {
+	local path="$1"
+	local label="$2"
+	while [ "${path}" != "/" ]; do
+		assert_safe_directory "${path}" "${label}"
+		path="$(dirname "${path}")"
+	done
+}
+
+assert_certbot_lineage_ready() {
+	local lineage_dir="${CERTIFICATE_PATH%/fullchain.pem}"
+	local lineage_name="${lineage_dir##*/}"
+	local certificate_real_path=""
+	local private_key_real_path=""
+	local certificate_mode=""
+	local private_key_mode=""
+
+	[ "${CERTIFICATE_PATH}" = "/etc/letsencrypt/live/${lineage_name}/fullchain.pem" ] || \
+		fail_remote "certificate path must name fullchain.pem in one Certbot live lineage"
+	[ "${PRIVATE_KEY_PATH}" = "/etc/letsencrypt/live/${lineage_name}/privkey.pem" ] || \
+		fail_remote "private-key path must name privkey.pem in the same Certbot live lineage"
+	[ "$(file_type_of "${CERTIFICATE_PATH}")" = "symbolic link" ] || \
+		fail_remote "certificate path must be a Certbot live symlink"
+	[ "$(file_type_of "${PRIVATE_KEY_PATH}")" = "symbolic link" ] || \
+		fail_remote "private-key path must be a Certbot live symlink"
+
+	certificate_real_path="$(readlink -f -- "${CERTIFICATE_PATH}")" || \
+		fail_remote "certificate path cannot be resolved"
+	private_key_real_path="$(readlink -f -- "${PRIVATE_KEY_PATH}")" || \
+		fail_remote "private-key path cannot be resolved"
+	case "${certificate_real_path}" in
+		/etc/letsencrypt/archive/"${lineage_name}"/fullchain*.pem) ;;
+		*) fail_remote "certificate path must resolve within its Certbot archive lineage" ;;
+	esac
+	case "${private_key_real_path}" in
+		/etc/letsencrypt/archive/"${lineage_name}"/privkey*.pem) ;;
+		*) fail_remote "private-key path must resolve within its Certbot archive lineage" ;;
+	esac
+	[ "$(file_type_of "${certificate_real_path}")" = "regular file" ] || \
+		fail_remote "certificate archive target must be a regular non-symlink file"
+	[ "$(file_type_of "${private_key_real_path}")" = "regular file" ] || \
+		fail_remote "private-key archive target must be a regular non-symlink file"
+	[ "$(owner_uid_of "${certificate_real_path}")" = "0" ] || \
+		fail_remote "certificate archive target must be owned by root"
+	[ "$(owner_uid_of "${private_key_real_path}")" = "0" ] || \
+		fail_remote "private-key archive target must be owned by root"
+	certificate_mode="$(mode_of "${certificate_real_path}")"
+	private_key_mode="$(mode_of "${private_key_real_path}")"
+	[[ "${certificate_mode}" =~ ^[0-7]{3,4}$ ]] || fail_remote "certificate archive target mode is invalid"
+	[[ "${private_key_mode}" =~ ^[0-7]{3,4}$ ]] || fail_remote "private-key archive target mode is invalid"
+	(( (8#${certificate_mode} & 0022) == 0 )) || \
+		fail_remote "certificate archive target must not be group/world writable"
+	(( (8#${private_key_mode} & 0077) == 0 )) || \
+		fail_remote "private-key archive target must not grant group or other permissions"
+	assert_safe_parent_chain "${lineage_dir}" "certificate live parent"
+	assert_safe_parent_chain "$(dirname "${certificate_real_path}")" "certificate archive parent"
+
+	openssl x509 -in "${CERTIFICATE_PATH}" -noout -checkhost "${DOMAIN}" >/dev/null 2>&1 || \
+		fail_remote "certificate does not match the requested domain"
+	openssl x509 -in "${CERTIFICATE_PATH}" -checkend 2592000 -noout >/dev/null 2>&1 || \
+		fail_remote "certificate expires within 30 days"
+	openssl pkey -in "${PRIVATE_KEY_PATH}" -check -noout >/dev/null 2>&1 || \
+		fail_remote "private key is invalid"
+	local certificate_public_key_sha256=""
+	local private_key_public_key_sha256=""
+	certificate_public_key_sha256="$(
+		openssl x509 -in "${CERTIFICATE_PATH}" -pubkey -noout |
+			openssl pkey -pubin -outform DER 2>/dev/null |
+			openssl dgst -sha256 -r |
+			awk '{print $1}'
+	)"
+	private_key_public_key_sha256="$(
+		openssl pkey -in "${PRIVATE_KEY_PATH}" -pubout -outform DER 2>/dev/null |
+			openssl dgst -sha256 -r |
+			awk '{print $1}'
+	)"
+	[ -n "${certificate_public_key_sha256}" ] && \
+		[ "${certificate_public_key_sha256}" = "${private_key_public_key_sha256}" ] || \
+		fail_remote "certificate and private key do not match"
+}
 
 backup_target() {
 	local source="$1"
 	local backup_name="$2"
 	local marker_name="$3"
 	if [ -e "${source}" ] || [ -L "${source}" ]; then
+		[ ! -d "${source}" ] || fail_remote "refusing to replace unexpected directory: ${source}"
 		cp -a -- "${source}" "${ROLLBACK_DIR}/${backup_name}"
 		printf -v "${marker_name}" '%s' 1
 	fi
@@ -312,58 +471,151 @@ restore_target() {
 	local target="$1"
 	local backup_name="$2"
 	local existed="$3"
-	rm -f -- "${target}"
+	rm -f -- "${target}" || return 1
 	if [ "${existed}" = "1" ]; then
-		cp -a -- "${ROLLBACK_DIR}/${backup_name}" "${target}"
+		cp -a -- "${ROLLBACK_DIR}/${backup_name}" "${target}" || return 1
 	fi
 }
 
-rollback_remote_changes() {
-	restore_target "${SSL_CERT_REMOTE}" cert "${CERT_EXISTED}"
-	restore_target "${SSL_KEY_REMOTE}" key "${KEY_EXISTED}"
-	restore_target "${SITE_AVAILABLE}" site-available "${SITE_AVAILABLE_EXISTED}"
-	restore_target "${SITE_ENABLED}" site-enabled "${SITE_ENABLED_EXISTED}"
-	restore_target "${DEFAULT_ENABLED}" default-enabled "${DEFAULT_ENABLED_EXISTED}"
+restore_nginx_files() {
+	restore_target "${SITE_AVAILABLE}" site-available "${SITE_AVAILABLE_EXISTED}" || return 1
+	restore_target "${SITE_ENABLED}" site-enabled "${SITE_ENABLED_EXISTED}" || return 1
+	restore_target "${DEFAULT_ENABLED}" default-enabled "${DEFAULT_ENABLED_EXISTED}" || return 1
+}
+
+assert_safe_existing_site_available() {
+	local mode=""
+	if [ ! -e "${SITE_AVAILABLE}" ] && [ ! -L "${SITE_AVAILABLE}" ]; then
+		return 0
+	fi
+	[ ! -L "${SITE_AVAILABLE}" ] || \
+		fail_remote "existing sites-available config must not be a symlink"
+	[ "$(file_type_of "${SITE_AVAILABLE}")" = "regular file" ] || \
+		fail_remote "existing sites-available config must be a regular file"
+	[ "$(owner_uid_of "${SITE_AVAILABLE}")" = "0" ] || \
+		fail_remote "existing sites-available config must be owned by root"
+	mode="$(mode_of "${SITE_AVAILABLE}")"
+	[[ "${mode}" =~ ^[0-7]{3,4}$ ]] || fail_remote "existing sites-available config mode is invalid"
+	(( (8#${mode} & 0022) == 0 )) || \
+		fail_remote "existing sites-available config must not be group/world writable"
+}
+
+verify_original_caddy_running() {
+	local container_id=""
+	local running=""
+	for container_id in "${ORIGINAL_CADDY_IDS[@]}"; do
+		running="$(docker inspect --format '{{.State.Running}}' "${container_id}")" || return 1
+		[ "${running}" = "true" ] || return 1
+	done
+}
+
+verify_original_caddy_stopped() {
+	local container_id=""
+	local running=""
+	for container_id in "${ORIGINAL_CADDY_IDS[@]}"; do
+		running="$(docker inspect --format '{{.State.Running}}' "${container_id}")" || return 1
+		[ "${running}" = "false" ] || return 1
+	done
+}
+
+rollback_edge_transaction() {
+	local rollback_failed=0
+	if [ "${EDGE_SERVICE_MUTATION_STARTED}" != "1" ]; then
+		restore_nginx_files || rollback_failed=1
+		verify_original_caddy_running || rollback_failed=1
+		[ "${rollback_failed}" = "0" ]
+		return
+	fi
+	# Free public ports before restoring the exact pre-transaction services.
+	systemctl stop nginx >/dev/null 2>&1 || rollback_failed=1
+	restore_nginx_files || rollback_failed=1
+	case "${NGINX_ENABLEMENT_STATE}" in
+		enabled)
+			systemctl unmask nginx >/dev/null 2>&1 || rollback_failed=1
+			systemctl enable nginx >/dev/null 2>&1 || rollback_failed=1
+			;;
+		disabled)
+			systemctl unmask nginx >/dev/null 2>&1 || rollback_failed=1
+			systemctl disable nginx >/dev/null 2>&1 || rollback_failed=1
+			;;
+		masked)
+			systemctl stop nginx >/dev/null 2>&1 || rollback_failed=1
+			systemctl mask nginx >/dev/null 2>&1 || rollback_failed=1
+			;;
+		static|indirect|generated) ;;
+		*) rollback_failed=1 ;;
+	esac
 	if [ "${NGINX_WAS_ACTIVE}" = "1" ]; then
-		nginx -t >/dev/null 2>&1 && systemctl restart nginx >/dev/null 2>&1 || true
+		nginx -t >/dev/null 2>&1 || rollback_failed=1
+		systemctl restart nginx >/dev/null 2>&1 || rollback_failed=1
 	else
-		systemctl stop nginx >/dev/null 2>&1 || true
+		systemctl stop nginx >/dev/null 2>&1 || rollback_failed=1
 	fi
-	if [ "${NGINX_WAS_ENABLED}" != "1" ]; then
-		systemctl disable nginx >/dev/null 2>&1 || true
+	if [ "${#ORIGINAL_CADDY_IDS[@]}" -gt 0 ]; then
+		docker start "${ORIGINAL_CADDY_IDS[@]}" >/dev/null 2>&1 || rollback_failed=1
+		verify_original_caddy_running || rollback_failed=1
 	fi
+	[ "${rollback_failed}" = "0" ]
 }
 
 cleanup_remote_tmp() {
+	if [ "${PRESERVE_ROLLBACK_EVIDENCE}" = "1" ]; then
+		: >"${REMOTE_TMP_DIR}/RETAIN_ROLLBACK_EVIDENCE"
+		chmod 0600 "${REMOTE_TMP_DIR}/RETAIN_ROLLBACK_EVIDENCE" || true
+		return 0
+	fi
 	if [ -d "${REMOTE_TMP_DIR}" ]; then
 		find "${REMOTE_TMP_DIR}" -depth -delete
 	fi
 }
 
+release_deploy_lock() {
+	[ "${LOCK_HELD}" = "1" ] || return 0
+	if ! rmdir -- "${DEPLOY_LOCK_DIR}"; then
+		echo "[edge-bind:fail] deploy lock could not be released; preserving healthy state and rollback evidence" >&2
+		PRESERVE_ROLLBACK_EVIDENCE=1
+		return 1
+	fi
+	LOCK_HELD=0
+}
+
 on_exit() {
 	local status="$?"
 	trap - EXIT
-	if [ "${status}" -ne 0 ] && [ "${TRANSACTION_COMMITTED}" != "1" ] && [ -d "${ROLLBACK_DIR}" ]; then
-		echo "[warn] Edge activation failed; restoring the previous host NGINX files and service state." >&2
-		rollback_remote_changes
+	if [ "${status}" -ne 0 ] && [ "${TRANSACTION_COMMITTED}" != "1" ] && \
+		[ "${ROLLBACK_REQUIRED}" = "1" ]; then
+		echo "[edge-bind:warn] restoring the previous host NGINX state and exact retired Caddy containers" >&2
+		if ! rollback_edge_transaction; then
+			echo "[edge-bind:fail] rollback verification failed; preserving rollback evidence and deploy lock" >&2
+			PRESERVE_ROLLBACK_EVIDENCE=1
+			status=1
+		fi
+	fi
+	if [ "${LOCK_HELD}" = "1" ] && [ "${PRESERVE_ROLLBACK_EVIDENCE}" != "1" ]; then
+		if ! release_deploy_lock; then
+			status=1
+		fi
 	fi
 	cleanup_remote_tmp
 	exit "${status}"
 }
 trap on_exit EXIT
 
-test "$(stat -c '%a' "${REMOTE_TMP_DIR}")" = "700"
-chmod 600 "${REMOTE_TMP_KEY}"
+[ -d "${REMOTE_DIR}" ] || fail_remote "managed remote root is missing: ${REMOTE_DIR}"
+[ "$(owner_uid_of "${REMOTE_DIR}")" = "0" ] || fail_remote "managed remote root must be owned by root"
+[ -f "${REMOTE_TMP_CONF}" ] && [ ! -L "${REMOTE_TMP_CONF}" ] || fail_remote "candidate NGINX config is missing or unsafe"
+[ "$(owner_uid_of "${REMOTE_TMP_CONF}")" = "0" ] || fail_remote "candidate NGINX config must be owned by root"
+CANDIDATE_CONFIG_MODE="$(mode_of "${REMOTE_TMP_CONF}")"
+[[ "${CANDIDATE_CONFIG_MODE}" =~ ^[0-7]{3,4}$ ]] || fail_remote "candidate NGINX config mode is invalid"
+(( (8#${CANDIDATE_CONFIG_MODE} & 0022) == 0 )) || fail_remote "candidate NGINX config must not be group/world writable"
+test "$(stat -c '%a' "${REMOTE_TMP_DIR}")" = "700" || fail_remote "remote temporary directory must have mode 0700"
 
-for required_command in nginx curl stat install find cp systemctl; do
-	if ! command -v "${required_command}" >/dev/null 2>&1; then
-		echo "[fail] Host prerequisite is missing: ${required_command}. Install prerequisites before running the migration helper." >&2
-		exit 1
-	fi
+for required_command in awk cp curl dirname docker find install nginx openssl readlink rm stat systemctl; do
+	command -v "${required_command}" >/dev/null 2>&1 || \
+		fail_remote "Host prerequisite is missing: ${required_command}. Install prerequisites before running the migration helper."
 done
 
-# The loopback-only bundle proxy must already be healthy. This prevents the
-# external edge from being activated against a missing or remotely exposed app.
+assert_certbot_lineage_ready
 curl -fsS --connect-timeout 3 --max-time 10 \
 	-H "Host: ${DOMAIN}" \
 	-H "X-Forwarded-Host: ${DOMAIN}" \
@@ -371,61 +623,77 @@ curl -fsS --connect-timeout 3 --max-time 10 \
 	-H "X-Forwarded-Port: 443" \
 	"${UPSTREAM_URL%/}/health/live" >/dev/null
 
-if [ "${PREPARE_ONLY}" != "1" ]; then
-	if ! command -v docker >/dev/null 2>&1; then
-		echo "[fail] Docker is required to prove that the retired project Caddy is stopped." >&2
-		exit 1
-	fi
-	RUNNING_CADDY_IDS="$(docker ps -q \
-		--filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
-		--filter "label=com.docker.compose.service=caddy")"
-	if [ -n "${RUNNING_CADDY_IDS}" ]; then
-		echo "[fail] Retired Caddy is still running for Compose project ${COMPOSE_PROJECT_NAME_EFFECTIVE}: ${RUNNING_CADDY_IDS//$'\n'/ }." >&2
-		echo "[fail] Run --prepare-only first, stop only these exact container IDs, then rerun without --prepare-only." >&2
-		exit 1
-	fi
-fi
-
-mkdir -p "${REMOTE_CERT_DIR}"
+mkdir -- "${DEPLOY_LOCK_DIR}" || fail_remote "another production host mutation holds ${DEPLOY_LOCK_DIR}"
+LOCK_HELD=1
 install -d -m 700 -- "${ROLLBACK_DIR}"
+assert_safe_directory "/etc/nginx/sites-available" "NGINX sites-available directory"
+assert_safe_directory "/etc/nginx/sites-enabled" "NGINX sites-enabled directory"
+assert_safe_existing_site_available
 systemctl is-active --quiet nginx && NGINX_WAS_ACTIVE=1 || true
-systemctl is-enabled --quiet nginx && NGINX_WAS_ENABLED=1 || true
-backup_target "${SSL_CERT_REMOTE}" cert CERT_EXISTED
-backup_target "${SSL_KEY_REMOTE}" key KEY_EXISTED
+NGINX_ENABLEMENT_STATE="$(systemctl is-enabled nginx 2>/dev/null || true)"
+case "${NGINX_ENABLEMENT_STATE}" in
+	enabled) NGINX_WAS_ENABLED=1 ;;
+	disabled|masked|static|indirect|generated) ;;
+	*) fail_remote "unsupported or unreadable pre-transaction NGINX enablement state" ;;
+esac
 backup_target "${SITE_AVAILABLE}" site-available SITE_AVAILABLE_EXISTED
 backup_target "${SITE_ENABLED}" site-enabled SITE_ENABLED_EXISTED
 backup_target "${DEFAULT_ENABLED}" default-enabled DEFAULT_ENABLED_EXISTED
+printf 'active=%s\nenabled=%s\nenablement_state=%s\n' \
+	"${NGINX_WAS_ACTIVE}" "${NGINX_WAS_ENABLED}" "${NGINX_ENABLEMENT_STATE}" \
+	>"${ROLLBACK_DIR}/nginx-state"
+chmod 0600 "${ROLLBACK_DIR}/nginx-state"
 
-install -m 644 "${REMOTE_TMP_CERT}" "${SSL_CERT_REMOTE}"
-install -m 600 "${REMOTE_TMP_KEY}" "${SSL_KEY_REMOTE}"
-install -m 644 "${REMOTE_TMP_CONF}" "${SITE_AVAILABLE}"
-ln -sfn "${SITE_AVAILABLE}" "${SITE_ENABLED}"
+while IFS= read -r container_id; do
+	[ -n "${container_id}" ] || continue
+	[[ "${container_id}" =~ ^[0-9a-f]{12,64}$ ]] || fail_remote "Docker returned an invalid Caddy container ID"
+	ORIGINAL_CADDY_IDS+=("${container_id}")
+done < <(docker ps -q \
+	--filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
+	--filter "label=com.docker.compose.service=caddy")
+printf '%s\n' "${ORIGINAL_CADDY_IDS[@]}" >"${ROLLBACK_DIR}/original-caddy-ids"
+chmod 0600 "${ROLLBACK_DIR}/original-caddy-ids"
 
+ROLLBACK_REQUIRED=1
+rm -f -- "${SITE_AVAILABLE}" "${SITE_ENABLED}"
+install -m 644 -- "${REMOTE_TMP_CONF}" "${SITE_AVAILABLE}"
+ln -sfn -- "${SITE_AVAILABLE}" "${SITE_ENABLED}"
 nginx -t
 
 if [ "${PREPARE_ONLY}" = "1" ]; then
+	restore_nginx_files
+	nginx -t >/dev/null 2>&1 || fail_remote "restored NGINX configuration is invalid after prepare-only"
+	ROLLBACK_REQUIRED=0
 	TRANSACTION_COMMITTED=1
-	echo "[ok] External Edge files are prepared and nginx -t passed; NGINX was not started or restarted."
+	release_deploy_lock
+	echo "[edge-bind:ok] candidate NGINX config passed; prepare-only restored the exact prior files and did not switch traffic"
 	exit 0
 fi
 
-rm -f "${DEFAULT_ENABLED}"
-systemctl enable nginx
-systemctl restart nginx
+[ "${#ORIGINAL_CADDY_IDS[@]}" -gt 0 ] || \
+	fail_remote "activation requires at least one running project Caddy container to freeze for rollback"
+EDGE_SERVICE_MUTATION_STARTED=1
+docker stop "${ORIGINAL_CADDY_IDS[@]}" >/dev/null
+verify_original_caddy_stopped || fail_remote "the exact original Caddy containers did not all stop"
 
-# Resolve the public hostname to loopback so the check proves this exact host
-# edge, its certificate, and the loopback upstream without depending on DNS.
+rm -f -- "${DEFAULT_ENABLED}"
+systemctl unmask nginx >/dev/null
+systemctl enable nginx >/dev/null
+systemctl restart nginx
 curl -fsS --connect-timeout 3 --max-time 10 \
 	--resolve "${DOMAIN}:443:127.0.0.1" \
 	"https://${DOMAIN}/health/live" >/dev/null
-TRANSACTION_COMMITTED=1
-EOF
-REMOTE_CLEANUP_ARMED=0
 
+ROLLBACK_REQUIRED=0
+TRANSACTION_COMMITTED=1
+release_deploy_lock
+echo "[edge-bind:ok] external Edge activation committed under the shared deploy lock"
+EOF
+
+REMOTE_CLEANUP_ARMED=0
 if [ "${PREPARE_ONLY}" = "1" ]; then
-	echo "[ok] Domain binding prepared for https://${DOMAIN}; public traffic was not switched."
-	echo "[next] Record and stop only the retired Caddy container IDs for Compose project ${COMPOSE_PROJECT_NAME_EFFECTIVE}, then rerun without --prepare-only."
+	printf '[edge-bind:ok] candidate validated for https://%s; prior NGINX files and Caddy state are unchanged\n' "${DOMAIN}"
 else
-	echo "[ok] Domain binding applied for https://${DOMAIN}"
-	echo "[ok] External edge is healthy; set NPCINK_CLOUD_EXTERNAL_EDGE_READY=true in the formal deploy env."
+	printf '[edge-bind:ok] domain binding applied for https://%s\n' "${DOMAIN}"
+	echo "[edge-bind:ok] external edge is healthy; set NPCINK_CLOUD_EXTERNAL_EDGE_READY=true in the formal deploy env"
 fi

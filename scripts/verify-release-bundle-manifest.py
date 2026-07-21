@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -23,6 +24,7 @@ SCHEMA_VERSION = "npcink.release-bundle.v1"
 IMAGE_LOCK_SCHEMA = "npcink.production-image-lock.v1"
 SCAN_INDEX_SCHEMA = "npcink.production-image-scan-index.v1"
 SCAN_RECEIPT_SCHEMA = "npcink.production-image-scan-receipt.v1"
+TARGET_DAEMON_MAP_SCHEMA = "npcink.target-daemon-image-map.v1"
 MANIFEST_NAME = "release-bundle-manifest.json"
 CHECKSUMS_NAME = "SHA256SUMS"
 SCAN_INDEX_PATH = "release/image-scan/scan-index.json"
@@ -32,6 +34,7 @@ MAX_TAR_MEMBERS = 20_000
 MAX_TAR_UNCOMPRESSED_BYTES = 20 * 1024 * 1024 * 1024
 MAX_DOCKER_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+MAX_TARGET_DAEMON_MAP_BYTES = 256 * 1024
 REQUIRED_MAX_DATABASE_AGE_HOURS = 72
 REQUIRED_MAX_EXCEPTION_DAYS = 30
 MAX_SCAN_TO_BUNDLE_AGE_HOURS = 24
@@ -39,6 +42,7 @@ CLOCK_SKEW = dt.timedelta(minutes=5)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40,64}$")
+RELEASE_NAME_RE = re.compile(r"^release-[A-Za-z0-9._-]+$")
 REQUIRED_SOURCE_INPUTS = {
     "uv_lock",
     "pnpm_lock",
@@ -133,7 +137,7 @@ def sha256_gzip_payload(path: Path) -> str:
     return digest.hexdigest()
 
 
-def docker_archive_subject(path: Path, *, archive_reference: str) -> dict[str, str]:
+def docker_archive_subject(path: Path, *, archive_reference: str | None) -> dict[str, str]:
     try:
         with tarfile.open(path, mode="r:*") as archive:
             manifest_member = archive.getmember("manifest.json")
@@ -146,16 +150,23 @@ def docker_archive_subject(path: Path, *, archive_reference: str) -> dict[str, s
             if not isinstance(manifest, list) or len(manifest) != 1:
                 fail("Docker archive manifest must contain exactly one image")
             entry = manifest[0]
-            if not isinstance(entry, dict) or set(entry) != {"Config", "RepoTags", "Layers"}:
+            expected_entry_keys = {"Config", "RepoTags", "Layers"}
+            allowed_entry_keys = {frozenset(expected_entry_keys)}
+            if archive_reference is None:
+                # Docker 26 classic-store re-exports may add LayerSources. It
+                # is target-local metadata and is never accepted in the
+                # governed bundle archive itself.
+                allowed_entry_keys.add(frozenset(expected_entry_keys | {"LayerSources"}))
+            if not isinstance(entry, dict) or frozenset(entry) not in allowed_entry_keys:
                 fail("Docker archive manifest entry is invalid")
+            if "LayerSources" in entry and not isinstance(entry["LayerSources"], dict):
+                fail("Docker archive LayerSources is invalid")
             config_name = entry.get("Config")
-            match = re.fullmatch(
-                r"(?:blobs/sha256/)?([0-9a-f]{64})(?:[.]json)?", str(config_name)
-            )
+            match = re.fullmatch(r"(?:blobs/sha256/)?([0-9a-f]{64})(?:[.]json)?", str(config_name))
             if match is None:
                 fail("Docker archive Config is not an exact sha256 object")
             repo_tags = entry.get("RepoTags")
-            if repo_tags != [archive_reference]:
+            if archive_reference is not None and repo_tags != [archive_reference]:
                 fail("Docker archive RepoTags must contain only its governed release reference")
             config_member = archive.getmember(str(config_name))
             if not config_member.isfile() or config_member.size > MAX_MANIFEST_BYTES:
@@ -363,8 +374,10 @@ def application_images(image_lock: dict[str, Any]) -> list[dict[str, str]]:
         dockerfile = item.get("dockerfile")
         if not isinstance(key, str) or not re.fullmatch(r"[a-z0-9_]+", key):
             fail("invalid application image key")
-        if not isinstance(reference, str) or not reference or any(
-            ord(char) < 32 for char in reference
+        if (
+            not isinstance(reference, str)
+            or not reference
+            or any(ord(char) < 32 for char in reference)
         ):
             fail(f"invalid application image reference: {key}")
         if not isinstance(dockerfile, str):
@@ -495,9 +508,7 @@ def validate_scan_evidence(
     application_keys = {record["key"] for record in scanned_applications}
     external_keys = {item["key"] for item in external_images(image_lock)}
     expected_keys = application_keys | external_keys
-    expected_references = {
-        record["key"]: record["reference"] for record in scanned_applications
-    }
+    expected_references = {record["key"]: record["reference"] for record in scanned_applications}
     expected_references.update(
         {item["key"]: item["reference"] for item in external_images(image_lock)}
     )
@@ -551,7 +562,8 @@ def validate_scan_evidence(
             or record["platform"] != expected_platform
             or not isinstance(record["scanner_docker_context"], str)
             or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", record["scanner_docker_context"])
-            or record["grype_database"] != {
+            or record["grype_database"]
+            != {
                 **database_identity,
                 "age_hours_at_scan": record["grype_database"].get("age_hours_at_scan")
                 if isinstance(record["grype_database"], dict)
@@ -639,8 +651,7 @@ def validate_scan_evidence(
             or receipt.get("archive_reference") != record["archive_reference"]
             or receipt.get("archive_sha256") != record["archive_sha256"]
             or receipt.get("config_image_id") != record["config_image_id"]
-            or receipt.get("syft_subject_manifest_digest")
-            != record["syft_subject_manifest_digest"]
+            or receipt.get("syft_subject_manifest_digest") != record["syft_subject_manifest_digest"]
             or receipt.get("source_daemon_image_id") != record["source_daemon_image_id"]
             or receipt.get("requested_reference") != expected_references[key]
             or receipt.get("platform") != expected_platform
@@ -749,8 +760,7 @@ def validate_scan_evidence(
             or bundled_role["reference"] != record["archive_reference"]
             or bundled_role["source_reference"] != record["requested_reference"]
             or bundled_role["expected_image_id"] != record["config_image_id"]
-            or bundled_role["source_daemon_image_id"]
-            != record["source_daemon_image_id"]
+            or bundled_role["source_daemon_image_id"] != record["source_daemon_image_id"]
             or sha256_gzip_payload(ensure_plain_file(root, bundled_role["archive"]))
             != record["archive_sha256"]
             or bundled_subject
@@ -787,8 +797,7 @@ def validate_scan_evidence(
         role = key if key in application_keys else f"external_{key}"
         if role in roles and (
             roles[role]["expected_image_id"] != scan_record["config_image_id"]
-            or roles[role]["source_daemon_image_id"]
-            != scan_record["source_daemon_image_id"]
+            or roles[role]["source_daemon_image_id"] != scan_record["source_daemon_image_id"]
         ):
             fail(f"bundled image identity was not the scanned image identity: {role}")
     equivalent_records = equivalence.get("images")
@@ -820,8 +829,7 @@ def validate_scan_evidence(
             or record.get("representative_key") != representative_key
             or record.get("reference") != outputs_by_key[key]["reference"]
             or record.get("representative_reference") != outputs_by_key["api"]["reference"]
-            or record.get("representative_image_id")
-            != by_key["api"]["source_daemon_image_id"]
+            or record.get("representative_image_id") != by_key["api"]["source_daemon_image_id"]
         ):
             fail(f"bundled worker alias lacks matching scan equivalence: {key}")
 
@@ -832,12 +840,8 @@ def validate_scan_evidence(
         "status": "passed",
         "scope": "release",
         "generated_at_utc": index["generated_at_utc"],
-        "config_image_ids": {
-            key: by_key[key]["config_image_id"] for key in sorted(by_key)
-        },
-        "archive_sha256": {
-            key: by_key[key]["archive_sha256"] for key in sorted(by_key)
-        },
+        "config_image_ids": {key: by_key[key]["config_image_id"] for key in sorted(by_key)},
+        "archive_sha256": {key: by_key[key]["archive_sha256"] for key in sorted(by_key)},
         "source_daemon_image_ids": {
             key: by_key[key]["source_daemon_image_id"] for key in sorted(by_key)
         },
@@ -869,9 +873,7 @@ def read_image_records(path: Path) -> list[dict[str, Any]]:
             fail(f"invalid image role on line {number}")
         if any(ord(char) < 32 for char in reference + source_reference):
             fail(f"invalid image reference on line {number}")
-        if not IMAGE_ID_RE.fullmatch(image_id) or not IMAGE_ID_RE.fullmatch(
-            source_daemon_image_id
-        ):
+        if not IMAGE_ID_RE.fullmatch(image_id) or not IMAGE_ID_RE.fullmatch(source_daemon_image_id):
             fail(f"invalid image ID on line {number}")
         if required not in {"0", "1"} or primary not in {"0", "1"}:
             fail(f"invalid boolean image field on line {number}")
@@ -918,9 +920,9 @@ def validate_finalization_scan_index(
     ):
         fail("scan index policy hashes are invalid for image-record finalization")
 
-    expected_keys = {
-        item["key"] for item in application_images(image_lock)
-    } | {item["key"] for item in external_images(image_lock)}
+    expected_keys = {item["key"] for item in application_images(image_lock)} | {
+        item["key"] for item in external_images(image_lock)
+    }
     if index["required_image_keys"] != sorted(expected_keys):
         fail("scan index required image keys are invalid for finalization")
     images = index["images"]
@@ -1224,50 +1226,316 @@ def loaded_image_id(reference: str, role: str) -> str:
     return actual_id
 
 
-def verify_loaded_images(archives: list[dict[str, Any]], expected_platform: str) -> None:
+def save_loaded_image_subject(
+    image_id: str,
+    role: str,
+    saved_archive: Path,
+) -> dict[str, str]:
+    try:
+        completed = subprocess.run(
+            [
+                "docker",
+                "image",
+                "save",
+                "--output",
+                str(saved_archive),
+                image_id,
+            ],
+            text=True,
+            capture_output=True,
+        )
+    except OSError as exc:
+        fail(f"cannot save loaded image for {role}: {exc}")
+    if completed.returncode != 0:
+        fail(f"cannot save loaded image for {role}")
+    if (
+        saved_archive.is_symlink()
+        or not saved_archive.is_file()
+        or saved_archive.stat().st_size <= 0
+        or saved_archive.stat().st_size > MAX_DOCKER_ARCHIVE_BYTES
+    ):
+        fail(f"loaded Docker archive is invalid for {role}")
+    # Saving by the immutable target-daemon ID avoids a mutable-tag race. Its
+    # exported RepoTags are intentionally irrelevant to portable identity.
+    return docker_archive_subject(saved_archive, archive_reference=None)
+
+
+def verify_loaded_images(
+    archives: list[dict[str, Any]], expected_platform: str
+) -> dict[str, dict[str, str]]:
+    target_roles: dict[str, dict[str, str]] = {}
     with tempfile.TemporaryDirectory(prefix="npcink-loaded-image-verify-") as temp:
         temp_root = Path(temp)
         for position, archive in enumerate(archives):
             primary = next(image for image in archive["images"] if image["primary"])
             primary_id = loaded_image_id(primary["reference"], primary["role"])
             saved_archive = temp_root / f"image-{position}.tar"
-            try:
-                completed = subprocess.run(
-                    [
-                        "docker",
-                        "image",
-                        "save",
-                        "--output",
-                        str(saved_archive),
-                        primary["reference"],
-                    ],
-                    text=True,
-                    capture_output=True,
-                )
-            except OSError as exc:
-                fail(f"cannot save loaded image for {primary['role']}: {exc}")
-            if completed.returncode != 0:
-                fail(f"cannot save loaded image for {primary['role']}")
-            if (
-                saved_archive.is_symlink()
-                or not saved_archive.is_file()
-                or saved_archive.stat().st_size > MAX_DOCKER_ARCHIVE_BYTES
-            ):
-                fail(f"loaded Docker archive is invalid for {primary['role']}")
-            subject = docker_archive_subject(
-                saved_archive, archive_reference=primary["reference"]
+            subject = save_loaded_image_subject(
+                primary_id,
+                primary["role"],
+                saved_archive,
             )
             if subject != {
                 "config_image_id": primary["expected_image_id"],
                 "platform": expected_platform,
             }:
                 fail(f"loaded Docker archive identity mismatch for {primary['role']}")
+            if loaded_image_id(primary["reference"], primary["role"]) != primary_id:
+                fail(f"loaded image tag changed during identity proof for {primary['role']}")
+            target_roles[primary["role"]] = {
+                "reference": primary["reference"],
+                "portable_config_image_id": primary["expected_image_id"],
+                "target_daemon_image_id": primary_id,
+            }
             for image in archive["images"]:
                 if image["primary"]:
                     continue
                 alias_id = loaded_image_id(image["reference"], image["role"])
                 if alias_id != primary_id:
                     fail(f"loaded image alias mismatch for {image['role']}")
+                target_roles[image["role"]] = {
+                    "reference": image["reference"],
+                    "portable_config_image_id": image["expected_image_id"],
+                    "target_daemon_image_id": alias_id,
+                }
+    for role, record in target_roles.items():
+        if loaded_image_id(record["reference"], role) != record["target_daemon_image_id"]:
+            fail(f"loaded image tag changed before target-daemon map publication for {role}")
+    return target_roles
+
+
+def target_daemon_map_path(root: Path) -> Path:
+    resolved_root = root.resolve()
+    if RELEASE_NAME_RE.fullmatch(resolved_root.name) is None:
+        fail("exact release directory name must match release-<safe-id>")
+    if not resolved_root.is_dir():
+        fail("exact release root is missing")
+    root_stat = resolved_root.stat()
+    if root_stat.st_uid != os.geteuid() or stat.S_IMODE(root_stat.st_mode) & 0o022:
+        fail("exact release root must be operator-owned and not group/world writable")
+    return (
+        resolved_root.parent / ".release-state" / resolved_root.name / "target-daemon-images.json"
+    )
+
+
+def require_private_target_map_path(root: Path, *, must_exist: bool) -> Path:
+    path = target_daemon_map_path(root)
+    parent = path.parent
+    for directory in (parent.parent, parent):
+        if directory.is_symlink() or not directory.is_dir():
+            fail("target-daemon image map parent is missing or unsafe")
+        directory_stat = directory.stat()
+        if directory_stat.st_uid != os.geteuid() or stat.S_IMODE(directory_stat.st_mode) != 0o700:
+            fail("target-daemon image map parent must be private and operator-owned")
+    if path.is_symlink():
+        fail("target-daemon image map must not be a symlink")
+    if must_exist:
+        if not path.is_file():
+            fail("target-daemon image map is missing")
+        path_stat = path.stat()
+        if path_stat.st_uid != os.geteuid() or stat.S_IMODE(path_stat.st_mode) != 0o600:
+            fail("target-daemon image map must be mode 0600 and operator-owned")
+    elif path.exists():
+        if not path.is_file():
+            fail("target-daemon image map target is not a regular file")
+        path_stat = path.stat()
+        if path_stat.st_uid != os.geteuid() or stat.S_IMODE(path_stat.st_mode) != 0o600:
+            fail("existing target-daemon image map must be mode 0600 and operator-owned")
+    return path
+
+
+def target_map_manifest_subjects(
+    root: Path, manifest: object
+) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    if not isinstance(manifest, dict):
+        fail("bundle manifest is invalid for target-daemon map binding")
+    source = manifest.get("source")
+    build = manifest.get("build")
+    archives = manifest.get("archives")
+    if (
+        not isinstance(source, dict)
+        or not isinstance(source.get("revision"), str)
+        or not isinstance(build, dict)
+        or not isinstance(build.get("image_platform"), str)
+        or not isinstance(archives, list)
+    ):
+        fail("bundle manifest is invalid for target-daemon map binding")
+    manifest_roles: dict[str, dict[str, object]] = {}
+    for archive in archives:
+        if not isinstance(archive, dict) or not isinstance(archive.get("images"), list):
+            fail("bundle manifest image records are invalid for target-daemon map binding")
+        for image in archive["images"]:
+            if not isinstance(image, dict) or not isinstance(image.get("role"), str):
+                fail("bundle manifest image record is invalid for target-daemon map binding")
+            role = image["role"]
+            if role in manifest_roles:
+                fail(f"duplicate release image role in target-daemon map binding: {role}")
+            manifest_roles[role] = image
+    if not manifest_roles:
+        fail("bundle manifest has no image roles for target-daemon map binding")
+    bundle_binding: dict[str, object] = {
+        "manifest_sha256": sha256_file(root / MANIFEST_NAME),
+        "checksums_sha256": sha256_file(ensure_plain_file(root, CHECKSUMS_NAME)),
+        "source_revision": source["revision"],
+        "image_platform": build["image_platform"],
+        "release_name": root.resolve().name,
+        "release_path": str(root.resolve()),
+    }
+    return bundle_binding, manifest_roles
+
+
+def load_strict_target_daemon_map(path: Path, *, context: str) -> object:
+    if path.stat().st_size > MAX_TARGET_DAEMON_MAP_BYTES:
+        fail(f"{context} is oversized")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                fail(f"{context} contains a duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        fail(f"{context} is invalid JSON: {exc}")
+
+
+def validate_target_daemon_map_payload(
+    payload: object,
+    *,
+    bundle_binding: dict[str, object],
+    manifest_roles: dict[str, dict[str, object]],
+    context: str,
+) -> dict[str, dict[str, str]]:
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "bundle",
+        "roles",
+    }:
+        fail(f"{context} schema is invalid")
+    if payload["schema_version"] != TARGET_DAEMON_MAP_SCHEMA:
+        fail(f"{context} version is unsupported")
+    bundle = payload["bundle"]
+    if not isinstance(bundle, dict) or set(bundle) != set(bundle_binding):
+        fail(f"{context} bundle binding is invalid")
+    if bundle != bundle_binding:
+        fail(f"{context} does not match the extracted release instance")
+    roles = payload["roles"]
+    if not isinstance(roles, dict) or set(roles) != set(manifest_roles):
+        fail(f"{context} role set is incomplete or unexpected")
+    validated_roles: dict[str, dict[str, str]] = {}
+    for mapped_role, record in roles.items():
+        if (
+            not isinstance(mapped_role, str)
+            or not isinstance(record, dict)
+            or set(record)
+            != {
+                "reference",
+                "portable_config_image_id",
+                "target_daemon_image_id",
+            }
+        ):
+            fail(f"{context} record is invalid for {mapped_role}")
+        manifest_record = manifest_roles[mapped_role]
+        reference = record["reference"]
+        portable_config_image_id = record["portable_config_image_id"]
+        target_daemon_image_id = record["target_daemon_image_id"]
+        if (
+            not isinstance(reference, str)
+            or reference != manifest_record.get("reference")
+            or not isinstance(portable_config_image_id, str)
+            or portable_config_image_id != manifest_record.get("expected_image_id")
+            or not isinstance(target_daemon_image_id, str)
+            or IMAGE_ID_RE.fullmatch(target_daemon_image_id) is None
+        ):
+            fail(f"{context} record does not match the bundle for {mapped_role}")
+        validated_roles[mapped_role] = {
+            "reference": reference,
+            "portable_config_image_id": portable_config_image_id,
+            "target_daemon_image_id": target_daemon_image_id,
+        }
+    return validated_roles
+
+
+def write_target_daemon_map(
+    root: Path,
+    manifest: dict[str, Any],
+    target_roles: dict[str, dict[str, str]],
+) -> None:
+    path = require_private_target_map_path(root, must_exist=False)
+    bundle_binding, manifest_roles = target_map_manifest_subjects(root, manifest)
+    if path.exists():
+        existing = load_strict_target_daemon_map(
+            path,
+            context="existing target-daemon image map",
+        )
+        validate_target_daemon_map_payload(
+            existing,
+            bundle_binding=bundle_binding,
+            manifest_roles=manifest_roles,
+            context="existing target-daemon image map",
+        )
+    payload = {
+        "schema_version": TARGET_DAEMON_MAP_SCHEMA,
+        "bundle": bundle_binding,
+        "roles": {role: target_roles[role] for role in sorted(target_roles)},
+    }
+    validate_target_daemon_map_payload(
+        payload,
+        bundle_binding=bundle_binding,
+        manifest_roles=manifest_roles,
+        context="new target-daemon image map",
+    )
+    encoded = (
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    if len(encoded) > MAX_TARGET_DAEMON_MAP_BYTES:
+        fail("new target-daemon image map is oversized")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.is_symlink():
+            fail("target-daemon image map became a symlink before publication")
+        os.replace(temporary, path)
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_descriptor = os.open(path.parent, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def read_target_daemon_map(root: Path, role: str) -> dict[str, str]:
+    root = root.resolve()
+    path = require_private_target_map_path(root, must_exist=True)
+    try:
+        manifest = json.loads(ensure_plain_file(root, MANIFEST_NAME).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"bundle manifest is invalid JSON for target-daemon map binding: {exc}")
+    bundle_binding, manifest_roles = target_map_manifest_subjects(root, manifest)
+    payload = load_strict_target_daemon_map(path, context="target-daemon image map")
+    roles = validate_target_daemon_map_payload(
+        payload,
+        bundle_binding=bundle_binding,
+        manifest_roles=manifest_roles,
+        context="target-daemon image map",
+    )
+    if role not in roles:
+        fail(f"release image role is missing or ambiguous: {role}")
+    return roles[role]
 
 
 def verify_directory(root: Path, *, post_load: bool) -> None:
@@ -1294,9 +1562,7 @@ def verify_directory(root: Path, *, post_load: bool) -> None:
         fail("release bundle manifest has an unexpected top-level schema")
     if manifest["schema_version"] != SCHEMA_VERSION:
         fail("unsupported release bundle manifest schema")
-    bundle_created_at = parse_utc_timestamp(
-        manifest["created_at_utc"], "manifest created_at_utc"
-    )
+    bundle_created_at = parse_utc_timestamp(manifest["created_at_utc"], "manifest created_at_utc")
     source = manifest["source"]
     if not isinstance(source, dict) or set(source) != {
         "revision",
@@ -1432,10 +1698,10 @@ def verify_directory(root: Path, *, post_load: bool) -> None:
             role = image["role"]
             if role in roles or not isinstance(role, str) or not re.fullmatch(r"[a-z0-9_]+", role):
                 fail("duplicate or invalid image role")
-            if not isinstance(image["reference"], str) or not isinstance(
-                image["source_reference"], str
-            ) or any(
-                ord(char) < 32 for char in image["reference"] + image["source_reference"]
+            if (
+                not isinstance(image["reference"], str)
+                or not isinstance(image["source_reference"], str)
+                or any(ord(char) < 32 for char in image["reference"] + image["source_reference"])
             ):
                 fail(f"invalid image reference: {role}")
             if not IMAGE_ID_RE.fullmatch(image["expected_image_id"]) or not IMAGE_ID_RE.fullmatch(
@@ -1461,14 +1727,12 @@ def verify_directory(root: Path, *, post_load: bool) -> None:
         fail("production image lock has invalid or duplicate application outputs")
     locked_applications = {item["key"]: item for item in application_images(image_lock)}
     locked_external = {item["key"]: item for item in external_images(image_lock)}
-    expected_roles = set(locked_outputs) | {
-        f"external_{key}" for key in locked_external
-    }
+    expected_roles = set(locked_outputs) | {f"external_{key}" for key in locked_external}
     if set(roles) != expected_roles:
         fail("release bundle image role set does not exactly match production image lock")
-    expected_archive_paths = {
-        item["archive"] for item in locked_applications.values()
-    } | {item["archive"] for item in locked_external.values()}
+    expected_archive_paths = {item["archive"] for item in locked_applications.values()} | {
+        item["archive"] for item in locked_external.values()
+    }
     if archive_paths != expected_archive_paths:
         fail("release bundle archive path set does not exactly match production image lock")
 
@@ -1541,7 +1805,8 @@ def verify_directory(root: Path, *, post_load: bool) -> None:
         fail("production image scan metadata does not match bundled scan evidence")
 
     if post_load:
-        verify_loaded_images(archives, build["image_platform"])
+        target_roles = verify_loaded_images(archives, build["image_platform"])
+        write_target_daemon_map(root, manifest, target_roles)
 
 
 def emit_image_plan(root: Path, *, aliases: bool) -> None:
@@ -1555,6 +1820,17 @@ def emit_image_plan(root: Path, *, aliases: bool) -> None:
                     print(f"{primary['reference']}\t{image['reference']}")
         else:
             print(f"{archive['path']}\t{primary['role']}\t{primary['reference']}")
+
+
+def emit_loaded_role_daemon_id(root: Path, role: str) -> None:
+    root = root.resolve()
+    if re.fullmatch(r"[a-z0-9_]+", role) is None:
+        fail("invalid release image role")
+    record = read_target_daemon_map(root, role)
+    observed_daemon_id = loaded_image_id(record["reference"], role)
+    if observed_daemon_id != record["target_daemon_image_id"]:
+        fail(f"loaded image tag changed after target-daemon map publication for {role}")
+    print(record["target_daemon_image_id"])
 
 
 def verify_archive(bundle: Path, checksum: Path) -> dict[str, Any]:
@@ -1721,6 +1997,9 @@ def build_parser() -> argparse.ArgumentParser:
     load_plan.add_argument("--root", required=True)
     alias_plan = subparsers.add_parser("alias-plan")
     alias_plan.add_argument("--root", required=True)
+    loaded_role_daemon_id = subparsers.add_parser("loaded-role-daemon-id")
+    loaded_role_daemon_id.add_argument("--root", required=True)
+    loaded_role_daemon_id.add_argument("--role", required=True)
     archive = subparsers.add_parser("verify-archive")
     archive.add_argument("--bundle", required=True)
     archive.add_argument("--checksum", required=True)
@@ -1751,9 +2030,7 @@ def main() -> int:
         elif args.command == "application-plan":
             lock = load_image_lock(Path(args.image_lock))
             lines = [
-                "\t".join(
-                    (item["key"], item["reference"], item["dockerfile"], item["archive"])
-                )
+                "\t".join((item["key"], item["reference"], item["dockerfile"], item["archive"]))
                 for item in application_images(lock)
                 if item["key"] not in {"api", "frontend"}
             ]
@@ -1781,6 +2058,8 @@ def main() -> int:
             emit_image_plan(Path(args.root).resolve(), aliases=False)
         elif args.command == "alias-plan":
             emit_image_plan(Path(args.root).resolve(), aliases=True)
+        elif args.command == "loaded-role-daemon-id":
+            emit_loaded_role_daemon_id(Path(args.root).resolve(), args.role)
         elif args.command == "verify-archive":
             verify_archive(Path(args.bundle), Path(args.checksum))
         elif args.command == "archive-platform":

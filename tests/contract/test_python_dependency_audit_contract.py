@@ -81,14 +81,15 @@ def test_dependency_audit_is_locked_hashed_and_covers_production_variants() -> N
     )
 
 
-def test_ci_blocks_backend_and_production_on_security_gates() -> None:
+def test_ci_blocks_backend_and_keeps_production_deploy_separate() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
 
     assert "python-dependency-audit:" in workflow
     assert "run: bash scripts/check-python-dependency-audit.sh" in workflow
     assert "PYTHON_DEPENDENCY_AUDIT_RESULT" in workflow
     assert "python dependency audit did not pass" in workflow
-    assert "needs['secret-scan'].result == 'success'" in workflow
+    assert "deploy-production:" not in workflow
+    assert "PROD_SSH_KEY" not in workflow
 
 
 def test_gitleaks_fixture_ignores_are_exact_reviewed_fingerprints() -> None:

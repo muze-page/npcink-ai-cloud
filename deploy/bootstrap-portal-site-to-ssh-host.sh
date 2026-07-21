@@ -46,6 +46,14 @@ while [ "$#" -gt 0 ]; do
 			REMOTE_ARGS+=("$1" "$2")
 			shift 2
 			;;
+		--secret)
+			echo "[fail] --secret is forbidden because process arguments and the SSH command are observable." >&2
+			exit 1
+			;;
+		--issue-key)
+			echo "[fail] Remote portal bootstrap does not support --issue-key; provision keys through a governed local or release path." >&2
+			exit 1
+			;;
 		*)
 			REMOTE_ARGS+=("$1")
 			shift
@@ -69,7 +77,7 @@ fi
 
 SSH_ARGS=(
 	-p "${SSH_PORT}"
-	-o StrictHostKeyChecking=accept-new
+	-o StrictHostKeyChecking=yes
 )
 if [ -n "${SSH_IDENTITY_FILE}" ]; then
 	SSH_ARGS+=(-i "${SSH_IDENTITY_FILE}")

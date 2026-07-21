@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -11,6 +12,11 @@ import pytest
 import yaml
 
 from app.core.config import Settings
+
+SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"s" * 32).decode("ascii")
+RUNTIME_DATA_ROOT = base64.urlsafe_b64encode(b"r" * 32).decode("ascii")
+SERVICE_SETTINGS_KEY_ID = "service-settings-v1"
+RUNTIME_DATA_KEY_ID = "runtime-data-v1"
 
 
 def _cloud_root() -> Path:
@@ -26,10 +32,12 @@ def _release_policy_fixture_root(tmp_path: Path, dependabot_text: str) -> Path:
         "AGENTS.md",
         ".env.example",
         "docker-compose.dev.yml",
+        "docker-compose.p5-b4-runtime-proof.yml",
         "docker-compose.prod.yml",
         "docker-compose.runtime.yml",
         "package.json",
         "Makefile",
+        "README.md",
         "docs",
         "deploy",
         "site",
@@ -60,6 +68,7 @@ def _release_policy_fixture_root(tmp_path: Path, dependabot_text: str) -> Path:
         "dev-compose.sh",
         "dev-frontend-recover.sh",
         "production-python-extras-smoke.sh",
+        "verify-release-bundle-manifest.py",
     ):
         (fixture_scripts / name).symlink_to(cloud_root / "scripts" / name)
 
@@ -71,7 +80,7 @@ def _run_release_policy_with_restricted_path(
 ) -> subprocess.CompletedProcess[str]:
     restricted_bin = tmp_path / "release-policy-bin"
     restricted_bin.mkdir(exist_ok=True)
-    for command in ("awk", "cmp", "cut", "dirname", "grep"):
+    for command in ("awk", "cmp", "cut", "dirname", "git", "grep"):
         command_path = shutil.which(command)
         assert command_path is not None
         destination = restricted_bin / command
@@ -165,9 +174,7 @@ def test_dev_compose_wrapper_layers_local_env_for_frontend_token(
         "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=base-token\n"
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET=base-admin-secret\n"
     )
-    (fixture_root / ".env.local").write_text(
-        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=local-token\n"
-    )
+    (fixture_root / ".env.local").write_text("NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=local-token\n")
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -202,13 +209,13 @@ def test_dev_compose_wrapper_layers_local_env_for_frontend_token(
 
     frontend_block = _compose_service_block(dev_compose, "frontend")
     assert (
-        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
-        in frontend_block
+        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}" in frontend_block
     )
     for forbidden_secret in (
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
         "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
         "NPCINK_CLOUD_PORTAL_JWT_SECRET",
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
@@ -242,10 +249,7 @@ def test_media_upload_proxy_overrides_are_exact_and_bounded() -> None:
         assert "client_body_timeout 60s;" in block
 
     for text in (dev, prod):
-        assert (
-            "limit_req_zone $binary_remote_addr "
-            "zone=media_upload_rate:10m rate=2r/s;"
-        ) in text
+        assert ("limit_req_zone $binary_remote_addr zone=media_upload_rate:10m rate=2r/s;") in text
         assert "limit_conn_zone $binary_remote_addr zone=media_upload_conn:10m;" in text
         assert "limit_conn_zone $server_name zone=media_upload_global_conn:1m;" in text
         assert "limit_req_status 429;" in text
@@ -303,9 +307,7 @@ def test_media_upload_proxy_overrides_are_exact_and_bounded() -> None:
     assert "  caddy:" not in runtime_compose
 
     prod_real_ip_trust = {
-        line.strip()
-        for line in prod.splitlines()
-        if line.strip().startswith("set_real_ip_from ")
+        line.strip() for line in prod.splitlines() if line.strip().startswith("set_real_ip_from ")
     }
     assert prod_real_ip_trust == {
         "set_real_ip_from 172.28.0.1;",
@@ -324,9 +326,7 @@ def test_media_pull_proxy_is_exact_get_only_streaming_and_independently_bounded(
     configs = {
         "dev": (cloud_root / "deploy" / "nginx.dev.conf").read_text(),
         "prod": (cloud_root / "deploy" / "nginx.prod.conf").read_text(),
-        "domain": (
-            cloud_root / "deploy" / "magick-domain-nginx.conf.template"
-        ).read_text(),
+        "domain": (cloud_root / "deploy" / "magick-domain-nginx.conf.template").read_text(),
     }
     location = r'~ "^/v1/runtime/media/artifacts/art_[0-9a-f]{32}/download$"'
 
@@ -351,10 +351,7 @@ def test_media_pull_proxy_is_exact_get_only_streaming_and_independently_bounded(
         block = _nginx_location_block(text, location)
         assert "limit_except GET {" in block
         assert "deny all;" in block
-        assert (
-            "limit_req_zone $binary_remote_addr "
-            "zone=media_pull_rate:10m rate=5r/s;"
-        ) in text
+        assert ("limit_req_zone $binary_remote_addr zone=media_pull_rate:10m rate=5r/s;") in text
         assert "limit_conn_zone $binary_remote_addr zone=media_pull_conn:10m;" in text
         assert "limit_conn_zone $server_name zone=media_pull_global_conn:1m;" in text
         block = _nginx_location_block(text, location)
@@ -381,9 +378,7 @@ def test_media_pull_proxy_is_exact_get_only_streaming_and_independently_bounded(
     assert "proxy_pass http://$npcink_ai_cloud_api;" in _nginx_location_block(
         configs["dev"], location
     )
-    assert "proxy_pass __UPSTREAM__;" in _nginx_location_block(
-        configs["domain"], location
-    )
+    assert "proxy_pass __UPSTREAM__;" in _nginx_location_block(configs["domain"], location)
 
 
 def test_production_api_trusts_the_same_pinned_network_used_by_compose() -> None:
@@ -418,9 +413,7 @@ def test_production_api_trusts_the_same_pinned_network_used_by_compose() -> None
 def test_formal_runtime_requires_the_external_tls_edge_contract() -> None:
     cloud_root = _cloud_root()
     loader = (cloud_root / "deploy" / "remote-load-and-up.sh").read_text()
-    bind_domain = (
-        cloud_root / "deploy" / "bind-domain-to-ssh-host.sh"
-    ).read_text()
+    bind_domain = (cloud_root / "deploy" / "bind-domain-to-ssh-host.sh").read_text()
     env_example = (cloud_root / ".env.example").read_text()
     prod_compose = (cloud_root / "docker-compose.prod.yml").read_text()
     runtime_compose = (cloud_root / "docker-compose.runtime.yml").read_text()
@@ -443,27 +436,39 @@ def test_formal_runtime_requires_the_external_tls_edge_contract() -> None:
     edge_gate_call = "\nrequire_external_edge_for_formal_runtime\n"
     assert loader.count(edge_gate_call) == 1
     assert loader.index(edge_gate_call) < loader.index(
-        'npcink_ai_cloud_compose "${ROOT_DIR}" up'
+        '\nif [ "${LOAD_MODE}" = "data-only" ]; then\n'
     )
 
     assert "NPCINK_CLOUD_DOMAIN_NAME=" in env_example
     assert "NPCINK_CLOUD_EXTERNAL_EDGE_READY=false" in env_example
     assert (
-        'UPSTREAM_URL="${NPCINK_CLOUD_DOMAIN_UPSTREAM_URL:-http://127.0.0.1:8010}"'
-        in bind_domain
+        'UPSTREAM_URL="${NPCINK_CLOUD_DOMAIN_UPSTREAM_URL:-http://127.0.0.1:8010}"' in bind_domain
     )
-    assert "parsed.hostname != \"127.0.0.1\" or port != 8010" in bind_domain
-    assert "openssl x509" in bind_domain
-    assert "TLS certificate and private key do not match" in bind_domain
+    assert 'parsed.hostname != "127.0.0.1" or port != 8010' in bind_domain
+    assert 'CERTIFICATE_PATH="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"' in bind_domain
+    assert 'PRIVATE_KEY_PATH="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"' in bind_domain
+    assert "ssl_certificate ${FAKE_NGINX_CERT_PATH}" not in bind_domain
+    assert "certificate and private key do not match" in bind_domain
+    assert "checkend 2592000" in bind_domain
     assert "secrets.token_hex(16)" in bind_domain
     assert "trap cleanup EXIT" in bind_domain
     assert "trap on_exit EXIT" in bind_domain
-    assert 'TLS private key must not grant any group or other permissions' in bind_domain
-    assert 'umask 077' in bind_domain
+    assert "Certbot live symlink" in bind_domain
+    assert "/etc/letsencrypt/archive" in bind_domain
+    assert "private-key archive target must not grant group or other permissions" in bind_domain
+    assert "umask 077" in bind_domain
     assert 'install -d -m 700 -- "${REMOTE_TMP_DIR}"' in bind_domain
     assert 'test "$(stat -c \'%a\' "${REMOTE_TMP_DIR}")" = "700"' in bind_domain
-    assert 'chmod 600 "${REMOTE_TMP_KEY}"' in bind_domain
-    assert '"${SSH_TARGET}:${REMOTE_TMP_KEY}"' in bind_domain
+    assert "REMOTE_TMP_CERT" not in bind_domain
+    assert "REMOTE_TMP_KEY" not in bind_domain
+    assert "REMOTE_CERT_DIR" not in bind_domain
+    assert "ssl_certificate __SSL_CERT__;" not in bind_domain
+    assert "remote_shell_arg() {" in bind_domain
+    assert "import shlex" in bind_domain
+    assert "shlex.quote(sys.argv[1])" in bind_domain
+    assert 'remote_command+=" $(remote_shell_arg "${remote_arg}")"' in bind_domain
+    assert 'ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "${remote_command}"' in bind_domain
+    assert '"${SSH_TARGET}" bash -s --' not in bind_domain
     assert '--filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}"' in (
         bind_domain
     )
@@ -472,13 +477,44 @@ def test_formal_runtime_requires_the_external_tls_edge_contract() -> None:
     assert "apt-get" not in bind_domain
     assert "Install prerequisites before running the migration helper" in bind_domain
     prepare_branch = bind_domain.split('if [ "${PREPARE_ONLY}" = "1" ]; then', 1)[1]
+    assert prepare_branch.index("restore_nginx_files") < prepare_branch.index("exit 0")
+    assert prepare_branch.index("ROLLBACK_REQUIRED=0") < prepare_branch.index(
+        "TRANSACTION_COMMITTED=1"
+    )
+    assert prepare_branch.index("TRANSACTION_COMMITTED=1") < prepare_branch.index(
+        "release_deploy_lock"
+    )
     assert prepare_branch.index("exit 0") < prepare_branch.index("systemctl restart nginx")
-    caddy_guard = bind_domain.index('if [ "${PREPARE_ONLY}" != "1" ]; then')
-    nginx_restart = bind_domain.index("systemctl restart nginx", caddy_guard)
-    assert caddy_guard < nginx_restart
-    assert "rollback_remote_changes" in bind_domain
-    assert 'restore_target "${SSL_KEY_REMOTE}" key' in bind_domain
-    assert "restoring the previous host NGINX files and service state" in bind_domain
+    assert 'DEPLOY_LOCK_DIR="${REMOTE_DIR}/.deploy-lock"' in bind_domain
+    lock_acquire = bind_domain.index('mkdir -- "${DEPLOY_LOCK_DIR}"')
+    freeze_nginx = bind_domain.index('backup_target "${SITE_AVAILABLE}"')
+    freeze_caddy = bind_domain.index("done < <(docker ps -q")
+    stop_caddy = bind_domain.index('docker stop "${ORIGINAL_CADDY_IDS[@]}"')
+    nginx_restart = bind_domain.index("systemctl restart nginx", stop_caddy)
+    edge_health = bind_domain.index('--resolve "${DOMAIN}:443:127.0.0.1"')
+    transaction_commit = bind_domain.index("TRANSACTION_COMMITTED=1", edge_health)
+    lock_release = bind_domain.index("release_deploy_lock", transaction_commit)
+    assert lock_acquire < freeze_nginx < freeze_caddy < stop_caddy < nginx_restart
+    assert nginx_restart < edge_health < transaction_commit < lock_release
+    release_lock_body = bind_domain.split("release_deploy_lock() {", 1)[1].split("\n}", 1)[0]
+    assert 'if ! rmdir -- "${DEPLOY_LOCK_DIR}"' in release_lock_body
+    assert "PRESERVE_ROLLBACK_EVIDENCE=1" in release_lock_body
+    assert "return 1" in release_lock_body
+    assert '[ "${TRANSACTION_COMMITTED}" != "1" ]' in bind_domain
+    assert 'assert_safe_directory "/etc/nginx/sites-available"' in bind_domain
+    assert 'assert_safe_directory "/etc/nginx/sites-enabled"' in bind_domain
+    assert "existing sites-available config must not be a symlink" in bind_domain
+    unlink_candidate_target = bind_domain.index('rm -f -- "${SITE_AVAILABLE}" "${SITE_ENABLED}"')
+    install_candidate = bind_domain.index(
+        'install -m 644 -- "${REMOTE_TMP_CONF}" "${SITE_AVAILABLE}"'
+    )
+    assert freeze_nginx < unlink_candidate_target < install_candidate
+    assert "rollback_edge_transaction" in bind_domain
+    assert 'docker start "${ORIGINAL_CADDY_IDS[@]}"' in bind_domain
+    assert "verify_original_caddy_running" in bind_domain
+    assert (
+        "restoring the previous host NGINX state and exact retired Caddy containers" in bind_domain
+    )
     assert '"${UPSTREAM_URL%/}/health/live"' in bind_domain
     assert '--resolve "${DOMAIN}:443:127.0.0.1"' in bind_domain
     assert "NPCINK_CLOUD_EXTERNAL_EDGE_READY=true" in bind_domain
@@ -498,27 +534,36 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
     checklist = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
     playbook = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
     deploy_guide = (cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md").read_text()
-    release_policy = (
-        cloud_root / "docs" / "cloud-production-release-policy-v1.md"
-    ).read_text()
+    release_policy = (cloud_root / "docs" / "cloud-production-release-policy-v1.md").read_text()
+    deploy_to_ssh = (cloud_root / "deploy" / "deploy-to-ssh-host.sh").read_text()
+    cutover = (cloud_root / "deploy" / "runtime-data-encryption-cutover.sh").read_text()
 
     encryption_secret = "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
     encryption_key_id = "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"
+    service_secret = "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"
+    service_key_id = "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"
     backend_services = ("api", "worker", "callback-worker", "ops-worker")
 
     assert env_example.count(f"{encryption_secret}=") == 1
     assert env_example.count(f"{encryption_key_id}=") == 1
+    assert env_example.count(f"{service_secret}=") == 1
+    assert env_example.count(f"{service_key_id}=") == 1
     assert deploy_smoke.count(encryption_secret) >= 2
     assert deploy_smoke.count(encryption_key_id) >= 2
+    assert deploy_smoke.count(service_secret) >= 2
+    assert deploy_smoke.count(service_key_id) >= 2
 
     for service in backend_services:
         prod_block = _compose_service_block(prod_compose, service)
         assert encryption_secret in prod_block
         assert encryption_key_id in prod_block
+        assert service_secret in prod_block
+        assert service_key_id in prod_block
 
         runtime_block = _compose_service_block(runtime_compose, service)
         assert "env_file:" in runtime_block
         assert "- ${NPCINK_CLOUD_BACKEND_ENV_FILE:-.env.deploy}" in runtime_block
+        assert "pull_policy: never" in runtime_block
 
         dev_block = _compose_service_block(dev_compose, service)
         assert "env_file:" in dev_block
@@ -556,9 +601,10 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
     forbidden_frontend_secrets = (
         encryption_secret,
         encryption_key_id,
+        service_secret,
+        service_key_id,
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
-        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
         "NPCINK_CLOUD_PORTAL_JWT_SECRET",
         "NPCINK_CLOUD_DATABASE_URL",
     )
@@ -569,101 +615,142 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         for forbidden_secret in forbidden_frontend_secrets:
             assert forbidden_secret not in frontend_block
 
-    assert '127.0.0.1:${NPCINK_CLOUD_PORT:-8010}:8080' in prod_compose
+    assert "127.0.0.1:${NPCINK_CLOUD_PORT:-8010}:8080" in prod_compose
     assert '- "${NPCINK_CLOUD_PORT:-8010}:8080"' not in prod_compose
 
-    for phase in ("inventory", "dry-run", "apply", "verify"):
-        command = f"python -m app.dev.reencrypt_runtime_data {phase}"
-        assert command in playbook
-        assert command in deploy_guide
     maintenance_sections = (
-        playbook.split("### Runtime-data encryption key cutover", 1)[1].split(
+        playbook.split("### P1-E06 persisted-encryption dual-domain cutover", 1)[1].split(
             "## Worker Operations", 1
         )[0],
-        deploy_guide.split("## One-Time Runtime-Data Encryption Maintenance", 1)[1],
+        deploy_guide.split("## One-Time P1-E06 Dual-Domain Encryption Maintenance", 1)[1],
     )
     for maintenance in maintenance_sections:
-        assert maintenance.count("run --rm --no-deps --env-from-file") == 7
-        assert "--confirm-maintenance-window" in maintenance
-        assert (
-            maintenance.count(
-                "--old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
-            )
-            == 4
-        )
+        normalized_maintenance = " ".join(maintenance.split())
+        assert "deploy/runtime-data-encryption-cutover.sh" in maintenance
+        assert "deploy/deploy-to-ssh-host.sh --stage-only" in maintenance
+        assert "staged_release=/absolute/release-path" in maintenance
+        assert "p1_e06_off_host_backup_receipt.v1" in maintenance
+        assert "independent PostgreSQL 16" in normalized_maintenance
+        assert "0058 -> 0068" in maintenance
+        assert "release-one-off` stopped candidate" in maintenance
+        assert "docker exec -i --env VARIABLE_NAME" in maintenance
+        assert "env-file run option" in normalized_maintenance
+        assert "--env-from-file" not in maintenance
+        assert "off-host-receipt-verified.json" in maintenance
+        assert "activation-commit.json" in maintenance
+        assert "activation_committed_terminalization_incomplete" in maintenance
+        assert "/usr/bin/python3.11" in maintenance
         assert "--old-root-env NPCINK_CLOUD_ADMIN_SESSION_SECRET" not in maintenance
         assert "--old-root-env NPCINK_CLOUD_PORTAL_JWT_SECRET" not in maintenance
         assert "--old-root-env NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" not in maintenance
         assert "first raw-ciphertext cutover" in maintenance.lower()
-        assert "omits `--old-key-id`" in maintenance
-        assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root-secret>" in maintenance
-        assert "staged release" in maintenance
-        assert "postgres" in maintenance
-        assert "redis" in maintenance
-
-        assert 'RELEASE_STATE_ROOT="${REMOTE_DIR}/.release-state"' in maintenance
+        assert "`--old-key-id`" in maintenance
+        assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-runtime-root>" in maintenance
         assert (
-            'RELEASE_STATE_DIR="${RELEASE_STATE_ROOT}/${STAGED_RELEASE_NAME}"'
+            "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-service-settings-root>"
             in maintenance
         )
-        assert 'RELEASE_ENV_FILE="${RELEASE_STATE_DIR}/env.deploy"' in maintenance
-        assert (
-            'ENV_SOURCE="${RELEASE_STATE_ROOT}/${CURRENT_RELEASE_NAME}/env.deploy"'
-            in maintenance
-        )
-        assert 'LEGACY_ENV_SOURCE="${REMOTE_DIR}/.env.deploy"' in maintenance
-        assert "one-time transition" in maintenance
-        assert (
-            'install -m 600 "${ENV_SOURCE}" "${RELEASE_ENV_FILE}"' in maintenance
-        )
-        assert 'stat -c \'%a\' "${RELEASE_ENV_FILE}"' in maintenance
-        assert maintenance.index("install -m 600") < maintenance.index("docker compose")
-        assert "deploy/deploy-to-ssh-host.sh" in maintenance
-        assert "deploy/remote-load-and-up.sh" in maintenance
-        assert "general deploy helper" in maintenance
-
-        raw_commands = maintenance.split("From the staged release directory", 1)[1].split(
-            "The first raw-ciphertext cutover", 1
-        )[0]
-        assert raw_commands.count("run --rm --no-deps --env-from-file") == 4
-        assert "--old-key-id" not in raw_commands
-
-        future_commands = maintenance.split("export OLD_RUNTIME_DATA_KEY_ID", 1)[1].split(
-            "```", 1
-        )[0]
-        assert future_commands.count("run --rm --no-deps --env-from-file") == 3
-        assert (
-            'inventory --old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"' in future_commands
-        )
-        assert (
-            future_commands.count('--old-key-id "${OLD_RUNTIME_DATA_KEY_ID}"') == 3
-        )
-        assert (
-            future_commands.count(
-                "--old-root-env NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"
-            )
-            == 2
-        )
-        assert "positionally" in maintenance
+        assert "python -m app.dev.reencrypt_service_secrets" in maintenance
+        assert "remote-load-and-up.sh" in maintenance
+        assert "prepare-only" in maintenance
+        assert ".deploy-lock" in maintenance
+        assert ".cutover-failed" in maintenance
+        assert "cutover-result.json" in maintenance
+        assert "Migration `0061`" in maintenance
         assert "Normal runtime has no legacy or dual-read path" in maintenance
-        assert "migration-only" in maintenance
-    assert "api`, `worker`, `callback-worker`, and `ops-worker" in playbook
-    assert "old database backup" in playbook
-    assert "normal deploy/secret rotation must not directly rotate" in checklist
-    assert "bundle-backed staged release API image" in checklist
-    assert "without requiring host application source or Python" in checklist
-    assert "before the first staged Compose command" in checklist
-    assert "supplies old key IDs to `inventory`" in checklist
+        assert "migration-only" in maintenance.lower()
+
+    assert "--stage-only)" in deploy_to_ssh
+    assert "--host-python)" in deploy_to_ssh
+    assert "NPCINK_CLOUD_DEPLOY_HOST_PYTHON:-/usr/bin/python3.11" in deploy_to_ssh
+    assert "Stage-only remote entry requires exactly five arguments." in deploy_to_ssh
+    assert "cleanup_remote_incoming_on_exit" in deploy_to_ssh
+    assert "--stage-only does not accept an env file" in deploy_to_ssh
+    stage_branch = deploy_to_ssh.split('if [ "${STAGE_ONLY}" = "1" ]; then', 2)[2]
+    stage_branch = stage_branch.split("atomic_set_current()", 1)[0]
+    assert "verify-release-bundle.sh" in stage_branch
+    assert "--pre-load" in stage_branch
+    assert "staged_release=%s" in stage_branch
+    for forbidden in (
+        "docker ",
+        "CURRENT_LINK",
+        "RELEASE_STATE_ROOT",
+        "remote-load-and-up.sh",
+        "remote-migrate.sh",
+    ):
+        assert forbidden not in stage_branch
+
+    for marker in (
+        'CONTRACT="p1_e06_runtime_data_encryption_cutover.v1"',
+        'EXPECTED_SOURCE_REVISION="20260710_0058"',
+        'EXPECTED_TARGET_REVISION="20260717_0068"',
+        "p1_e06_off_host_backup_handoff.v1",
+        "p1_e06_off_host_backup_receipt.v1",
+        "p1_e06_independent_pg16_restore.v1",
+        "NPCINK_CLOUD_LOAD_MODE=prepare-only",
+        "systemctl is-active --quiet nginx",
+        'nginx -t >"${EVIDENCE_DIR}/host-nginx-test.log"',
+        'CURRENT_STAGE="switch-production-data-services-to-target-images"',
+        "off-host-receipt-verified.json",
+        "activation-commit.json",
+        "activation_committed_terminalization_incomplete",
+        "stop_expected_services_and_verify",
+    ):
+        assert marker in cutover
+    assert "--env-from-file" not in cutover
+    assert "run --rm --no-deps --pull never" not in cutover
+    for name in (
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
+        "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
+        "NPCINK_CLOUD_DATABASE_URL",
+    ):
+        assert f"-e {name}" in cutover
+
+    ordered_cutover_markers = (
+        'CURRENT_STAGE="verify-local-docker-and-host-edge"',
+        'CURRENT_STAGE="prepare-exact-bundle-images"',
+        'CURRENT_STAGE="create-fresh-custom-backup"',
+        'CURRENT_STAGE="wait-for-off-host-backup-receipt"',
+        'CURRENT_STAGE="independent-postgres16-restore"',
+        'CURRENT_STAGE="switch-production-data-services-to-target-images"',
+        'CURRENT_STAGE="production-migrate-0058-to-head"',
+        'CURRENT_STAGE="commit-validated-activation"',
+        'CURRENT_STAGE="cleanup-rollback-images-and-map"',
+        'CURRENT_STAGE="publish-terminal-success-evidence"',
+        'CURRENT_STAGE="publish-global-activation-receipt"',
+        'CURRENT_STAGE="release-deploy-lock"',
+        'CURRENT_STAGE="complete"',
+    )
+    positions = [cutover.index(marker) for marker in ordered_cutover_markers]
+    assert positions == sorted(positions)
+
+    assert "normal deploy/secret rotation must not directly rotate" in " ".join(checklist.split())
+    assert "stage-only upload/verification was allowed to precede this gate" in checklist
+    assert "operator-owned external Edge and TLS" in checklist
+    assert "Runtime Compose sets `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`" in checklist
+    assert "certificate-renewal owner" in checklist
+    assert "/usr/bin/python3.11" in checklist
+    assert "supplies old key IDs" in checklist
     assert "normal runtime has no legacy/dual-read path" in checklist
-    assert "migration-only tool remains available" in checklist
+    assert "accepts only active `rde.v1` and `sse.v1` envelopes" in checklist
+    assert "rejects raw Fernet" in checklist
     assert encryption_secret in release_policy
-    assert "old application revision" in release_policy
-    assert "run --rm --no-deps --env-from-file" in release_policy
-    assert "future `rde.v1` rotations" in release_policy
-    assert "bundle excludes `.env.deploy`" in release_policy
-    assert "before any Compose command" in " ".join(release_policy.split())
-    assert "pass each old key ID to `inventory`" in release_policy
+    assert "application revision" in release_policy
+    assert "release-one-off` stopped candidate" in release_policy
+    assert "docker exec -i --env VARIABLE_NAME" in release_policy
+    assert "pull_policy: never" in release_policy
+    assert "Future `rde.v1`" in release_policy
+    assert "certificate-renewal owner" in release_policy
+    assert "Pure stage-only archive upload/verification" in release_policy
+    assert "pass each old key ID" in release_policy
     assert "Normal runtime has no legacy or dual-read path" in release_policy
+    for surface in (playbook, deploy_guide, checklist, release_policy):
+        assert "--env-from-file" not in surface
+        assert "run --rm --no-deps --pull never" not in surface
 
 
 def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_env() -> None:
@@ -788,13 +875,16 @@ def test_env_example_production_payload_validates_with_canonical_names(
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=": "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=" + ("b" * 32),
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET=": "NPCINK_CLOUD_ADMIN_SESSION_SECRET=" + ("a" * 32),
         "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=": (
-            "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=" + ("s" * 32)
+            "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=" + SERVICE_SETTINGS_ROOT
+        ),
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=": (
+            "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=" + SERVICE_SETTINGS_KEY_ID
         ),
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=": (
-            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=" + ("r" * 32)
+            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=" + RUNTIME_DATA_ROOT
         ),
         "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=": (
-            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=runtime-data-v1"
+            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=" + RUNTIME_DATA_KEY_ID
         ),
         "NPCINK_CLOUD_PORTAL_JWT_SECRET=": "NPCINK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
         "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=": (
@@ -815,8 +905,10 @@ def test_env_example_production_payload_validates_with_canonical_names(
     assert settings.environment == "production"
     assert settings.admin_bootstrap_token == "b" * 32
     assert settings.admin_session_secret == "a" * 32
-    assert settings.runtime_data_encryption_secret == "r" * 32
-    assert settings.runtime_data_encryption_key_id == "runtime-data-v1"
+    assert settings.service_settings_secret == SERVICE_SETTINGS_ROOT
+    assert settings.service_settings_encryption_key_id == SERVICE_SETTINGS_KEY_ID
+    assert settings.runtime_data_encryption_secret == RUNTIME_DATA_ROOT
+    assert settings.runtime_data_encryption_key_id == RUNTIME_DATA_KEY_ID
     assert settings.portal_jwt_issuer == "npcink-ai-cloud"
     assert settings.portal_jwt_audience == "npcink-ai-cloud-portal"
     assert settings.ops_cadence_poll_seconds == 30
@@ -836,9 +928,12 @@ def test_openai_provider_ceiling_supports_bounded_long_form_runtime(monkeypatch)
     readme_text = (cloud_root / "README.md").read_text()
 
     assert settings.openai_timeout_seconds == 60.0
-    assert compose_text.count(
-        "NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS: ${NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS:-60}"
-    ) == 3
+    assert (
+        compose_text.count(
+            "NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS: ${NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS:-60}"
+        )
+        == 3
+    )
     assert "OpenAI provider ceiling defaults to 60 seconds" in readme_text
     assert "shorter tasks remain constrained by the smaller value" in readme_text
 
@@ -851,9 +946,13 @@ def test_settings_ignore_retired_admin_and_openai_aliases(monkeypatch) -> None:
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", "s" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", "r" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", "runtime-data-v1")
+    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", SERVICE_SETTINGS_ROOT)
+    monkeypatch.setenv(
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
+        SERVICE_SETTINGS_KEY_ID,
+    )
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", RUNTIME_DATA_ROOT)
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", RUNTIME_DATA_KEY_ID)
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
     monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")
@@ -878,9 +977,13 @@ def test_retired_ops_secret_does_not_satisfy_production_config(monkeypatch) -> N
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
     monkeypatch.delenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", raising=False)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", "s" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", "r" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", "runtime-data-v1")
+    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", SERVICE_SETTINGS_ROOT)
+    monkeypatch.setenv(
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
+        SERVICE_SETTINGS_KEY_ID,
+    )
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET", RUNTIME_DATA_ROOT)
+    monkeypatch.setenv("NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID", RUNTIME_DATA_KEY_ID)
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
     monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")
@@ -899,8 +1002,6 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     release_smoke_script = (_cloud_root() / "deploy" / "release-smoke.sh").read_text()
     remote_smoke_script = (_cloud_root() / "deploy" / "remote-smoke.sh").read_text()
     secret_rotation_script = (_cloud_root() / "deploy" / "validate-secret-rotation.sh").read_text()
-    env_push_script = (_cloud_root() / "deploy" / "env-to-ssh-host.sh").read_text()
-    remote_env_script = (_cloud_root() / "deploy" / "remote-env-upsert.sh").read_text()
     remote_migrate_script = (_cloud_root() / "deploy" / "remote-migrate.sh").read_text()
     deploy_to_ssh_script = (_cloud_root() / "deploy" / "deploy-to-ssh-host.sh").read_text()
     common_script = (_cloud_root() / "deploy" / "common.sh").read_text()
@@ -959,14 +1060,18 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "/internal/service/observability/summary" in remote_smoke_script
     assert "/health/operational-ready" in remote_smoke_script
     assert '"policy":{"allow_fallback":true}}' in remote_smoke_script
-    assert 'openssl dgst -sha256 -hmac "${SECRET}"' in remote_smoke_script
-    assert 'openssl dgst -sha256 -hmac "${secret_hash}"' not in remote_smoke_script
+    assert 'openssl dgst -sha256 -hmac "${SECRET}"' not in remote_smoke_script
+    assert 'NPCINK_CLOUD_HMAC_SECRET="${SECRET}" python3 -c' in remote_smoke_script
+    assert 'os.environ.pop("NPCINK_CLOUD_HMAC_SECRET", "")' in remote_smoke_script
     assert "max_retries" not in remote_smoke_script
     assert "/internal/service/observability/summary" in secret_rotation_script
-    assert 'RESTART_SERVICES="proxy,api,worker,callback-worker,ops-worker"' in env_push_script
-    assert 'RESTART_SERVICES="proxy,api,worker,callback-worker,ops-worker"' in remote_env_script
-    assert "up -d --pull never --no-build" in remote_migrate_script
-    assert "worker callback-worker ops-worker" in remote_migrate_script
+    assert not (_cloud_root() / "deploy" / "env-to-ssh-host.sh").exists()
+    assert not (_cloud_root() / "deploy" / "remote-env-upsert.sh").exists()
+    assert "up -d --pull never --no-build" not in remote_migrate_script
+    assert "worker callback-worker ops-worker" not in remote_migrate_script
+    assert "Migration completed without starting application services" in (
+        remote_migrate_script
+    )
     assert "SSH identity file not found" in deploy_to_ssh_script
     assert "BatchMode=yes" in deploy_to_ssh_script
     assert "ConnectTimeout" in deploy_to_ssh_script
@@ -990,7 +1095,10 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "npcink_ai_cloud_run_timed" in common_script
     assert "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST" in remote_load_script
     assert "configure_ready_origin_headers" in remote_load_script
-    assert "compose up services" in remote_load_script
+    assert "up --no-start --pull never --no-build --no-deps --force-recreate" in (
+        remote_load_script
+    )
+    assert 'docker start "${container_ids_to_start[@]}"' in remote_load_script
     assert "NPCINK_CLOUD_REQUIRED_PROVIDER_CAPABILITIES" in provider_matrix_smoke
     assert "db_managed_provider_connections" in provider_matrix_smoke
     assert '"direct_wordpress_write": False' in provider_matrix_smoke
@@ -998,9 +1106,7 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
 
 
 def test_remote_deploy_keeps_env_file_private_end_to_end() -> None:
-    deploy_script = (
-        _cloud_root() / "deploy" / "deploy-to-ssh-host.sh"
-    ).read_text()
+    deploy_script = (_cloud_root() / "deploy" / "deploy-to-ssh-host.sh").read_text()
 
     assert 'chmod 0700 $(remote_shell_arg "${REMOTE_INCOMING_DIR}")' in deploy_script
     upload_marker = 'scp "${SCP_ARGS[@]}" "${ENV_FILE}" "${SSH_TARGET}:${REMOTE_ENV_PATH}"'
@@ -1009,14 +1115,16 @@ def test_remote_deploy_keeps_env_file_private_end_to_end() -> None:
     assert restrict_marker in deploy_script
     assert deploy_script.index(upload_marker) < deploy_script.index(restrict_marker)
     assert (
-        r'''test \"\$(stat -c '%a' $(remote_shell_arg "${REMOTE_ENV_PATH}"))\" = 600'''
+        r"""test \"\$(stat -c '%a' $(remote_shell_arg "${REMOTE_ENV_PATH}"))\" = 600"""
         in deploy_script
     )
     assert 'RELEASE_STATE_ROOT="${REMOTE_DIR}/.release-state"' in deploy_script
     assert 'RELEASE_STATE_DIR="${RELEASE_STATE_ROOT}/${RELEASE_NAME}"' in deploy_script
     assert 'RELEASE_ENV_FILE="${RELEASE_STATE_DIR}/env.deploy"' in deploy_script
-    assert 'install -d -m 0700 "${RELEASE_STATE_ROOT}" "${RELEASE_STATE_DIR}"' in deploy_script
-    assert 'install -m 0600 "${NEW_ENV_SOURCE}" "${RELEASE_ENV_FILE}"' in deploy_script
+    assert 'ensure_private_release_state_directory "${RELEASE_STATE_ROOT}"' in deploy_script
+    assert 'ensure_private_release_state_directory "${RELEASE_STATE_DIR}"' in deploy_script
+    assert 'mv -n "${RELEASE_ENV_TMP}" "${RELEASE_ENV_FILE}"' in deploy_script
+    assert "Deployment env source must be a root-owned" in deploy_script
     assert 'export NPCINK_CLOUD_ENV_FILE="${RELEASE_ENV_FILE}"' in deploy_script
     assert 'export NPCINK_CLOUD_BACKEND_ENV_FILE="${RELEASE_ENV_FILE}"' in deploy_script
     assert '"${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"' not in deploy_script
@@ -1025,9 +1133,7 @@ def test_remote_deploy_keeps_env_file_private_end_to_end() -> None:
 def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
     cloud_root = _cloud_root()
     ci_workflow = (cloud_root / ".github" / "workflows" / "ci.yml").read_text()
-    deploy_workflow = (
-        cloud_root / ".github" / "workflows" / "deploy-production.yml"
-    ).read_text()
+    deploy_workflow = (cloud_root / ".github" / "workflows" / "deploy-production.yml").read_text()
     maintenance_workflow = (
         cloud_root / ".github" / "workflows" / "production-maintenance.yml"
     ).read_text()
@@ -1068,10 +1174,9 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     )
     assert "NPCINK_CLOUD_ENVIRONMENT" in deploy_bundle_smoke
     assert "NPCINK_CLOUD_SKIP_FRONTEND_IMAGE" in deploy_bundle_smoke
+    assert 'docker image rm "${rollback_reference}"' in deploy_bundle_smoke
 
-    assert 'if [ "${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}" = "1" ]; then' in (
-        remote_smoke_script
-    )
+    assert 'if [ "${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}" = "1" ]; then' in (remote_smoke_script)
     assert "Skipping frontend page checks" in remote_smoke_script
     assert "buyer-facing home page should succeed" in remote_smoke_script
 
@@ -1095,9 +1200,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "proxy_set_header X-Forwarded-Host $npcink_forwarded_host;" in nginx_prod_conf
     assert "proxy_set_header X-Real-IP $remote_addr;" in nginx_prod_conf
     assert "proxy_set_header X-Forwarded-For $remote_addr;" in nginx_prod_conf
-    assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" not in (
-        nginx_prod_conf
-    )
+    assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" not in (nginx_prod_conf)
     assert "proxy_pass http://npcink_ai_cloud_api;" in nginx_prod_conf
     assert "./site:/usr/share/nginx/html/npcink-site:ro" in runtime_compose_text
     assert 'git -C "${CLOUD_DIR}" archive HEAD --' in bundle_script
@@ -1108,16 +1211,14 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "location /terms/" in nginx_prod_conf
     assert "root /usr/share/nginx/html/npcink-site;" in nginx_prod_conf
     assert "./site:/usr/share/nginx/html/npcink-site:ro" in compose_text
-    assert "\"${BASE_URL%/}/terms\"" in remote_smoke_script
+    assert '"${BASE_URL%/}/terms"' in remote_smoke_script
     assert "/terms/en/terms.html" in remote_smoke_script
     assert "/terms/zh/terms.html" in remote_smoke_script
     assert "/terms/styles.css" in remote_smoke_script
     assert "--skip-terms-checks" in remote_smoke_script
     assert "Npcink Cloud Legal Documents" in remote_smoke_script
     assert "data.result.images" in remote_smoke_script
-    assert 'INCLUDE_EXTERNAL_IMAGES="${NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES:-1}"' in (
-        bundle_script
-    )
+    assert 'INCLUDE_EXTERNAL_IMAGES="${NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES:-1}"' in (bundle_script)
     assert "must include every locked external image" in bundle_script
     assert 'IMAGE_LOCK="deploy/image-lock/production-images.json"' in bundle_script
     assert "external-plan" in bundle_script
@@ -1168,17 +1269,15 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "docker save" not in bundle_script
     assert 'python3 "${MANIFEST_HELPER}" pack' in bundle_script
     assert '--output "${DIST_DIR}/deploy-bundle.tgz"' in bundle_script
-    assert "actions: write" in ci_workflow
+    assert "actions: read" in ci_workflow
+    assert "actions: read" in deploy_workflow
     external_images_default = 'NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"'
-    assert external_images_default in ci_workflow
+    assert external_images_default not in ci_workflow
     assert external_images_default in deploy_workflow
     assert "PROD_INCLUDE_EXTERNAL_IMAGES" not in ci_workflow
     assert "PROD_INCLUDE_EXTERNAL_IMAGES" not in deploy_workflow
     assert "deploy_required:" in ci_workflow
-    assert "needs.classify.outputs.deploy_required == 'true'" in ci_workflow
-    assert ".github/workflows/ci.yml|.github/workflows/deploy-production.yml" in (
-        ci_workflow
-    )
+    assert ".github/workflows/ci.yml|.github/workflows/deploy-production.yml" in (ci_workflow)
     assert "docker-compose*.yml|Dockerfile*|*/Dockerfile*|deploy/*.sh" in ci_workflow
     assert "needs: [classify, backend-scope]" in ci_workflow
     assert "needs['backend-scope'].outputs.requires_full_backend == '1'" in ci_workflow
@@ -1192,8 +1291,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "verify loaded image IDs" in remote_load_script
     assert "static_terms_only" in ci_workflow
     assert "site/terms/*" in ci_workflow
-    assert "needs: [secret-scan, classify, backend, frontend, static-terms]" in ci_workflow
-    assert "needs['secret-scan'].result == 'success'" in ci_workflow
+    assert "- secret-scan" in ci_workflow
     assert "backend-scope:" in ci_workflow
     assert "backend-targeted:" in ci_workflow
     assert "backend-static:" in ci_workflow
@@ -1202,12 +1300,19 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "shard: [1, 2, 3]" in ci_workflow
     assert "scripts/select-pytest-shard.py" in ci_workflow
     assert "backend pytest shards did not pass" in ci_workflow
-    assert "bash deploy/deploy-static-terms-to-ssh-host.sh" in ci_workflow
-    assert "post-production-smoke:" in ci_workflow
-    assert "needs['deploy-production'].result == 'success'" in ci_workflow
-    assert "bash deploy/small-customer-trial-preflight.sh" in ci_workflow
-    assert "--require-alipay-enabled" in ci_workflow
-    assert "bash deploy/release-smoke.sh --base-url" in ci_workflow
+    assert "bash deploy/deploy-static-terms-to-ssh-host.sh" not in ci_workflow
+    assert "post-production-smoke:" not in ci_workflow
+    assert "bash deploy/deploy-to-ssh-host.sh" not in ci_workflow
+    assert "environment: production" not in ci_workflow
+    assert "workflow_dispatch:" in deploy_workflow
+    assert "workflow_run:" not in deploy_workflow
+    assert "environment: production" in deploy_workflow
+    assert "Approved for production validation by operator." in deploy_workflow
+    assert "select(.head_sha == $sha)" in deploy_workflow
+    assert 'test "${conclusion}" = "success"' in deploy_workflow
+    assert "bash deploy/small-customer-trial-preflight.sh" in deploy_workflow
+    assert "--require-alipay-enabled" in deploy_workflow
+    assert "bash deploy/release-smoke.sh --base-url" in deploy_workflow
     assert "ci-observability:" in ci_workflow
     assert "python3 scripts/report-release-timing.py" in ci_workflow
     assert "artifacts/pytest-backend-shard-${{ matrix.shard }}.xml" in ci_workflow
@@ -1225,11 +1330,9 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert (cloud_root / "ci" / "pytest-backend-durations.json").is_file()
     assert "deploy:static-terms:ssh" in package_json
     assert "release:junit-timing" in package_json
-    assert "CURRENT_LINK=\"${REMOTE_DIR}/current\"" in static_terms_deploy_script
-    assert "tar czf \"${TERMS_BUNDLE}\" -C \"${ROOT_DIR}/site\" terms" in (
-        static_terms_deploy_script
-    )
-    assert "assert_public_static_page \"/terms\"" in static_terms_deploy_script
+    assert 'CURRENT_LINK="${REMOTE_DIR}/current"' in static_terms_deploy_script
+    assert 'tar czf "${TERMS_BUNDLE}" -C "${ROOT_DIR}/site" terms' in (static_terms_deploy_script)
+    assert 'assert_public_static_page "/terms"' in static_terms_deploy_script
     assert "Static terms deploy completed" in static_terms_deploy_script
 
     assert "name: Production Maintenance" in maintenance_workflow
@@ -1240,7 +1343,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "docker builder prune -af" in maintenance_workflow
     assert "docker system prune" not in maintenance_workflow
     assert "--volumes" not in maintenance_workflow
-    assert "rm -rf -- \"${release_dir}\"" in maintenance_workflow
+    assert 'rm -rf -- "${release_dir}"' in maintenance_workflow
 
 
 def test_static_terms_pages_are_in_release_tree() -> None:
@@ -1264,29 +1367,24 @@ def test_static_terms_pages_are_in_release_tree() -> None:
         assert (cloud_root / relative_path).is_file()
 
     assert not (cloud_root / "site" / ".DS_Store").exists()
-    assert "Npcink Cloud Terms of Service" in (
-        cloud_root / "site" / "terms" / "en" / "terms.html"
-    ).read_text()
-    assert "Npcink Cloud 服务条款" in (
-        cloud_root / "site" / "terms" / "zh" / "terms.html"
-    ).read_text()
+    assert (
+        "Npcink Cloud Terms of Service"
+        in (cloud_root / "site" / "terms" / "en" / "terms.html").read_text()
+    )
+    assert (
+        "Npcink Cloud 服务条款" in (cloud_root / "site" / "terms" / "zh" / "terms.html").read_text()
+    )
 
 
 def test_release_gate_documents_current_cloud_blockers() -> None:
     cloud_root = _cloud_root()
     checklist_text = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
     playbook_text = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
-    deploy_guide = (
-        cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md"
-    ).read_text()
+    deploy_guide = (cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md").read_text()
     release_smoke_script = (cloud_root / "deploy" / "release-smoke.sh").read_text()
     remote_smoke_script = (cloud_root / "deploy" / "remote-smoke.sh").read_text()
-    secret_rotation_script = (
-        cloud_root / "deploy" / "validate-secret-rotation.sh"
-    ).read_text()
-    release_smoke_env_example = (
-        cloud_root / "deploy" / "release-smoke.env.example"
-    ).read_text()
+    secret_rotation_script = (cloud_root / "deploy" / "validate-secret-rotation.sh").read_text()
+    release_smoke_env_example = (cloud_root / "deploy" / "release-smoke.env.example").read_text()
     release_smoke_workflow = (
         cloud_root / ".github" / "workflows" / "release-smoke.yml"
     ).read_text()
@@ -1325,8 +1423,8 @@ def test_release_gate_documents_current_cloud_blockers() -> None:
     assert "--prepare-only" in checklist_text
     assert "--prepare-only" in playbook_text
     assert "--prepare-only" in deploy_guide
-    assert "recorded `RETIRED_CADDY_IDS`" in deploy_guide
-    assert "stop host NGINX" in deploy_guide
+    assert "One locked remote transaction" in deploy_guide
+    assert "restarts and verifies those exact original" in deploy_guide
 
     for formal_https_smoke in (
         release_smoke_script,
@@ -1334,7 +1432,7 @@ def test_release_gate_documents_current_cloud_blockers() -> None:
         secret_rotation_script,
     ):
         assert "assert_json_non_empty() {" in formal_https_smoke
-        assert 'https://*)' in formal_https_smoke
+        assert "https://*)" in formal_https_smoke
         assert "data.tracing.otlp_configured" in formal_https_smoke
         assert "data.tracing.otlp_endpoint" in formal_https_smoke
         assert "data.tracing.trace_query_configured" in formal_https_smoke
@@ -1378,7 +1476,7 @@ def test_release_gate_documents_current_cloud_blockers() -> None:
     assert release_smoke_script.count('"data.principal_id"') >= 3
     assert '"data.member_ref"' not in release_smoke_script
     assert '"data.platform_admin_ref"' not in release_smoke_script
-    assert '200 | 303' in release_smoke_script
+    assert "200 | 303" in release_smoke_script
 
 
 def test_lightweight_release_policy_gate_is_documented(tmp_path: Path) -> None:
@@ -1448,7 +1546,9 @@ def test_lightweight_release_policy_gate_is_documented(tmp_path: Path) -> None:
     def assert_dependabot_config(config_text: str) -> None:
         assert yaml.safe_load(config_text) == expected_dependabot_config
 
-    extra_job_config = dependabot_text + """
+    extra_job_config = (
+        dependabot_text
+        + """
   - package-ecosystem: npm
     directory: /frontend
     schedule:
@@ -1460,6 +1560,7 @@ def test_lightweight_release_policy_gate_is_documented(tmp_path: Path) -> None:
     labels:
       - dependencies
 """
+    )
     adversarial_configs = (
         "version: 2\nupdates: []\n",
         "version: 2\n# open-pull-requests-limit: 2\nupdates: []\n",
@@ -1492,6 +1593,55 @@ def test_lightweight_release_policy_gate_is_documented(tmp_path: Path) -> None:
     assert nul_result.returncode != 0
     assert "does not match the canonical pre-GA policy" in nul_result.stderr
 
+    compose_seam_cases = (
+        (
+            "docker-compose.prod.yml",
+            "api",
+            "${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}",
+            "npcink-ai-cloud-api:prod",
+        ),
+        (
+            "docker-compose.runtime.yml",
+            "api",
+            "${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}",
+            "npcink-ai-cloud-api:prod",
+        ),
+        (
+            "docker-compose.prod.yml",
+            "release-one-off",
+            "${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}",
+            "npcink-ai-cloud-api:prod",
+        ),
+        (
+            "docker-compose.runtime.yml",
+            "release-one-off",
+            "${NPCINK_CLOUD_API_RELEASE_IMAGE:-npcink-ai-cloud-api:prod}",
+            "npcink-ai-cloud-api:prod",
+        ),
+    )
+    for index, (compose_name, service, governed_seam, literal_image) in enumerate(
+        compose_seam_cases
+    ):
+        case_root = tmp_path / f"invalid-compose-seam-{index}"
+        fixture_root = _release_policy_fixture_root(case_root, dependabot_text)
+        compose_path = fixture_root / compose_name
+        compose_text = (_cloud_root() / compose_name).read_text()
+        service_marker = f"  {service}:\n"
+        before_service, service_and_after = compose_text.split(service_marker, 1)
+        governed_line = f"    image: {governed_seam}"
+        assert governed_line in service_and_after
+        service_and_after = service_and_after.replace(
+            governed_line,
+            f"    image: {literal_image}\n    # {governed_line.strip()}",
+            1,
+        )
+        compose_path.unlink()
+        compose_path.write_text(before_service + service_marker + service_and_after)
+
+        result = _run_release_policy_with_restricted_path(fixture_root, case_root)
+        assert result.returncode != 0
+        assert "must use the exact governed release image seam" in result.stderr
+
     assert "docs/cloud-production-release-policy-v1.md" in deploy_text
     assert "pnpm run check:release-policy" in deploy_text
     assert "/terms/en/terms.html" in deploy_text
@@ -1502,6 +1652,7 @@ def test_lightweight_release_policy_gate_is_documented(tmp_path: Path) -> None:
     assert "check:release-policy" in package_text
     assert "Lightweight release policy gate passed" in script_text
     assert "require_canonical_dependabot_config" in script_text
+    assert "require_service_image_seam" in script_text
     assert "uv run" not in script_text
     assert "yaml.safe_load" not in script_text
     assert "/terms/en/terms.html" in script_text
@@ -1517,6 +1668,44 @@ def test_lightweight_release_policy_gate_is_documented(tmp_path: Path) -> None:
         "pnpm run check:release-policy",
     ):
         assert marker in agents_text
+
+
+def test_exact_release_docs_freeze_map_trust_and_cutover_batch_order() -> None:
+    cloud_root = _cloud_root()
+    checklist = " ".join((cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text().split())
+    contract = " ".join(
+        (cloud_root / "docs" / "p5-b5-exact-release-bundle-v1.md").read_text().split()
+    )
+
+    for marker in (
+        ".release-state/<release-name>/target-daemon-images.json",
+        "owner-controlled non-symlink mode-`0700` directories",
+        "owner-controlled non-symlink regular file with mode `0600`",
+        "maps larger than 256 KiB",
+        "canonical resolved release path",
+        "same deployment lock",
+        "required a fresh `prepare-only` plus full verifier run",
+        "each `data-only`, `api-only`, `workers-only`, and `traffic-only` batch",
+        "Only a fully proved batch was started by its captured IDs",
+        "post-start gate proved those same IDs were running the same images",
+    ):
+        assert marker in checklist
+
+    for marker in (
+        "every governed service image, including `release-one-off`",
+        "literal mutable tag is rejected",
+        "canonical resolved release path",
+        "operator must rerun `prepare-only` and the full verifier",
+        "`data-only`, `api-only`, `workers-only`, and `traffic-only` batches",
+        "same IDs are running with the same images",
+    ):
+        assert marker in contract
+
+    migration = contract.index("then run migration and provider refresh")
+    pointer = contract.index("atomically promote the `current` link")
+    api = contract.index("After the pointer switch, start and verify the API batch")
+    readiness = contract.index("prove release-specific and generic operational readiness")
+    assert migration < pointer < api < readiness
 
 
 def test_runtime_image_prepares_writable_shared_artifact_volume() -> None:

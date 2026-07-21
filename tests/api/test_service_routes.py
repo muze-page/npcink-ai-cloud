@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -98,6 +99,12 @@ from tests.conftest import (
     seed_site_auth,
 )
 
+SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"S" * 32).decode("ascii")
+OLD_SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"O" * 32).decode("ascii")
+DEDICATED_SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"D" * 32).decode("ascii")
+OTHER_SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"W" * 32).decode("ascii")
+SERVICE_SETTINGS_KEY_ID = "test-service-settings-key"
+
 
 def _alipay_test_keys() -> tuple[str, str]:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -140,6 +147,8 @@ def _build_client(
         "artifact_store_root": str(tmp_path / "artifacts"),
         "internal_auth_token": TEST_INTERNAL_AUTH_TOKEN,
         "admin_session_secret": TEST_ADMIN_SESSION_SECRET,
+        "service_settings_secret": SERVICE_SETTINGS_ROOT,
+        "service_settings_encryption_key_id": SERVICE_SETTINGS_KEY_ID,
         "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
         "openai_api_key": "",
         "anthropic_api_key": "",
@@ -185,6 +194,8 @@ def _runtime_service_settings(database_url: str) -> Settings:
         ),
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
         admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+        service_settings_secret=SERVICE_SETTINGS_ROOT,
+        service_settings_encryption_key_id=SERVICE_SETTINGS_KEY_ID,
         portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
         openai_api_key="",
         anthropic_api_key="",
@@ -826,7 +837,7 @@ def test_admin_service_settings_email_replaces_unreadable_existing_password(
 ) -> None:
     database_url, client = _build_client(tmp_path)
     old_settings = _runtime_service_settings(database_url)
-    old_settings.service_settings_secret = "old-service-settings-secret-32b"
+    old_settings.service_settings_secret = OLD_SERVICE_SETTINGS_ROOT
     bad_ciphertext = encrypt_service_setting_secret("old-password", settings=old_settings)
 
     with get_session(database_url) as session:
@@ -889,7 +900,7 @@ def test_admin_service_settings_email_replaces_unreadable_existing_password(
 
 def test_service_setting_secret_only_uses_dedicated_key() -> None:
     dedicated_settings = _runtime_service_settings("sqlite+pysqlite:///:memory:")
-    dedicated_settings.service_settings_secret = "dedicated-service-settings-secret-32b"
+    dedicated_settings.service_settings_secret = DEDICATED_SERVICE_SETTINGS_ROOT
     dedicated_ciphertext = encrypt_service_setting_secret(
         "dedicated-service-secret",
         settings=dedicated_settings,
@@ -908,7 +919,7 @@ def test_service_setting_secret_only_uses_dedicated_key() -> None:
         decrypt_service_setting_secret(dedicated_ciphertext, settings=missing_key_settings)
 
     wrong_key_settings = _runtime_service_settings("sqlite+pysqlite:///:memory:")
-    wrong_key_settings.service_settings_secret = "different-service-settings-secret-32b"
+    wrong_key_settings.service_settings_secret = OTHER_SERVICE_SETTINGS_ROOT
     with pytest.raises(RuntimeError, match="service setting secret could not be decrypted"):
         decrypt_service_setting_secret(dedicated_ciphertext, settings=wrong_key_settings)
 
@@ -918,7 +929,7 @@ def test_admin_service_settings_email_requires_reentry_for_unreadable_saved_pass
 ) -> None:
     database_url, client = _build_client(tmp_path)
     old_settings = _runtime_service_settings(database_url)
-    old_settings.service_settings_secret = "old-service-settings-secret-32b"
+    old_settings.service_settings_secret = OLD_SERVICE_SETTINGS_ROOT
     bad_ciphertext = encrypt_service_setting_secret("old-password", settings=old_settings)
 
     with get_session(database_url) as session:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from functools import lru_cache
 from urllib.parse import urlsplit
@@ -8,6 +10,27 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
+
+_ENCRYPTION_KEY_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_CANONICAL_32_BYTE_ROOT_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}=")
+
+
+def _validate_encryption_root(field_name: str, raw_value: str | None) -> None:
+    value = str(raw_value or "")
+    if value != value.strip() or _CANONICAL_32_BYTE_ROOT_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            f"{field_name} must be canonical URL-safe Base64 encoding of exactly 32 bytes"
+        )
+    try:
+        decoded = base64.b64decode(value.encode("ascii"), altchars=b"-_", validate=True)
+    except (UnicodeEncodeError, binascii.Error, ValueError) as error:
+        raise ValueError(
+            f"{field_name} must be canonical URL-safe Base64 encoding of exactly 32 bytes"
+        ) from error
+    if len(decoded) != 32 or base64.urlsafe_b64encode(decoded).decode("ascii") != value:
+        raise ValueError(
+            f"{field_name} must be canonical URL-safe Base64 encoding of exactly 32 bytes"
+        )
 
 
 class Settings(BaseSettings):
@@ -102,6 +125,7 @@ class Settings(BaseSettings):
     admin_bootstrap_token: str | None = Field(default=None)
     admin_session_secret: str | None = Field(default=None)
     service_settings_secret: str | None = Field(default=None)
+    service_settings_encryption_key_id: str | None = Field(default=None)
     runtime_data_encryption_secret: str | None = Field(default=None)
     runtime_data_encryption_key_id: str | None = Field(default=None)
     debug_local_origin_allowlist: str = Field(default="")
@@ -399,18 +423,40 @@ class Settings(BaseSettings):
             raise ValueError(
                 "service_settings_secret is required outside development/test environments"
             )
+        service_settings_key_id = str(self.service_settings_encryption_key_id or "")
+        if service_settings_key_id and (
+            service_settings_key_id != service_settings_key_id.strip()
+            or _ENCRYPTION_KEY_ID_PATTERN.fullmatch(service_settings_key_id) is None
+        ):
+            raise ValueError(
+                "service_settings_encryption_key_id must contain only letters, numbers, '_' or '-'"
+            )
+        if production_like and not service_settings_key_id:
+            raise ValueError(
+                "service_settings_encryption_key_id is required outside "
+                "development/test environments"
+            )
         if production_like and not str(self.runtime_data_encryption_secret or "").strip():
             raise ValueError(
                 "runtime_data_encryption_secret is required outside development/test environments"
             )
-        runtime_data_key_id = str(self.runtime_data_encryption_key_id or "").strip()
-        if runtime_data_key_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", runtime_data_key_id):
+        runtime_data_key_id = str(self.runtime_data_encryption_key_id or "")
+        if runtime_data_key_id and (
+            runtime_data_key_id != runtime_data_key_id.strip()
+            or _ENCRYPTION_KEY_ID_PATTERN.fullmatch(runtime_data_key_id) is None
+        ):
             raise ValueError(
                 "runtime_data_encryption_key_id must contain only letters, numbers, '_' or '-'"
             )
         if production_like and not runtime_data_key_id:
             raise ValueError(
                 "runtime_data_encryption_key_id is required outside development/test environments"
+            )
+        if production_like:
+            _validate_encryption_root("service_settings_secret", self.service_settings_secret)
+            _validate_encryption_root(
+                "runtime_data_encryption_secret",
+                self.runtime_data_encryption_secret,
             )
         if production_like and not str(self.internal_auth_token or "").strip():
             raise ValueError(

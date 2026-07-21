@@ -2,9 +2,14 @@ name: Deploy Production
 
 on:
   workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type: Approved for production validation by operator."
+        required: true
+        type: string
 
 concurrency:
-  group: production-deploy
+  group: production-host-mutation
   cancel-in-progress: false
 
 jobs:
@@ -14,61 +19,40 @@ jobs:
     if: github.ref == 'refs/heads/production'
     environment: production
     permissions:
-      actions: write
+      actions: read
       contents: read
     steps:
-      - name: Validate deploy trigger
-        id: deploy_guard
+      - name: Validate operator confirmation
+        env:
+          OPERATOR_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          should_deploy="false"
-          workflow_run_conclusion=""
-          workflow_run_head_branch=""
-          workflow_run_head_sha=""
-
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            if [ "${GITHUB_REF}" = "refs/heads/production" ]; then
-              should_deploy="true"
-            fi
-          elif [ "${GITHUB_EVENT_NAME}" = "workflow_run" ]; then
-            read -r workflow_run_conclusion workflow_run_head_branch workflow_run_head_sha < <(
-              python3 - <<'PY'
-          import json
-          import os
-
-          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
-              event = json.load(handle)
-          workflow_run = event.get("workflow_run") or {}
-          print(
-              workflow_run.get("conclusion") or "",
-              workflow_run.get("head_branch") or "",
-              workflow_run.get("head_sha") or "",
-          )
-          PY
-            )
-            if [ "${workflow_run_conclusion}" = "success" ] && [ "${workflow_run_head_branch}" = "production" ]; then
-              should_deploy="true"
-            fi
-          fi
-
-          echo "should_deploy=${should_deploy}" >> "${GITHUB_OUTPUT}"
-          echo "event=${GITHUB_EVENT_NAME}"
-          echo "ref=${GITHUB_REF}"
-          echo "workflow_run_conclusion=${workflow_run_conclusion}"
-          echo "workflow_run_head_branch=${workflow_run_head_branch}"
-          echo "workflow_run_head_sha=${workflow_run_head_sha}"
-          echo "should_deploy=${should_deploy}"
+          test "${OPERATOR_CONFIRMATION}" = "Approved for production validation by operator."
 
       - name: Checkout
-        if: steps.deploy_guard.outputs.should_deploy == 'true'
         uses: actions/checkout@v6
 
+      - name: Require successful CI for this production commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          conclusion="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f branch=production \
+              -f event=push \
+              -f status=completed \
+              -f per_page=20 |
+              jq -r --arg sha "${GITHUB_SHA}" \
+                '[.workflow_runs[] | select(.head_sha == $sha)][0].conclusion // ""'
+          )"
+          test "${conclusion}" = "success"
+
       - name: Setup pnpm
-        if: steps.deploy_guard.outputs.should_deploy == 'true'
         uses: pnpm/action-setup@v6
 
       - name: Setup Node
-        if: steps.deploy_guard.outputs.should_deploy == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -76,29 +60,37 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Setup Docker Buildx
-        if: steps.deploy_guard.outputs.should_deploy == 'true'
         uses: docker/setup-buildx-action@v4
 
       - name: Install SSH key
-        if: steps.deploy_guard.outputs.should_deploy == 'true'
         env:
           PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
           PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
           PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           test -n "${PROD_SSH_KEY}"
           test -n "${PROD_SSH_HOST}"
+          test -n "${PROD_SSH_USER}"
+          test "${PROD_SSH_USER}" = "root"
+          test -n "${PROD_SSH_KNOWN_HOSTS}"
           mkdir -p ~/.ssh
           printf '%s\n' "${PROD_SSH_KEY}" > ~/.ssh/npcink_prod_deploy_key
           chmod 600 ~/.ssh/npcink_prod_deploy_key
-          ssh-keyscan -p "${PROD_SSH_PORT}" -H "${PROD_SSH_HOST}" >> ~/.ssh/known_hosts
+          printf '%s\n' "${PROD_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          known_host_lookup="${PROD_SSH_HOST}"
+          if [ "${PROD_SSH_PORT}" != "22" ]; then
+            known_host_lookup="[${PROD_SSH_HOST}]:${PROD_SSH_PORT}"
+          fi
+          ssh-keygen -F "${known_host_lookup}" -f ~/.ssh/known_hosts >/dev/null
 
       - name: Deploy
-        if: steps.deploy_guard.outputs.should_deploy == 'true'
         env:
           NPCINK_CLOUD_DEPLOY_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          NPCINK_CLOUD_DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER || 'deploy' }}
+          NPCINK_CLOUD_DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER }}
           NPCINK_CLOUD_DEPLOY_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
           NPCINK_CLOUD_DEPLOY_IDENTITY_FILE: /home/runner/.ssh/npcink_prod_deploy_key
           NPCINK_CLOUD_DEPLOY_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
@@ -107,6 +99,7 @@ jobs:
           NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"
           NPCINK_CLOUD_REFRESH_PROVIDERS: "1"
           NPCINK_CLOUD_WITH_OPERATIONAL_READY: "1"
+          NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT: "1"
         run: |
           set -euo pipefail
           bash deploy/deploy-to-ssh-host.sh \
@@ -115,3 +108,104 @@ jobs:
             --refresh-providers \
             --with-operational-ready \
             --remote-compose-file docker-compose.runtime.yml
+
+      - name: Small-customer preflight
+        env:
+          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
+        run: |
+          bash deploy/small-customer-trial-preflight.sh \
+            --base-url "${NPCINK_CLOUD_BASE_URL}" \
+            --require-alipay-enabled
+
+      - name: Optional formal release smoke
+        env:
+          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
+          NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${{ secrets.NPCINK_CLOUD_INTERNAL_AUTH_TOKEN }}
+          NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${{ secrets.NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN }}
+          NPCINK_CLOUD_RELEASE_MEMBER_EMAIL: ${{ secrets.NPCINK_CLOUD_RELEASE_MEMBER_EMAIL }}
+          NPCINK_CLOUD_PORTAL_LOGIN_CODE: ${{ secrets.NPCINK_CLOUD_PORTAL_LOGIN_CODE }}
+          NPCINK_CLOUD_RELEASE_SITE_ID: ${{ secrets.NPCINK_CLOUD_RELEASE_SITE_ID }}
+          NPCINK_CLOUD_RELEASE_KEY_ID: ${{ secrets.NPCINK_CLOUD_RELEASE_KEY_ID }}
+          NPCINK_CLOUD_RELEASE_KEY_SECRET: ${{ secrets.NPCINK_CLOUD_RELEASE_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          set +x
+          missing=0
+          for key in \
+            NPCINK_CLOUD_INTERNAL_AUTH_TOKEN \
+            NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN \
+            NPCINK_CLOUD_RELEASE_MEMBER_EMAIL \
+            NPCINK_CLOUD_PORTAL_LOGIN_CODE \
+            NPCINK_CLOUD_RELEASE_SITE_ID \
+            NPCINK_CLOUD_RELEASE_KEY_ID \
+            NPCINK_CLOUD_RELEASE_KEY_SECRET
+          do
+            if [ -z "${!key:-}" ]; then
+              missing=1
+            fi
+          done
+          if [ "${missing}" = "1" ]; then
+            echo "## Formal Release Smoke" >> "${GITHUB_STEP_SUMMARY}"
+            echo "" >> "${GITHUB_STEP_SUMMARY}"
+            echo "Skipped because one or more formal release smoke secrets are not configured." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          credential_dir="$(mktemp -d)"
+          credential_file="${credential_dir}/release-smoke-credentials.json"
+          cleanup_credentials() {
+            exit_status="$?"
+            cleanup_failed=0
+            trap - EXIT
+            set +e
+            rm -f -- "${credential_file}" || cleanup_failed=1
+            rmdir -- "${credential_dir}" || cleanup_failed=1
+            if [ -e "${credential_dir}" ] || [ -L "${credential_dir}" ]; then
+              cleanup_failed=1
+            fi
+            if [ "${cleanup_failed}" -ne 0 ]; then
+              echo "[fail] Formal smoke credential cleanup did not complete." >&2
+              exit_status=1
+            fi
+            exit "${exit_status}"
+          }
+          trap cleanup_credentials EXIT
+          chmod 0700 "${credential_dir}"
+          python3 - "${credential_file}" <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import stat
+          import sys
+
+          path = sys.argv[1]
+          keys = (
+              "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
+              "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
+              "NPCINK_CLOUD_RELEASE_MEMBER_EMAIL",
+              "NPCINK_CLOUD_PORTAL_LOGIN_CODE",
+              "NPCINK_CLOUD_RELEASE_SITE_ID",
+              "NPCINK_CLOUD_RELEASE_KEY_ID",
+              "NPCINK_CLOUD_RELEASE_KEY_SECRET",
+          )
+          payload = {key: os.environ[key] for key in keys}
+          fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(fd, "w", encoding="utf-8") as handle:
+              json.dump(payload, handle, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+              handle.write("\n")
+          metadata = os.lstat(path)
+          if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+              raise SystemExit("[fail] Formal smoke credentials are not a regular mode-0600 file.")
+          if metadata.st_uid != os.geteuid():
+              raise SystemExit("[fail] Formal smoke credentials have the wrong owner.")
+          PY
+          unset \
+            NPCINK_CLOUD_INTERNAL_AUTH_TOKEN \
+            NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN \
+            NPCINK_CLOUD_RELEASE_MEMBER_EMAIL \
+            NPCINK_CLOUD_PORTAL_LOGIN_CODE \
+            NPCINK_CLOUD_RELEASE_SITE_ID \
+            NPCINK_CLOUD_RELEASE_KEY_ID \
+            NPCINK_CLOUD_RELEASE_KEY_SECRET
+          bash deploy/release-smoke.sh --base-url "${NPCINK_CLOUD_BASE_URL}" \
+            --credentials-file "${credential_file}"
