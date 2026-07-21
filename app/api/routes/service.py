@@ -2422,13 +2422,13 @@ async def get_routing_advisor(
             site_id=site_id,
             filters={"range": range_filter, "limit": limit},
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="advisor.invalid_routing_window",
-                message=str(error),
+                message="invalid routing advisor request",
                 data={"site_id": site_id, "range": range_filter, "limit": limit},
                 revision="m1",
             ),
@@ -2521,13 +2521,13 @@ async def get_ops_summary_advisor(
             force_refresh=force_refresh,
             cache_ttl_seconds=cache_ttl_seconds,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="advisor.invalid_ops_summary_request",
-                message=str(error),
+                message="invalid ops summary request",
                 data={"scope": scope, "site_id": site_id or ""},
                 revision="m1",
             ),
@@ -2574,13 +2574,13 @@ async def get_ops_summary_preview_advisor(
             force_refresh=force_refresh,
             cache_ttl_seconds=cache_ttl_seconds,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="advisor.invalid_ops_summary_preview_request",
-                message=str(error),
+                message="invalid ops summary preview request",
                 data={"scope": scope, "site_id": site_id or ""},
                 revision="m1",
             ),
@@ -2608,13 +2608,13 @@ async def review_ops_summary_disclosure(
             actor_ref=payload.actor_ref,
             note=payload.note,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="advisor.invalid_ops_summary_review_request",
-                message=str(error),
+                message="invalid ops summary review request",
                 data={"cache_key": payload.cache_key},
                 revision="m1",
             ),
@@ -4807,13 +4807,13 @@ async def update_admin_plugin_observability_attention_state(
             operator_note=payload.note.strip(),
             actor_ref="internal",
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=422,
             content=build_envelope(
                 status="error",
                 error_code="plugin_observability.attention_action_invalid",
-                message=str(error),
+                message="invalid plugin observability attention action",
                 trace_id=extract_trace_id(request.headers.get("traceparent", "")),
                 revision="m6",
             ),

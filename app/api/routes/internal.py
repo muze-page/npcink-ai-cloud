@@ -65,13 +65,13 @@ async def refresh_catalog(
     providers = payload.providers if payload is not None else None
     try:
         result = service.refresh_catalog(provider_ids=providers or None)
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="catalog.provider_invalid",
-                message=str(error),
+                message="catalog provider selection is invalid",
                 data={"providers": providers or []},
             ),
         )
@@ -100,13 +100,13 @@ async def scan_provider_health(
     providers = payload.providers if payload is not None else None
     try:
         result = service.scan_provider_health(provider_ids=providers or None)
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="catalog.provider_invalid",
-                message=str(error),
+                message="catalog provider selection is invalid",
                 data={"providers": providers or []},
             ),
         )
@@ -164,13 +164,13 @@ async def send_portal_email_test(
             project_name=services.settings.project_name,
             portal_url=portal_url,
         )
-    except PortalEmailDeliveryError as error:
+    except PortalEmailDeliveryError:
         return JSONResponse(
             status_code=502,
             content=build_envelope(
                 status="error",
                 error_code="portal.email_delivery_failed",
-                message=str(error),
+                message="portal email delivery failed",
                 data={"recipient_email": recipient_email},
                 revision="m6",
             ),
