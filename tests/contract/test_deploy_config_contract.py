@@ -631,6 +631,13 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         assert "deploy/runtime-data-encryption-cutover.sh" in maintenance
         assert "deploy/deploy-to-ssh-host.sh --stage-only" in maintenance
         assert "staged_release=/absolute/release-path" in maintenance
+        assert "--edge-readiness-env /run/npcink-ai-cloud/p1-e06-edge-readiness.env" in (
+            maintenance
+        )
+        assert "p1_e06_edge_readiness_env_handoff.v1" in maintenance
+        assert ".current-env.snapshot" in maintenance
+        assert ".maintenance-env.snapshot" in maintenance
+        assert "digest-bound" in maintenance
         assert "p1_e06_off_host_backup_receipt.v1" in maintenance
         assert "independent PostgreSQL 16" in normalized_maintenance
         assert "0058 -> 0068" in maintenance
@@ -661,6 +668,9 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         assert "Migration `0061`" in maintenance
         assert "Normal runtime has no legacy or dual-read path" in maintenance
         assert "migration-only" in maintenance.lower()
+
+    assert "The sole planned exception is the first P1-E06 cutover" in release_policy
+    assert "not a reusable active-env update path" in " ".join(release_policy.split())
 
     assert "--stage-only)" in deploy_to_ssh
     assert "--host-python)" in deploy_to_ssh

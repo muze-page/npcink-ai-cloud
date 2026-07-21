@@ -519,6 +519,13 @@ require_marker "deploy/runtime-data-encryption-cutover.sh" '--off-host-receipt-t
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'I_ACKNOWLEDGE_THE_BACKUP_COPY_IS_OFF_HOST_AND_INDEPENDENT'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'I_ACKNOWLEDGE_ROLLBACK_RESTORES_DATABASE_RELEASE_ENV_AND_BOTH_OLD_ROOTS_TOGETHER'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER'
+require_marker "deploy/runtime-data-encryption-cutover.sh" '--edge-readiness-env'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'p1_e06_edge_readiness_env_handoff.v1'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'CURRENT_ENV_SNAPSHOT="${EVIDENCE_DIR}/.current-env.snapshot"'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'restore_original_edge_env()'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'fsync_p1_e06_recovery_anchors()'
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'previous_external_env_snapshot_sha256='
+require_marker "deploy/runtime-data-encryption-cutover.sh" 'maintenance_env_snapshot_sha256='
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'CURRENT_EXTERNAL_EDGE_READY'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'CURRENT_STAGE="verify-certificate-renewal-readiness"'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'deploy/certificate-renewal-readiness.sh'
@@ -541,6 +548,12 @@ require_marker "deploy/runtime-data-encryption-cutover.sh" 'run_exact_api_one_of
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'whole_database_restore_required_for_rollback'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'rmdir "${DEPLOY_LOCK_DIR}"'
 require_marker "deploy/runtime-data-encryption-cutover.sh" 'publish_fresh_file "${FINAL_RESULT_TMP}" "${PASSED_RESULT}"'
+require_marker_before "deploy/runtime-data-encryption-cutover.sh" \
+	'fsync_p1_e06_recovery_anchors ||' \
+	'CURRENT_STAGE="apply-governed-edge-readiness-env-handoff"'
+require_marker_before "deploy/runtime-data-encryption-cutover.sh" \
+	'CURRENT_STAGE="apply-governed-edge-readiness-env-handoff"' \
+	'CURRENT_STAGE="verify-certificate-renewal-readiness"'
 require_marker_before "deploy/runtime-data-encryption-cutover.sh" \
 	'CURRENT_STAGE="verify-certificate-renewal-readiness"' \
 	'CURRENT_STAGE="prepare-exact-bundle-images"'
@@ -726,6 +739,11 @@ require_marker "deploy/bootstrap-portal-site-to-ssh-host.sh" 'Remote portal boot
 require_marker "deploy/bootstrap-portal-site-to-ssh-host.sh" '--secret is forbidden because process arguments and the SSH command are observable.'
 require_marker "README.md" 'The remote'
 require_marker "README.md" '`portal:bind:ssh` wrapper intentionally rejects key issuance.'
+require_marker "docs/cloud-production-release-policy-v1.md" 'p1_e06_edge_readiness_env_handoff.v1'
+require_marker "docs/cloud-production-release-policy-v1.md" 'digest-bound maintenance snapshot'
+require_marker "deploy/OPS_PLAYBOOK.md" '--edge-readiness-env /run/npcink-ai-cloud/p1-e06-edge-readiness.env'
+require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" '--edge-readiness-env /run/npcink-ai-cloud/p1-e06-edge-readiness.env'
+require_marker "deploy/RELEASE_CHECKLIST.md" 'p1_e06_edge_readiness_env_handoff.v1'
 reject_marker "deploy/production-performance-baseline-to-ssh-host.sh" '--with-synthetic-smoke'
 reject_marker "deploy/production-performance-baseline-to-ssh-host.sh" 'remote-smoke.sh'
 reject_marker "README.md" '--secret npcink-cloud-test-secret'

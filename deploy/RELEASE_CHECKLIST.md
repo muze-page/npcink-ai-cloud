@@ -161,12 +161,16 @@ All items in this section are `Required`.
   `renewal_exec_start_sha256`, certificate/private-key archive targets, and the
   actual NGINX TLS binding, and `verify` rechecked all of them; there is
   currently no real receipt, so production remains blocked
-- [ ] the active env explicitly persists all four values without defaults:
+- [ ] the active env explicitly persists all four values without defaults
+  after the initial P1-E06 orchestrator's lock-held handoff; the operator did
+  not edit the active env:
   `NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH`,
   `NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH`,
   `NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER`, and
   `NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH`
-- [ ] Runtime Compose sets `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`
+- [ ] Runtime Compose sets `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`; for the
+  initial P1-E06 cutover this became true only through the orchestrator's
+  lock-held exact-five-key handoff
 - [ ] `NPCINK_CLOUD_DOMAIN_NAME=cloud.npc.ink` exactly matches the HTTPS
   `NPCINK_CLOUD_BASE_URL` host
 - [ ] production deploy and mutating maintenance share
@@ -453,24 +457,37 @@ All items in this section are `Required`.
   refreshing, seeding, smoking, or starting traffic; the remote argument
   envelope contained only mode/root/release/incoming/host-Python values and
   early failure left no incoming object, partial release, or lock
-- [ ] the independent P1-E06 Edge hard gate was closed before the orchestrator
-  or first image mutation: host NGINX active, `nginx -t` green, exact-host
-  loopback HTTPS green, retired Caddy stopped, and the persisted readiness flag
-  true; explicit renewal owner/timer/persistent-hook values, direct hook, dry
-  run, reload, served-leaf fingerprint match, and 30-day expiry gates also
-  passed; fresh `npcink_cloud_certificate_renewal_readiness.v1` evidence was
-  verified before image snapshot/tag/load; any failed regeneration had already
+- [ ] the independent P1-E06 Edge topology and certificate evidence were closed
+  before the orchestrator: host NGINX active, `nginx -t` green, exact-host
+  loopback HTTPS green, retired Caddy stopped, and explicit renewal
+  owner/timer/persistent-hook values, direct hook, dry run, reload, served-leaf
+  fingerprint match, and 30-day expiry gates passed; the active env was not
+  edited manually; the orchestrator's first lock-held preflight durably synced
+  its recovery anchors, published only the exact five Edge keys, and verified
+  fresh `npcink_cloud_certificate_renewal_readiness.v1` evidence before image
+  snapshot/tag/load or database mutation; any failed regeneration had already
   invalidated and fsynced the prior receipt;
   stage-only upload/verification was allowed to precede this gate
+- [ ] the separate root-owned mode-`0600` Edge-readiness env stayed outside the
+  release tree and contained exactly the five reviewed non-secret keys; under
+  `.deploy-lock` the orchestrator froze it, snapshotted the original current
+  env as `.current-env.snapshot`, changed no other key, and wrote value-free
+  `p1_e06_edge_readiness_env_handoff.v1` digest evidence; handled
+  pre-migration failures and catchable `HUP`/`INT`/`TERM` signals restored the
+  exact original bytes, while any `SIGKILL`/host-power-loss recovery used the
+  retained snapshot and deploy lock instead of assuming an automatic rollback
 - [ ] the untracked maintenance env stayed outside the release tree, was mode
   `0600`, and contained exactly six keys: two target root/key-ID pairs plus the
   Runtime Data and Service Settings old-root variables; both target roots were
   canonical padded URL-safe Base64 encoding exactly 32 random bytes. The exact
   old-root names were `NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET` and
-  `NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET`
+  `NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET`; the lock-held six-key
+  snapshot was removed on pre-migration failure/success but retained with its
+  SHA-256 on any post-migration/pre-activation failure
 - [ ] `deploy/runtime-data-encryption-cutover.sh` ran once in the foreground
-  with `/usr/bin/python3.11`, the exact staged path, backup path, previously
-  absent receipt path, and all three required acknowledgements
+  with `/usr/bin/python3.11`, the exact staged path, `--edge-readiness-env`,
+  backup path, previously absent receipt path, and all three required
+  acknowledgements
 - [ ] the orchestrator used only the governed `remote-load-and-up.sh`
   `prepare-only` mode before stopping public services and fencing `api`,
   `worker`, `callback-worker`, and `ops-worker`
@@ -530,8 +547,9 @@ All items in this section are `Required`.
   migration, restore recorded PostgreSQL/Redis tags and dependencies first if
   data images switched, prove health and unchanged `0058`, then resume old code;
   after migration starts, restore the whole `0058` dump plus old release,
-  external env, and both old roots together, never Alembic downgrade or partial
-  rollback
+  original external env from `.current-env.snapshot`, and both old roots
+  from the digest-bound `.maintenance-env.snapshot` together, never Alembic
+  downgrade or partial rollback
 - [ ] temporary old-root material and the maintenance env were removed after
   the rollback-evidence window; normal runtime has no legacy/dual-read path,
   accepts only active `rde.v1` and `sse.v1` envelopes, and rejects raw Fernet

@@ -101,6 +101,13 @@ OLD_POSTGRES_IMAGE_ID = "sha256:" + "c" * 64
 NEW_POSTGRES_IMAGE_ID = "sha256:" + "d" * 64
 OLD_REDIS_IMAGE_ID = "sha256:" + "e" * 64
 NEW_REDIS_IMAGE_ID = "sha256:" + "f" * 64
+EDGE_READINESS_KEYS = (
+    "NPCINK_CLOUD_EXTERNAL_EDGE_READY",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH",
+)
 
 
 @dataclass(frozen=True)
@@ -110,6 +117,7 @@ class CutoverFixture:
     previous_release: Path
     staged_release: Path
     maintenance_env: Path
+    edge_readiness_env: Path
     backup: Path
     receipt: Path
     handoff: Path
@@ -301,13 +309,8 @@ systemctl reload nginx
         "\n".join(
             (
                 "NPCINK_CLOUD_COMPOSE_PROJECT_NAME=npcink-ai-cloud",
-                "NPCINK_CLOUD_EXTERNAL_EDGE_READY=true",
                 "NPCINK_CLOUD_BASE_URL=https://cloud.example.invalid",
                 "NPCINK_CLOUD_DOMAIN_NAME=cloud.example.invalid",
-                f"NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH={certificate_path}",
-                f"NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH={certificate_evidence}",
-                "NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=certbot-renew.timer",
-                f"NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH={renewal_hook_path}",
                 "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=test-internal-token",
                 "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=stale-legacy-root-secret-0123456789",  # noqa: E501  # gitleaks:allow
                 "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=stale-service-root-secret-0123456789",  # noqa: E501  # gitleaks:allow
@@ -317,6 +320,22 @@ systemctl reload nginx
         encoding="utf-8",
     )
     current_env.chmod(0o600)
+
+    edge_readiness_env = fixture_root / "p1-e06-edge-readiness.env"
+    edge_readiness_env.write_text(
+        "\n".join(
+            (
+                "NPCINK_CLOUD_EXTERNAL_EDGE_READY=true",
+                f"NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH={certificate_path}",
+                f"NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH={certificate_evidence}",
+                "NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=certbot-renew.timer",
+                f"NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH={renewal_hook_path}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    edge_readiness_env.chmod(0o600)
 
     maintenance_env = fixture_root / "runtime-data-reencrypt.env"
     maintenance_env.write_text(
@@ -873,6 +892,7 @@ PY
         previous_release=previous_release,
         staged_release=staged_release,
         maintenance_env=maintenance_env,
+        edge_readiness_env=edge_readiness_env,
         backup=backup_dir / "p1-e06.dump",
         receipt=receipt_dir / "p1-e06-off-host-receipt.json",
         handoff=evidence / "off-host-handoff.json",
@@ -1670,6 +1690,8 @@ def _cutover_command(fixture: CutoverFixture) -> list[str]:
         str(fixture.staged_release),
         "--maintenance-env",
         str(fixture.maintenance_env),
+        "--edge-readiness-env",
+        str(fixture.edge_readiness_env),
         "--backup-path",
         str(fixture.backup),
         "--off-host-receipt",
@@ -1712,7 +1734,13 @@ def _run_cutover(
     completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
     if completed.returncode != 0:
         assert not _global_activation_receipt(fixture).exists()
-        assert not _maintenance_env_snapshot(fixture).exists()
+        marker_path = fixture.remote / ".cutover-failed"
+        marker = _read_marker(marker_path) if marker_path.exists() else {}
+        snapshot_must_be_retained = (
+            marker.get("migration_started") == "1"
+            and marker.get("activation_committed") != "1"
+        )
+        assert _maintenance_env_snapshot(fixture).exists() is snapshot_must_be_retained
     return completed
 
 
@@ -1834,6 +1862,51 @@ def _maintenance_env_snapshot(fixture: CutoverFixture) -> Path:
     return fixture.evidence / ".maintenance-env.snapshot"
 
 
+def _current_env_path(fixture: CutoverFixture) -> Path:
+    return fixture.remote / ".release-state" / "release-old" / "env.deploy"
+
+
+def _current_env_snapshot(fixture: CutoverFixture) -> Path:
+    return fixture.evidence / ".current-env.snapshot"
+
+
+def _edge_readiness_handoff(fixture: CutoverFixture) -> Path:
+    return fixture.evidence / "edge-readiness-env-handoff.json"
+
+
+def _parse_env(raw: bytes) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in raw.decode("utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        assert "=" in line
+        key, value = line.split("=", 1)
+        assert key not in values
+        values[key] = value
+    return values
+
+
+def _edge_readiness_values(fixture: CutoverFixture) -> dict[str, str]:
+    values = _parse_env(fixture.edge_readiness_env.read_bytes())
+    assert tuple(values) == EDGE_READINESS_KEYS
+    return values
+
+
+def _json_string_values(value: object) -> list[str]:
+    if isinstance(value, dict):
+        strings: list[str] = []
+        for nested in value.values():
+            strings.extend(_json_string_values(nested))
+        return strings
+    if isinstance(value, list):
+        strings = []
+        for nested in value:
+            strings.extend(_json_string_values(nested))
+        return strings
+    return [value] if isinstance(value, str) else []
+
+
 def _read_marker(path: Path) -> dict[str, str]:
     return dict(
         line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines() if "=" in line
@@ -1855,6 +1928,9 @@ def test_cutover_entry_is_executable_valid_bash_and_help_is_non_mutating() -> No
 
     assert "one-time, fail-closed P1-E06" in completed.stdout
     assert "--off-host-receipt" in completed.stdout
+    assert "--edge-readiness-env" in completed.stdout
+    for edge_key in EDGE_READINESS_KEYS:
+        assert edge_key in completed.stdout
     assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-root>" in completed.stdout
     assert "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-root>" in completed.stdout
     assert "filesystem device numbers" in completed.stdout
@@ -1973,6 +2049,121 @@ def test_static_contract_is_fail_closed_and_compose_v227_compatible() -> None:
     ) < source.index('rmdir "${DEPLOY_LOCK_DIR}"')
 
 
+def test_edge_readiness_env_is_required_private_and_exactly_five_keys(
+    tmp_path: Path,
+) -> None:
+    missing_fixture = _make_fixture(tmp_path / "missing-cli")
+    original_current_env = _current_env_path(missing_fixture).read_bytes()
+    missing_command = _cutover_command(missing_fixture)
+    option_index = missing_command.index("--edge-readiness-env")
+    del missing_command[option_index : option_index + 2]
+
+    missing = subprocess.run(
+        missing_command,
+        cwd=ROOT,
+        env=_cutover_environment(missing_fixture),
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert missing.returncode != 0
+    assert "edge" in missing.stderr.lower()
+    assert _current_env_path(missing_fixture).read_bytes() == original_current_env
+    assert not (missing_fixture.state / "image-prepared").exists()
+    assert not missing_fixture.handoff.exists()
+
+    base_fixture = _make_fixture(tmp_path / "base-values")
+    base_values = _edge_readiness_values(base_fixture)
+    base_lines = [f"{key}={value}" for key, value in base_values.items()]
+    invalid_variants = {
+        "missing-hook": base_lines[:-1],
+        "unexpected-sixth-key": base_lines
+        + ["NPCINK_CLOUD_UNEXPECTED_EDGE_VALUE=LEAK_SENTINEL_unexpected"],
+        "duplicate-ready": base_lines + ["NPCINK_CLOUD_EXTERNAL_EDGE_READY=true"],
+        "edge-not-ready": [
+            "NPCINK_CLOUD_EXTERNAL_EDGE_READY=LEAK_SENTINEL_not_ready",
+            *base_lines[1:],
+        ],
+        "relative-certificate-path": [
+            base_lines[0],
+            "NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH=LEAK_SENTINEL_relative_cert.pem",
+            *base_lines[2:],
+        ],
+        "relative-evidence-path": [
+            *base_lines[:2],
+            "NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH=LEAK_SENTINEL_evidence.json",
+            *base_lines[3:],
+        ],
+        "unsafe-timer": [
+            *base_lines[:3],
+            "NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=LEAK_SENTINEL timer",
+            base_lines[4],
+        ],
+        "relative-hook-path": [
+            *base_lines[:4],
+            "NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH=LEAK_SENTINEL_reload-nginx",
+        ],
+    }
+
+    for case_name, lines in invalid_variants.items():
+        fixture = _make_fixture(tmp_path / case_name)
+        original_current_env = _current_env_path(fixture).read_bytes()
+        fixture.edge_readiness_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        fixture.edge_readiness_env.chmod(0o600)
+
+        completed = subprocess.run(
+            _cutover_command(fixture),
+            cwd=ROOT,
+            env=_cutover_environment(fixture),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert completed.returncode != 0
+        assert "edge readiness env" in completed.stderr.lower()
+        assert _current_env_path(fixture).read_bytes() == original_current_env
+        assert not (fixture.state / "image-prepared").exists()
+        assert not fixture.handoff.exists()
+        combined_output = completed.stdout + completed.stderr
+        supplied_values = [line.split("=", 1)[1] for line in lines if "=" in line]
+        assert all(value not in combined_output for value in supplied_values)
+
+    file_contract_cases = ["wrong-mode", "symbolic-link"]
+    if os.geteuid() == 0:
+        file_contract_cases.append("wrong-owner")
+    for case_name in file_contract_cases:
+        fixture = _make_fixture(tmp_path / case_name)
+        original_current_env = _current_env_path(fixture).read_bytes()
+        if case_name == "wrong-mode":
+            fixture.edge_readiness_env.chmod(0o644)
+        elif case_name == "symbolic-link":
+            target = fixture.edge_readiness_env.with_name("edge-readiness-target.env")
+            os.replace(fixture.edge_readiness_env, target)
+            fixture.edge_readiness_env.symlink_to(target)
+        else:
+            os.chown(fixture.edge_readiness_env, 65534, 65534)
+
+        completed = subprocess.run(
+            _cutover_command(fixture),
+            cwd=ROOT,
+            env=_cutover_environment(fixture),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+        assert completed.returncode != 0
+        assert "edge readiness env" in completed.stderr.lower()
+        assert _current_env_path(fixture).read_bytes() == original_current_env
+        assert not (fixture.state / "image-prepared").exists()
+        assert not fixture.handoff.exists()
+
+
 def test_maintenance_env_requires_exact_independent_canonical_dual_domain_values(
     tmp_path: Path,
 ) -> None:
@@ -2036,6 +2227,8 @@ def test_maintenance_env_requires_exact_independent_canonical_dual_domain_values
 
 def test_stale_certificate_evidence_fails_before_image_prepare(tmp_path: Path) -> None:
     fixture = _make_fixture(tmp_path)
+    original_current_env = _current_env_path(fixture).read_bytes()
+    original_current_env_sha256 = hashlib.sha256(original_current_env).hexdigest()
     evidence_path = (
         fixture.remote / ".release-state" / "release-old" / "certificate-renewal-readiness.json"
     )
@@ -2065,14 +2258,47 @@ def test_stale_certificate_evidence_fails_before_image_prepare(tmp_path: Path) -
     assert not fixture.handoff.exists()
     assert not _global_activation_receipt(fixture).exists()
     assert not _maintenance_env_snapshot(fixture).exists()
+    assert _current_env_path(fixture).read_bytes() == original_current_env
+    assert hashlib.sha256(_current_env_path(fixture).read_bytes()).hexdigest() == (
+        original_current_env_sha256
+    )
+    current_env_snapshot = _current_env_snapshot(fixture)
+    assert current_env_snapshot.read_bytes() == original_current_env
+    assert not current_env_snapshot.is_symlink()
+    assert stat.S_IMODE(current_env_snapshot.stat().st_mode) == 0o600
     if fixture.docker_calls.exists():
         assert "docker|load|" not in fixture.docker_calls.read_text(encoding="utf-8")
+
+
+def test_recovery_anchors_are_fsynced_before_active_env_handoff() -> None:
+    source = _source()
+    sync_call = "fsync_p1_e06_recovery_anchors ||"
+    handoff_stage = 'CURRENT_STAGE="apply-governed-edge-readiness-env-handoff"'
+
+    assert "fsync_p1_e06_recovery_anchors()" in source
+    assert source.index(sync_call) < source.index(handoff_stage)
+    for recovery_anchor in (
+        '"${DEPLOY_LOCK_OWNER_FILE}"',
+        '"${DEPLOY_LOCK_DIR}"',
+        '"${EVIDENCE_DIR}"',
+        '"${STAGED_STATE_DIR}"',
+        '"${RELEASE_STATE_ROOT}"',
+        '"${REMOTE_DIR}"',
+    ):
+        function_body = source[
+            source.index("fsync_p1_e06_recovery_anchors()") : source.index("early_on_exit()")
+        ]
+        assert recovery_anchor in function_body
 
 
 def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_evidence(
     tmp_path: Path,
 ) -> None:
     fixture = _make_fixture(tmp_path)
+    original_current_env = _current_env_path(fixture).read_bytes()
+    original_current_values = _parse_env(original_current_env)
+    assert set(original_current_values).isdisjoint(EDGE_READINESS_KEYS)
+    edge_readiness_values = _edge_readiness_values(fixture)
 
     completed = _run_cutover(fixture)
 
@@ -2136,12 +2362,54 @@ def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_ev
     assert not (fixture.remote / ".cutover-failed").exists()
     assert not (fixture.evidence / "rollback-images.tsv").exists()
     assert (fixture.remote / "current").resolve() == fixture.staged_release
-    staged_env = (fixture.remote / ".release-state" / "release-new" / "env.deploy").read_text(
-        encoding="utf-8"
+    staged_env_path = fixture.remote / ".release-state" / "release-new" / "env.deploy"
+    staged_env_bytes = staged_env_path.read_bytes()
+    staged_env = staged_env_bytes.decode("utf-8")
+    current_env_bytes = _current_env_path(fixture).read_bytes()
+    current_env = current_env_bytes.decode("utf-8")
+    current_values = _parse_env(current_env_bytes)
+    assert current_values == original_current_values | edge_readiness_values
+    assert all(current_env.count(f"{key}=") == 1 for key in EDGE_READINESS_KEYS)
+    staged_values = _parse_env(staged_env_bytes)
+    expected_staged_values = original_current_values | edge_readiness_values
+    del expected_staged_values["NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET"]
+    del expected_staged_values["NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"]
+    expected_staged_values.update(
+        {
+            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET": RUNTIME_TARGET_SECRET,
+            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID": RUNTIME_TARGET_KEY_ID,
+            "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET": SERVICE_TARGET_SECRET,
+            "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID": SERVICE_TARGET_KEY_ID,
+        }
     )
-    current_env = (fixture.remote / ".release-state" / "release-old" / "env.deploy").read_text(
-        encoding="utf-8"
+    assert staged_values == expected_staged_values
+    assert all(staged_env.count(f"{key}=") == 1 for key in EDGE_READINESS_KEYS)
+    current_env_snapshot = _current_env_snapshot(fixture)
+    assert current_env_snapshot.read_bytes() == original_current_env
+    assert not current_env_snapshot.is_symlink()
+    assert stat.S_IMODE(current_env_snapshot.stat().st_mode) == 0o600
+    edge_handoff_path = _edge_readiness_handoff(fixture)
+    assert edge_handoff_path.is_file()
+    assert not edge_handoff_path.is_symlink()
+    assert stat.S_IMODE(edge_handoff_path.stat().st_mode) == 0o600
+    edge_handoff = json.loads(edge_handoff_path.read_text(encoding="utf-8"))
+    assert edge_handoff["contract"] == "p1_e06_edge_readiness_env_handoff.v1"
+    assert edge_handoff["status"] == "passed"
+    assert edge_handoff["keys"] == sorted(EDGE_READINESS_KEYS)
+    assert (
+        edge_handoff["source_sha256"]
+        == hashlib.sha256(fixture.edge_readiness_env.read_bytes()).hexdigest()
     )
+    assert edge_handoff["previous_env_sha256"] == hashlib.sha256(original_current_env).hexdigest()
+    assert edge_handoff["updated_env_sha256"] == hashlib.sha256(current_env_bytes).hexdigest()
+    assert edge_handoff["current_env_path"] == str(_current_env_path(fixture))
+    assert edge_handoff["original_snapshot_path"] == str(current_env_snapshot)
+    assert edge_handoff["values_included"] is False
+    handoff_strings = _json_string_values(edge_handoff)
+    assert hashlib.sha256(fixture.edge_readiness_env.read_bytes()).hexdigest() in handoff_strings
+    assert hashlib.sha256(original_current_env).hexdigest() in handoff_strings
+    assert hashlib.sha256(current_env_bytes).hexdigest() in handoff_strings
+    assert all(value not in handoff_strings for value in edge_readiness_values.values())
     maintenance_values = dict(
         line.split("=", 1)
         for line in fixture.maintenance_env.read_text(encoding="utf-8").splitlines()
@@ -2334,6 +2602,60 @@ def test_executable_success_proves_receipt_restore_lock_edge_env_and_terminal_ev
     assert "|--pull=never|" in restore_container_calls[0]
     assert restore_container_calls[0].endswith(f"|{NEW_POSTGRES_IMAGE_ID}")
     assert "npcink-ai-cloud-postgres:prod" not in restore_container_calls[0]
+
+
+def test_executable_success_replaces_preexisting_edge_values_without_touching_other_bytes(
+    tmp_path: Path,
+) -> None:
+    fixture = _make_fixture(tmp_path)
+    current_env_path = _current_env_path(fixture)
+    original_non_edge = current_env_path.read_bytes() + (
+        b"# p1-e06 non-target byte sentinel\n"
+        b"NPCINK_CLOUD_NON_TARGET_SENTINEL=keep-this-byte-for-byte\n"
+    )
+    preexisting_edge = b"".join(
+        (
+            b"NPCINK_CLOUD_EXTERNAL_EDGE_READY=false\n",
+            b"NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH=/old/cert.pem\n",
+            b"NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH=/old/evidence.json\n",
+            b"NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=old-renew.timer\n",
+            b"NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH=/old/reload-hook\n",
+        )
+    )
+    original_current_env = original_non_edge + preexisting_edge
+    current_env_path.write_bytes(original_current_env)
+    current_env_path.chmod(0o600)
+    original_values = _parse_env(original_current_env)
+    edge_readiness_values = _edge_readiness_values(fixture)
+
+    completed = _run_cutover(fixture)
+
+    assert completed.returncode == 0, completed.stderr
+    current_env = current_env_path.read_bytes()
+    current_values = _parse_env(current_env)
+    expected_values = {
+        key: value
+        for key, value in original_values.items()
+        if key not in EDGE_READINESS_KEYS
+    } | edge_readiness_values
+    assert current_values == expected_values
+    assert all(current_env.count(f"{key}=".encode()) == 1 for key in EDGE_READINESS_KEYS)
+    non_edge_after = b"".join(
+        line
+        for line in current_env.splitlines(keepends=True)
+        if line.rstrip(b"\r\n").decode("utf-8").split("=", 1)[0]
+        not in EDGE_READINESS_KEYS
+    )
+    assert non_edge_after == original_non_edge
+    assert b"/old/cert.pem" not in current_env
+    assert b"/old/evidence.json" not in current_env
+    assert b"old-renew.timer" not in current_env
+    assert b"/old/reload-hook" not in current_env
+    current_env_snapshot = _current_env_snapshot(fixture)
+    assert current_env_snapshot.read_bytes() == original_current_env
+    handoff = json.loads(_edge_readiness_handoff(fixture).read_text(encoding="utf-8"))
+    assert handoff["previous_env_sha256"] == hashlib.sha256(original_current_env).hexdigest()
+    assert handoff["updated_env_sha256"] == hashlib.sha256(current_env).hexdigest()
 
 
 def test_maintenance_env_replacement_fails_closed_without_activating_b(
@@ -2539,6 +2861,8 @@ def test_exact_api_one_off_retains_lock_when_cleanup_reports_false_success(
 
 def test_exact_api_one_off_term_signal_cleans_container(tmp_path: Path) -> None:
     fixture = _make_fixture(tmp_path)
+    original_current_env = _current_env_path(fixture).read_bytes()
+    original_current_env_sha256 = hashlib.sha256(original_current_env).hexdigest()
     process, command = _start_cutover(fixture, fail_at="oneoff_term_wait")
     _publish_off_host_receipt(fixture, process)
     _wait_for_event(fixture, process, "oneoff:payload-started")
@@ -2560,6 +2884,14 @@ def test_exact_api_one_off_term_signal_cleans_container(tmp_path: Path) -> None:
     assert not (fixture.state / "api-oneoff-container").exists()
     assert not _global_activation_receipt(fixture).exists()
     assert not _maintenance_env_snapshot(fixture).exists()
+    restored_current_env = _current_env_path(fixture).read_bytes()
+    assert restored_current_env == original_current_env
+    assert hashlib.sha256(restored_current_env).hexdigest() == original_current_env_sha256
+    assert set(_parse_env(restored_current_env)).isdisjoint(EDGE_READINESS_KEYS)
+    current_env_snapshot = _current_env_snapshot(fixture)
+    assert current_env_snapshot.read_bytes() == original_current_env
+    assert not current_env_snapshot.is_symlink()
+    assert stat.S_IMODE(current_env_snapshot.stat().st_mode) == 0o600
     marker = _read_marker(fixture.remote / ".cutover-failed")
     assert marker["phase"] == "signal-term"
     assert marker["migration_started"] == "0"
@@ -2570,6 +2902,8 @@ def test_executable_pre_migration_failure_restores_only_old_runtime_generation(
     tmp_path: Path,
 ) -> None:
     fixture = _make_fixture(tmp_path)
+    original_current_env = _current_env_path(fixture).read_bytes()
+    original_current_env_sha256 = hashlib.sha256(original_current_env).hexdigest()
 
     completed = _run_cutover(fixture, fail_at="restore_migrate")
 
@@ -2589,6 +2923,14 @@ def test_executable_pre_migration_failure_restores_only_old_runtime_generation(
     assert (fixture.remote / ".deploy-lock").is_dir()
     assert not (fixture.evidence / "cutover-result.json").exists()
     assert (fixture.remote / "current").resolve() == fixture.previous_release
+    restored_current_env = _current_env_path(fixture).read_bytes()
+    assert restored_current_env == original_current_env
+    assert hashlib.sha256(restored_current_env).hexdigest() == original_current_env_sha256
+    assert set(_parse_env(restored_current_env)).isdisjoint(EDGE_READINESS_KEYS)
+    current_env_snapshot = _current_env_snapshot(fixture)
+    assert current_env_snapshot.read_bytes() == original_current_env
+    assert not current_env_snapshot.is_symlink()
+    assert stat.S_IMODE(current_env_snapshot.stat().st_mode) == 0o600
 
     events = _read_events(fixture)
     assert "failure:restore-migrate" in events
@@ -2679,6 +3021,9 @@ def test_executable_post_migration_failure_never_restarts_old_code_and_requires_
     tmp_path: Path,
 ) -> None:
     fixture = _make_fixture(tmp_path)
+    original_current_env = _current_env_path(fixture).read_bytes()
+    original_current_env_sha256 = hashlib.sha256(original_current_env).hexdigest()
+    edge_readiness_values = _edge_readiness_values(fixture)
 
     completed = _run_cutover(fixture, fail_at="production_service_inventory")
 
@@ -2694,6 +3039,27 @@ def test_executable_post_migration_failure_never_restarts_old_code_and_requires_
     assert marker["previous_external_env"] == str(
         fixture.remote / ".release-state" / "release-old" / "env.deploy"
     )
+    current_env_snapshot = _current_env_snapshot(fixture)
+    assert marker["previous_external_env_snapshot"] == str(current_env_snapshot)
+    assert marker["previous_external_env_snapshot_sha256"] == original_current_env_sha256
+    edge_handoff_path = _edge_readiness_handoff(fixture)
+    assert marker["edge_readiness_handoff_evidence"] == str(edge_handoff_path)
+    assert marker["edge_readiness_handoff_evidence_sha256"] == hashlib.sha256(
+        edge_handoff_path.read_bytes()
+    ).hexdigest()
+    maintenance_snapshot = _maintenance_env_snapshot(fixture)
+    assert marker["maintenance_env_snapshot"] == str(maintenance_snapshot)
+    assert marker["maintenance_env_snapshot_sha256"] == hashlib.sha256(
+        fixture.maintenance_env.read_bytes()
+    ).hexdigest()
+    assert maintenance_snapshot.read_bytes() == fixture.maintenance_env.read_bytes()
+    assert not maintenance_snapshot.is_symlink()
+    assert stat.S_IMODE(maintenance_snapshot.stat().st_mode) == 0o600
+    assert current_env_snapshot.read_bytes() == original_current_env
+    assert not current_env_snapshot.is_symlink()
+    assert stat.S_IMODE(current_env_snapshot.stat().st_mode) == 0o600
+    retained_current_values = _parse_env(_current_env_path(fixture).read_bytes())
+    assert retained_current_values == _parse_env(original_current_env) | edge_readiness_values
     assert marker["required_old_root_env_names"] == (
         "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET,NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET"
     )

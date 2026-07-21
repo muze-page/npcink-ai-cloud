@@ -262,11 +262,11 @@ The exact-bundle smoke is the formal release workflow's plain-HTTP exception:
 it may replay the artifact through loopback NGINX without an external Edge.
 Never use that local smoke topology as a production public origin.
 
-P1-E06 treats the external Edge as an independent hard gate. Before the cutover
-or first image mutation may start, the governed Edge migration must install and
-activate host NGINX, pass `nginx -t` and the exact-host loopback-resolved HTTPS
-check, stop the retired project Caddy, and persist
-`NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`. It must also record a named
+P1-E06 treats the external Edge as an independent hard gate. Before invoking
+the cutover, the governed Edge migration must install and activate host NGINX,
+pass `nginx -t` and the exact-host loopback-resolved HTTPS check, stop the
+retired project Caddy, and complete the certificate-readiness evidence. It must
+also record a named
 certificate-renewal owner, enable an automatic renewal service/timer, pass a
 renewal dry run plus direct persistent hook/reload test, and prove at least 30
 days of validity for both the named PEM and the leaf served on
@@ -274,7 +274,11 @@ days of validity for both the named PEM and the leaf served on
 root-owned non-writable executable directly under `renewal-hooks/deploy`. On
 Alibaba Cloud Linux 3, the selected EPEL unit is `certbot-renew.timer`; another
 safe timer is accepted only when explicitly configured and evidence-bound. The
-runtime-data encryption cutover does not create or repair that topology.
+runtime-data encryption cutover does not create or repair that topology. Do
+not edit the active env. After the topology succeeds, prepare the separate
+exact-five-key Edge-readiness input; P1-E06's first lock-held preflight
+publishes those keys and re-verifies certificate readiness before any image or
+database mutation.
 The timer's effective `Unit` must resolve to one service whose effective
 `ExecStart` directly invokes the canonical, root-owned,
 non-group/world-writable Certbot executable with the `renew` subcommand. Shell
@@ -311,7 +315,9 @@ The root-owned mode-`0600` evidence binds `renewal_service`,
 `certbot_real_path`, `renewal_exec_start_sha256`, both Certbot archive targets,
 the derived `privkey.pem`, and the actual NGINX TLS binding; `verify` resolves
 and compares them again. It is fresh for at most seven days.
-Persist all four explicit values in the active release env:
+Place all four explicit values in the protected exact-five-key Edge-readiness
+input shown below; P1-E06 alone persists them with the readiness flag into the
+active env:
 
 ```dotenv
 NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH=/etc/letsencrypt/live/cloud.npc.ink/fullchain.pem
@@ -366,7 +372,8 @@ Before the first deploy of this topology:
    it marks the new Edge committed while still locked and only then releases
    the lock; release failure preserves the healthy Edge, lock, and evidence,
    returns nonzero, and never starts a post-commit rollback. Only after success
-   may `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true` be set.
+   may the separate P1-E06 Edge-readiness input declare
+   `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`; do not edit the active env.
 4. Install the persistent host hook, then enable and inspect the EPEL timer:
 
    ```bash
@@ -511,6 +518,14 @@ ordinary deploy path because existing ciphertext must be re-encrypted while
 all four writers are stopped. Code, policy, billing, governance, and provider
 routing logic changes must go through Git.
 
+The first P1-E06 operation has one narrow exception implemented only inside
+its orchestrator: while `.deploy-lock` is held, it may atomically add the exact
+five non-secret Edge-readiness keys from a separate protected file. It first
+freezes the original env bytes and digest, records value-free handoff evidence,
+restores the original bytes on pre-migration failure, and retains that snapshot
+for whole recovery after migration begins. This is not a general active-env
+update mechanism and does not authorize direct editing.
+
 ## One-Time P1-E06 Dual-Domain Encryption Maintenance
 
 This maintenance path is deliberately separate from the normal deployment
@@ -539,7 +554,27 @@ random bytes. The two domains have separate target roots and separate key IDs.
    while that gate is pending. Normalize `/opt/npcink-ai-cloud` to `root:root`,
    prove no managed path is group/world-writable, and create root-owned mode
    `0700` `/var/backups/npcink-ai-cloud` and `/run/npcink-ai-cloud`.
-3. Create the mode-`0600` maintenance env outside the managed release tree. It
+3. Create `/run/npcink-ai-cloud/p1-e06-edge-readiness.env` outside the managed
+   release tree as a root-owned, non-symlink, mode-`0600` file containing
+   exactly:
+
+```text
+NPCINK_CLOUD_EXTERNAL_EDGE_READY=true
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH=/etc/letsencrypt/live/cloud.npc.ink/fullchain.pem
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH=/var/lib/npcink-ai-cloud/edge/certificate-renewal-readiness.json
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=certbot-renew.timer
+NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH=/etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+```
+
+   The orchestrator is the only process allowed to merge these keys into the
+   current env. It snapshots the original bytes as `.current-env.snapshot`,
+   proves that no other key changed, fsyncs the lock owner and recovery
+   directory chain before replacement, and writes value-free
+   `p1_e06_edge_readiness_env_handoff.v1` evidence. Handled pre-migration
+   failures and catchable `HUP`/`INT`/`TERM` signals restore those exact bytes;
+   an uncatchable `SIGKILL` or host power loss leaves the persistent snapshot
+   and deploy lock for manual recovery.
+4. Create the mode-`0600` maintenance env outside the managed release tree. It
    contains exactly six keys:
 
 ```text
@@ -553,12 +588,16 @@ NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-service-settings-root>
 
 The two old-root variables are available only to the matching `dry-run` and
 `apply`; neither `inventory`, new-key-only `verify`, nor normal runtime receives
-them.
+them. The orchestrator freezes this exact six-key source under `.deploy-lock`.
+A post-migration/pre-activation failure retains `.maintenance-env.snapshot`
+and records its SHA-256 in `.cutover-failed`; naming the variables without the
+bound snapshot is not recovery evidence. Pre-migration failure and successful
+activation remove the frozen private copy.
 
-4. Run `deploy/runtime-data-encryption-cutover.sh` once, in the foreground,
-   with the staged path, maintenance env, fresh host backup path, previously
-   absent receipt path, optional receipt timeout, and all three explicit
-   acknowledgements. The command owns governed `remote-load-and-up.sh`
+5. Run `deploy/runtime-data-encryption-cutover.sh` once, in the foreground,
+   with the staged path, Edge-readiness env, maintenance env, fresh host backup
+   path, previously absent receipt path, optional receipt timeout, and all
+   three explicit acknowledgements. The command owns governed `remote-load-and-up.sh`
    `prepare-only` image loading, writer/public fencing, backup, independent
    restore, migration, re-encryption, pointer, readiness, traffic restoration,
    evidence, cleanup, and unlock:
@@ -568,6 +607,7 @@ sudo "${STAGED_RELEASE}/deploy/runtime-data-encryption-cutover.sh" \
   --remote-dir /opt/npcink-ai-cloud \
   --staged-release "${STAGED_RELEASE}" \
   --host-python /usr/bin/python3.11 \
+  --edge-readiness-env /run/npcink-ai-cloud/p1-e06-edge-readiness.env \
   --maintenance-env /run/npcink-ai-cloud/runtime-data-reencrypt.env \
   --backup-path /var/backups/npcink-ai-cloud/p1-e06.dump \
   --off-host-receipt /run/npcink-ai-cloud/p1-e06-off-host-receipt.json \
@@ -577,7 +617,7 @@ sudo "${STAGED_RELEASE}/deploy/runtime-data-encryption-cutover.sh" \
   --confirm-production-cutover I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER
 ```
 
-5. After the fresh custom-format backup and checksum are atomically published,
+6. After the fresh custom-format backup and checksum are atomically published,
    the same process writes a mode-`0600` handoff marker and waits. The operator
    pulls both files with `scp` to independent off-host storage, verifies the
    checksum locally, creates a mode-`0600`
@@ -587,7 +627,7 @@ sudo "${STAGED_RELEASE}/deploy/runtime-data-encryption-cutover.sh" \
    proof. The script persists the validated receipt as
    `off-host-receipt-verified.json`, including its source path and SHA-256, and
    includes that digest in terminal evidence.
-6. Only after that receipt does the script perform an independent PostgreSQL 16
+7. Only after that receipt does the script perform an independent PostgreSQL 16
    restore and `0058 -> 0068`, then separately runs
    `inventory -> dry-run -> apply -> verify` through
    `python -m app.dev.reencrypt_runtime_data` and
@@ -616,7 +656,7 @@ sudo "${STAGED_RELEASE}/deploy/runtime-data-encryption-cutover.sh" \
    for Service Settings), so a count-preserving identity substitution cannot
    pass. Any intentional inventory change requires a stopped, reviewed digest
    update before cutover.
-7. After restoring traffic and validating the active release, the script
+8. After restoring traffic and validating the active release, the script
    durably publishes `activation-commit.json`. This is the irreversible
    activation commit point. It then cleans rollback tags/maps, publishes the
    authoritative mode-`0600`
@@ -633,8 +673,10 @@ restore their recorded prior tags and recreate/prove those dependencies before
 starting the old application; otherwise prove the existing dependencies and
 then restore the old application. Once production migration starts and before
 activation commits, never downgrade or restart old code: restore the whole
-fresh `0058` dump, old application revision, old external env, and both old
-roots together. Runtime Data and Service Settings `apply` are independent
+fresh `0058` dump, old application revision, the original external env from
+the retained `.current-env.snapshot`, and both old roots from the digest-bound
+`.maintenance-env.snapshot` together. Runtime Data and Service Settings
+`apply` are independent
 transactions, but failure of either or any later pre-activation step requires
 that full recovery point; keeping only one newly encrypted domain is forbidden.
 Migration `0061` removes legacy media/audio tables, so downgrade cannot
