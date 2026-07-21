@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from pytest import MonkeyPatch
 
-from app.adapters.notifications.base import PortalEmailSender
+from app.adapters.notifications.base import PortalEmailDeliveryError, PortalEmailSender
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, init_schema
@@ -17,6 +18,18 @@ from tests.conftest import (
     merge_json_headers,
     seed_site_auth,
 )
+
+MALICIOUS_EXCEPTION_DETAIL = (
+    "Traceback (most recent call last): /srv/private/smtp.py smtp_password=super-secret-token"
+)
+
+
+def _raise_malicious_value_error(*_args: object, **_kwargs: object) -> None:
+    raise ValueError(MALICIOUS_EXCEPTION_DETAIL)
+
+
+def _raise_malicious_email_error(*_args: object, **_kwargs: object) -> None:
+    raise PortalEmailDeliveryError(MALICIOUS_EXCEPTION_DETAIL)
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -91,6 +104,7 @@ class FakePortalEmailSender(PortalEmailSender):
         locale: str = "zh-CN",
     ) -> None:
         return None
+
 
 def test_catalog_routes_return_seeded_models(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
@@ -492,5 +506,104 @@ def test_internal_portal_email_test_requires_configured_sender(tmp_path: Path) -
 
     assert response.status_code == 503
     assert response.json()["error_code"] == "portal.email_not_configured"
+
+    dispose_engine(database_url)
+
+
+def test_internal_catalog_errors_do_not_expose_exception_details(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = Settings(
+        project_name="Npcink AI Cloud Test",
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
+    )
+    client = TestClient(create_app(CloudServices(settings=settings)))
+    monkeypatch.setattr(
+        CatalogService,
+        "refresh_catalog",
+        _raise_malicious_value_error,
+    )
+    monkeypatch.setattr(
+        CatalogService,
+        "scan_provider_health",
+        _raise_malicious_value_error,
+    )
+
+    for index, path in enumerate(("/internal/catalog/refresh", "/internal/health/providers/scan")):
+        response = client.post(
+            path,
+            json={"providers": ["openai"]},
+            headers=build_internal_headers(
+                internal_token=TEST_INTERNAL_AUTH_TOKEN,
+                idempotency_key=f"catalog-redaction-{index:02d}",
+                trace_id=f"tracecatalogredaction{index:02d}0000000",
+            ),
+        )
+
+        assert response.status_code == 400
+        payload = response.json()
+        assert payload["error_code"] == "catalog.provider_invalid"
+        assert payload["message"] == "catalog provider selection is invalid"
+        assert payload["data"] == {"providers": ["openai"]}
+        assert "super-secret-token" not in response.text
+        assert "Traceback" not in response.text
+        assert "/srv/private/smtp.py" not in response.text
+
+    dispose_engine(database_url)
+
+
+def test_internal_portal_email_failure_does_not_expose_smtp_exception(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    fake_sender = FakePortalEmailSender()
+    monkeypatch.setattr(
+        fake_sender,
+        "send_test_email",
+        _raise_malicious_email_error,
+    )
+    settings = Settings(
+        project_name="Npcink AI Cloud Test",
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
+    )
+    client = TestClient(
+        create_app(
+            CloudServices(
+                settings=settings,
+                portal_email_sender=fake_sender,
+            )
+        )
+    )
+
+    response = client.post(
+        "/internal/portal/email/test",
+        json={"recipient_email": "admin@example.com"},
+        headers=build_internal_headers(
+            internal_token=TEST_INTERNAL_AUTH_TOKEN,
+            idempotency_key="portal-email-redaction-001",
+            trace_id="traceemailredaction001000000000",
+        ),
+    )
+
+    assert response.status_code == 502
+    payload = response.json()
+    assert payload["error_code"] == "portal.email_delivery_failed"
+    assert payload["message"] == "portal email delivery failed"
+    assert payload["data"] == {"recipient_email": "admin@example.com"}
+    assert payload["meta"]["revision"] == "m6"
+    assert "super-secret-token" not in response.text
+    assert "Traceback" not in response.text
+    assert "/srv/private/smtp.py" not in response.text
 
     dispose_engine(database_url)

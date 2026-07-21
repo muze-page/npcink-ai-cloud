@@ -28,6 +28,7 @@ from app.adapters.providers.siliconflow import SiliconFlowProviderAdapter
 from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.main import create_app
+from app.api.routes import service as service_routes
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
@@ -67,6 +68,7 @@ from app.domain.hosted_model_defaults import (
     AUDIO_NARRATION_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
 )
+from app.domain.model_references import MODELS_DEV_API_URL
 from app.domain.provider_connections.service import ProviderConnectionAdminService
 from app.domain.runtime.service import RuntimeService
 from app.domain.site_knowledge import vector_profile as vector_profile_module
@@ -104,6 +106,14 @@ OLD_SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"O" * 32).decode("ascii")
 DEDICATED_SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"D" * 32).decode("ascii")
 OTHER_SERVICE_SETTINGS_ROOT = base64.urlsafe_b64encode(b"W" * 32).decode("ascii")
 SERVICE_SETTINGS_KEY_ID = "test-service-settings-key"
+MALICIOUS_EXCEPTION_DETAIL = (
+    "Traceback (most recent call last): /srv/private/advisor.py "
+    "database_password=super-secret-token"
+)
+
+
+def _raise_malicious_value_error(*_args: object, **_kwargs: object) -> None:
+    raise ValueError(MALICIOUS_EXCEPTION_DETAIL)
 
 
 def _alipay_test_keys() -> tuple[str, str]:
@@ -2204,6 +2214,83 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
         assert row.context_window == 256000
 
 
+def test_admin_model_references_sync_rejects_caller_controlled_source_url_before_http(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    class UnexpectedHttpClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("caller-controlled source URL reached the HTTP client")
+
+    monkeypatch.setattr("app.domain.model_references.httpx.Client", UnexpectedHttpClient)
+
+    response = client.post(
+        "/internal/service/admin/model-references/sync",
+        headers=build_internal_headers(idempotency_key="model-references-reject-source-url"),
+        json={"source_url": "http://127.0.0.1:8000/internal/service/observability/summary"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"][0]["type"] == "extra_forbidden"
+
+
+def test_admin_model_references_sync_fetches_only_fixed_models_dev_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client = _build_client(tmp_path)
+    requested_urls: list[str] = []
+
+    class FixedSourceHttpClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> FixedSourceHttpClient:
+            return self
+
+        def __exit__(
+            self,
+            _exc_type: object,
+            _exc_value: object,
+            _traceback: object,
+        ) -> None:
+            return None
+
+        def get(self, source_url: str) -> httpx.Response:
+            requested_urls.append(source_url)
+            return httpx.Response(
+                200,
+                request=httpx.Request("GET", source_url),
+                json={
+                    "providers": {
+                        "openai": {
+                            "models": {
+                                "gpt-fixed-source": {
+                                    "id": "gpt-fixed-source",
+                                    "name": "GPT Fixed Source",
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+
+    monkeypatch.setattr("app.domain.model_references.httpx.Client", FixedSourceHttpClient)
+
+    response = client.post(
+        "/internal/service/admin/model-references/sync",
+        headers=build_internal_headers(idempotency_key="model-references-fixed-source"),
+        json={},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["model_count"] == 1
+    assert response.json()["data"]["source_url"] == MODELS_DEV_API_URL
+    assert requested_urls == [MODELS_DEV_API_URL]
+
+
 def test_admin_ai_resources_lists_only_added_capability_provider_connections(
     tmp_path: Path,
 ) -> None:
@@ -2523,8 +2610,7 @@ def test_admin_provider_connection_test_redacts_jina_reader_exception(
             assert url == "https://r.jina.test/https://example.com/"
             assert headers == {"Accept": "text/plain"}
             raise RuntimeError(
-                "network connect reader-secret-value "
-                "at /srv/private/reader.py with traceback"
+                "network connect reader-secret-value at /srv/private/reader.py with traceback"
             )
 
     monkeypatch.setattr(
@@ -4319,6 +4405,97 @@ def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
         "monitor",
         "insufficient_data",
     }
+
+    dispose_engine(database_url)
+
+
+def test_service_validation_errors_do_not_expose_exception_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    for method_name in (
+        "get_routing_advisor",
+        "get_ops_summary",
+        "get_ops_summary_preview",
+        "review_ops_summary_disclosure",
+    ):
+        monkeypatch.setattr(
+            service_routes.InternalAIAdvisorService,
+            method_name,
+            _raise_malicious_value_error,
+        )
+    monkeypatch.setattr(
+        service_routes.PluginObservabilityService,
+        "update_attention_state",
+        _raise_malicious_value_error,
+    )
+
+    advisor_cases = (
+        (
+            "/internal/service/advisor/routing?site_id=site_advisor",
+            "advisor.invalid_routing_window",
+            "invalid routing advisor request",
+        ),
+        (
+            "/internal/service/advisor/ops-summary?scope=runtime&site_id=site_advisor",
+            "advisor.invalid_ops_summary_request",
+            "invalid ops summary request",
+        ),
+        (
+            "/internal/service/advisor/ops-summary-preview?scope=runtime&site_id=site_advisor",
+            "advisor.invalid_ops_summary_preview_request",
+            "invalid ops summary preview request",
+        ),
+    )
+    for path, error_code, public_message in advisor_cases:
+        response = client.get(path, headers=build_internal_headers())
+
+        assert response.status_code == 400
+        payload = response.json()
+        assert payload["error_code"] == error_code
+        assert payload["message"] == public_message
+        assert payload["meta"]["revision"] == "m1"
+        assert "super-secret-token" not in response.text
+        assert "Traceback" not in response.text
+        assert "/srv/private/advisor.py" not in response.text
+
+    review_response = client.post(
+        "/internal/service/advisor/ops-summary-review",
+        headers=build_internal_headers(),
+        json={
+            "cache_key": "ops-summary-cache-key-001",
+            "review_status": "human_confirmed",
+        },
+    )
+    assert review_response.status_code == 400
+    assert review_response.json()["error_code"] == ("advisor.invalid_ops_summary_review_request")
+    assert review_response.json()["message"] == "invalid ops summary review request"
+    assert review_response.json()["meta"]["revision"] == "m1"
+    assert "super-secret-token" not in review_response.text
+    assert "Traceback" not in review_response.text
+    assert "/srv/private/advisor.py" not in review_response.text
+
+    attention_response = client.post(
+        "/internal/service/admin/plugin-observability/attention-state",
+        headers=build_internal_headers(
+            idempotency_key="plugin-attention-redaction-001",
+            trace_id="tracepluginredaction001000000000",
+        ),
+        json={
+            "attention_key": "plugin-attention-key-redaction-001",
+            "attention_code": "plugin_observability.plugin_error",
+            "action": "acknowledge",
+        },
+    )
+    assert attention_response.status_code == 422
+    attention_payload = attention_response.json()
+    assert attention_payload["error_code"] == ("plugin_observability.attention_action_invalid")
+    assert attention_payload["message"] == ("invalid plugin observability attention action")
+    assert attention_payload["meta"]["revision"] == "m6"
+    assert "super-secret-token" not in attention_response.text
+    assert "Traceback" not in attention_response.text
+    assert "/srv/private/advisor.py" not in attention_response.text
 
     dispose_engine(database_url)
 

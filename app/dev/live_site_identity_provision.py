@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import stat
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -36,10 +38,136 @@ DEFAULT_SCOPES = [
     "stats:read",
     "entitlement:read",
 ]
+SECRET_FILE_NAME = "cloud-api-key.secret.json"
+PRIVATE_OUTPUT_DIR_MODE = 0o700
+PRIVATE_SECRET_FILE_MODE = 0o600
 
 
 class GuardError(RuntimeError):
     """Raised when identity provisioning must not run."""
+
+
+def _open_private_output_directory(output_dir: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        path_stat = output_dir.lstat()
+        descriptor = os.open(output_dir, flags)
+    except OSError as exc:
+        raise GuardError("output directory must be a private, operator-owned directory") from exc
+
+    descriptor_stat = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(path_stat.st_mode)
+        or (path_stat.st_dev, path_stat.st_ino) != (descriptor_stat.st_dev, descriptor_stat.st_ino)
+        or descriptor_stat.st_uid != os.geteuid()
+        or stat.S_IMODE(descriptor_stat.st_mode) != PRIVATE_OUTPUT_DIR_MODE
+    ):
+        os.close(descriptor)
+        raise GuardError(
+            "output directory must be a non-symlink directory owned by the "
+            "current user with mode 0700"
+        )
+    return descriptor
+
+
+def _prepare_private_output_directory(output_dir: Path) -> None:
+    try:
+        output_dir.mkdir(
+            parents=True,
+            exist_ok=False,
+            mode=PRIVATE_OUTPUT_DIR_MODE,
+        )
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise GuardError("private output directory could not be created") from exc
+
+    descriptor = _open_private_output_directory(output_dir)
+    os.close(descriptor)
+
+
+def _require_secret_target_absent(output_dir: Path) -> None:
+    directory_descriptor = _open_private_output_directory(output_dir)
+    try:
+        try:
+            os.stat(
+                SECRET_FILE_NAME,
+                dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise GuardError("secret output target could not be validated") from exc
+        raise GuardError("secret output already exists; refusing to overwrite it")
+    finally:
+        os.close(directory_descriptor)
+
+
+def _write_private_secret(output_dir: Path, issued_key: dict[str, str]) -> Path:
+    encoded = (json.dumps(issued_key, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    directory_descriptor = _open_private_output_directory(output_dir)
+    file_descriptor: int | None = None
+    created_identity: tuple[int, int] | None = None
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            file_descriptor = os.open(
+                SECRET_FILE_NAME,
+                flags,
+                PRIVATE_SECRET_FILE_MODE,
+                dir_fd=directory_descriptor,
+            )
+        except FileExistsError as exc:
+            raise GuardError("secret output already exists; refusing to overwrite it") from exc
+        except OSError as exc:
+            raise GuardError("secret output could not be created safely") from exc
+
+        file_stat = os.fstat(file_descriptor)
+        created_identity = (file_stat.st_dev, file_stat.st_ino)
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or file_stat.st_nlink != 1
+            or file_stat.st_uid != os.geteuid()
+        ):
+            raise GuardError("secret output is not a private, operator-owned regular file")
+
+        os.fchmod(file_descriptor, PRIVATE_SECRET_FILE_MODE)
+        hardened_stat = os.fstat(file_descriptor)
+        if (
+            (hardened_stat.st_dev, hardened_stat.st_ino) != created_identity
+            or not stat.S_ISREG(hardened_stat.st_mode)
+            or hardened_stat.st_nlink != 1
+            or hardened_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(hardened_stat.st_mode) != PRIVATE_SECRET_FILE_MODE
+        ):
+            raise GuardError("secret output is not a private, operator-owned regular file")
+
+        with os.fdopen(file_descriptor, "wb") as handle:
+            file_descriptor = None
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        if created_identity is not None:
+            try:
+                current_stat = os.stat(
+                    SECRET_FILE_NAME,
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                if (current_stat.st_dev, current_stat.st_ino) == created_identity:
+                    os.unlink(SECRET_FILE_NAME, dir_fd=directory_descriptor)
+            except OSError:
+                pass
+        raise
+    finally:
+        os.close(directory_descriptor)
+    return output_dir / SECRET_FILE_NAME
 
 
 @dataclass(frozen=True)
@@ -256,13 +384,15 @@ def build_report(
     timeout_seconds: int,
     http_post: HttpPost = post_json,
 ) -> dict[str, object]:
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _prepare_private_output_directory(output_dir)
     if execute and not approval_matches(approval_text):
         raise GuardError("exact approval text did not match; no Cloud identity write was run")
     if execute and not internal_token.strip():
         raise GuardError("internal token is required for execute mode")
     if site_id == "site_npcink_trial":
         raise GuardError("site_npcink_trial must not be reused for live candidate identity")
+    if execute:
+        _require_secret_target_absent(output_dir)
 
     idempotency_prefix = f"npcink-live-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
     plan = build_request_plan(
@@ -287,9 +417,7 @@ def build_report(
     )
     issued_key = extract_issued_key(results)
     if issued_key:
-        (output_dir / "cloud-api-key.secret.json").write_text(
-            json.dumps(issued_key, indent=2, sort_keys=True) + "\n"
-        )
+        _write_private_secret(output_dir, issued_key)
 
     report: dict[str, object] = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -326,7 +454,7 @@ def build_report(
             for item in plan
         ],
         "results": redact_payload(results),
-        "secret_file": str(output_dir / "cloud-api-key.secret.json") if issued_key else "",
+        "secret_file": str(output_dir / SECRET_FILE_NAME) if issued_key else "",
         "issued_key": redact_payload(issued_key),
         "next_manual_steps": [
             "paste Cloud Base URL and Cloud API Key into the addon wp-admin Save and Verify form",
@@ -381,6 +509,15 @@ def _dict(value: object) -> dict[str, Any]:
 
 def _list(value: object) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def build_cli_result(report: dict[str, object], output_dir: Path) -> dict[str, object]:
+    return {
+        "ok": True,
+        "mode": report["mode"],
+        "output_dir": str(output_dir),
+        "secret_file": report["secret_file"],
+    }
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -449,16 +586,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": False, "guard_error": str(exc)}), file=sys.stderr)
         return 2
 
-    print(
-        json.dumps(
-            {
-                "ok": True,
-                "mode": report["mode"],
-                "output_dir": str(output_dir),
-                "secret_file": report["secret_file"],
-            }
-        )
-    )
+    print(json.dumps(build_cli_result(report, output_dir)))
     return 0
 
 
