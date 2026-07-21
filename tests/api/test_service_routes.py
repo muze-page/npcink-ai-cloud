@@ -2610,8 +2610,7 @@ def test_admin_provider_connection_test_redacts_jina_reader_exception(
             assert url == "https://r.jina.test/https://example.com/"
             assert headers == {"Accept": "text/plain"}
             raise RuntimeError(
-                "network connect reader-secret-value "
-                "at /srv/private/reader.py with traceback"
+                "network connect reader-secret-value at /srv/private/reader.py with traceback"
             )
 
     monkeypatch.setattr(
@@ -4470,9 +4469,7 @@ def test_service_validation_errors_do_not_expose_exception_details(
         },
     )
     assert review_response.status_code == 400
-    assert review_response.json()["error_code"] == (
-        "advisor.invalid_ops_summary_review_request"
-    )
+    assert review_response.json()["error_code"] == ("advisor.invalid_ops_summary_review_request")
     assert review_response.json()["message"] == "invalid ops summary review request"
     assert review_response.json()["meta"]["revision"] == "m1"
     assert "super-secret-token" not in review_response.text
@@ -4493,12 +4490,8 @@ def test_service_validation_errors_do_not_expose_exception_details(
     )
     assert attention_response.status_code == 422
     attention_payload = attention_response.json()
-    assert attention_payload["error_code"] == (
-        "plugin_observability.attention_action_invalid"
-    )
-    assert attention_payload["message"] == (
-        "invalid plugin observability attention action"
-    )
+    assert attention_payload["error_code"] == ("plugin_observability.attention_action_invalid")
+    assert attention_payload["message"] == ("invalid plugin observability attention action")
     assert attention_payload["meta"]["revision"] == "m6"
     assert "super-secret-token" not in attention_response.text
     assert "Traceback" not in attention_response.text

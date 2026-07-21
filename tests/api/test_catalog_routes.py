@@ -20,8 +20,7 @@ from tests.conftest import (
 )
 
 MALICIOUS_EXCEPTION_DETAIL = (
-    "Traceback (most recent call last): /srv/private/smtp.py "
-    "smtp_password=super-secret-token"
+    "Traceback (most recent call last): /srv/private/smtp.py smtp_password=super-secret-token"
 )
 
 
@@ -105,6 +104,7 @@ class FakePortalEmailSender(PortalEmailSender):
         locale: str = "zh-CN",
     ) -> None:
         return None
+
 
 def test_catalog_routes_return_seeded_models(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
@@ -535,9 +535,7 @@ def test_internal_catalog_errors_do_not_expose_exception_details(
         _raise_malicious_value_error,
     )
 
-    for index, path in enumerate(
-        ("/internal/catalog/refresh", "/internal/health/providers/scan")
-    ):
+    for index, path in enumerate(("/internal/catalog/refresh", "/internal/health/providers/scan")):
         response = client.post(
             path,
             json={"providers": ["openai"]},

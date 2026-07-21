@@ -44,9 +44,7 @@ class ModelReferenceService:
     ) -> dict[str, Any]:
         normalized_provider_id = _string(provider_id).lower()
         normalized_model_ids = [
-            _string(model_id)
-            for model_id in model_ids or []
-            if _string(model_id)
+            _string(model_id) for model_id in model_ids or [] if _string(model_id)
         ]
         normalized_search = _string(search).lower()
         normalized_limit = min(500, max(1, int(limit)))
@@ -87,10 +85,7 @@ class ModelReferenceService:
                 (row.provider_id, row.model_id): row
                 for row in session.scalars(select(ModelReferenceOverride))
             }
-            sources = {
-                row.source_id: row
-                for row in session.scalars(select(ModelReferenceSource))
-            }
+            sources = {row.source_id: row for row in session.scalars(select(ModelReferenceSource))}
 
         items = [
             _serialize_model_reference(
@@ -411,9 +406,7 @@ def _source_summary(sources: dict[str, ModelReferenceSource]) -> list[dict[str, 
             "display_name": source.display_name,
             "source_url": source.source_url,
             "status": source.status,
-            "last_synced_at": source.last_synced_at.isoformat()
-            if source.last_synced_at
-            else "",
+            "last_synced_at": source.last_synced_at.isoformat() if source.last_synced_at else "",
             "last_error_code": source.last_error_code or "",
             "last_error_message": source.last_error_message or "",
         }

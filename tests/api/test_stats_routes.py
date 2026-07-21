@@ -21,8 +21,7 @@ from app.domain.usage.service import UsageService
 from tests.conftest import build_auth_headers, seed_site_auth
 
 MALICIOUS_EXCEPTION_DETAIL = (
-    "Traceback (most recent call last): /srv/private/worker.py "
-    "database_password=super-secret-token"
+    "Traceback (most recent call last): /srv/private/worker.py database_password=super-secret-token"
 )
 
 
@@ -1078,9 +1077,7 @@ def test_stats_validation_errors_do_not_expose_exception_details(
     ):
         monkeypatch.setattr(UsageService, method_name, _raise_malicious_value_error)
 
-    projection_query = (
-        "start_gmt=2026-03-24%2011:00:00&end_gmt=2026-03-24%2012:00:00"
-    )
+    projection_query = "start_gmt=2026-03-24%2011:00:00&end_gmt=2026-03-24%2012:00:00"
     cases = (
         (
             "/v1/router/performance-snapshot",
