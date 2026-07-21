@@ -167,7 +167,8 @@ the named and loopback-served leaves.
 
 After host NGINX is active, generate the fail-closed evidence from the exact
 staged release. The script is root-only, requires `/usr/bin/python3.11`, runs a
-real Certbot dry run with deploy hooks, and atomically writes a root-owned
+real Certbot dry run followed by a direct persistent deploy-hook/reload test,
+and atomically writes a root-owned
 mode-`0600` receipt. The receipt binds `renewal_service`, `certbot_real_path`,
 `renewal_exec_start_sha256`, both archive targets, the derived private-key
 path, and the actual NGINX TLS binding; `verify` resolves and compares them

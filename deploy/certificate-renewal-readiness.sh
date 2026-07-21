@@ -878,8 +878,10 @@ TIMER_NEXT_RUN="$(assert_timer_ready)"
 resolve_timer_execution_chain
 refresh_tls_binding_state
 assert_certificate_and_served_leaf_ready >/dev/null
-"${CERTBOT_REAL_PATH}" renew --dry-run --cert-name "${CERTBOT_LINEAGE_NAME}" --run-deploy-hooks >/dev/null 2>&1 || \
-	fail "Certbot renewal dry run with deploy hooks failed"
+# Alibaba Cloud Linux 3 EPEL Certbot 1.22 has no --run-deploy-hooks flag.
+# The mandatory direct hook/reload proof immediately below remains the hook gate.
+"${CERTBOT_REAL_PATH}" renew --dry-run --cert-name "${CERTBOT_LINEAGE_NAME}" >/dev/null 2>&1 || \
+	fail "Certbot renewal dry run failed"
 execute_deploy_hook_and_prove_reload
 refresh_tls_binding_state
 CERTIFICATE_FINGERPRINT="$(assert_certificate_and_served_leaf_ready)"

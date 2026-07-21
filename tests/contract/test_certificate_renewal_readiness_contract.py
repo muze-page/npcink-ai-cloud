@@ -417,10 +417,8 @@ def test_generate_and_verify_bind_timer_hook_and_served_leaf_without_cert_bytes(
     assert "fake pem leaf" not in serialized
     assert "fake served certificate" not in serialized
     command_log = log_path.read_text(encoding="utf-8")
-    assert (
-        "certbot renew --dry-run --cert-name cloud.npc.ink --run-deploy-hooks"
-        in command_log
-    )
+    assert "certbot renew --dry-run --cert-name cloud.npc.ink" in command_log
+    assert "--run-deploy-hooks" not in command_log
     assert command_log.count("deploy-hook ") == 2
     assert command_log.count("systemctl reload nginx") == 2
     assert (
@@ -554,7 +552,7 @@ def test_failed_regeneration_atomically_invalidates_prior_success(
     failed = _run("generate", env, cert_path, evidence_path, hook_path)
 
     assert failed.returncode != 0
-    assert "Certbot renewal dry run with deploy hooks failed" in failed.stderr
+    assert "Certbot renewal dry run failed" in failed.stderr
     assert not evidence_path.exists()
     env["FAKE_CERTBOT_SUCCESS"] = "1"
     verified = _run("verify", env, cert_path, evidence_path, hook_path)
