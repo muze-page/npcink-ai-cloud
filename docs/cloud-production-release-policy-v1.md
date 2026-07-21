@@ -30,6 +30,18 @@ edit the active release env or restart Compose services in place. Other
 server-side changes are limited to emergency break-glass fixes that must be
 backported to Git immediately.
 
+The sole planned exception is the first P1-E06 cutover's Edge-readiness
+handoff. `deploy/runtime-data-encryption-cutover.sh` may, while holding the
+shared deploy lock, atomically add only the five reviewed non-secret Edge keys
+from a separate root-owned mode-`0600` file. It freezes the original env bytes
+and digest first, fsyncs the lock owner plus the lock/evidence directory chain
+before replacing the env, emits value-free digest evidence, restores the original bytes
+on handled pre-migration failures and catchable `HUP`/`INT`/`TERM` signals, and
+retains that snapshot for whole recovery after migration starts. An uncatchable
+`SIGKILL` or host power loss leaves the persistent snapshot and deploy lock for
+manual recovery. This exception is not a reusable active-env update path and
+does not permit an operator to edit the file directly.
+
 Branch divergence is expected: `production` records the deployed release while
 `master` continues development. A production-only patch must not remain an
 unexplained long-term fork. Before the next promotion, classify it as already
@@ -110,10 +122,10 @@ Before promoting `master` to `production`:
   `18 = 17 + 1` and Service Settings `12 = 8 + 4`. It also has a
   checksum-verified and restore-tested backup plus the matching old code,
   external env, and both old-root recovery point;
-- before P1-E06 starts, the independent production Edge hard gate proves active
-  host NGINX, `nginx -t`, exact-host loopback-resolved HTTPS, stopped retired
-  Caddy, and persisted `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`; it also records
-  a certificate-renewal owner, enabled automatic renewal service/timer,
+- before P1-E06 is invoked, the independent production Edge topology hard gate
+  proves active host NGINX, `nginx -t`, exact-host loopback-resolved HTTPS, and
+  stopped retired Caddy; it also records a certificate-renewal owner, enabled
+  automatic renewal service/timer,
   root-owned persistent deploy hook in `renewal-hooks/deploy`, successful
   renewal dry run and direct hook/reload execution, and at least 30 days of
   validity for both the named PEM and the leaf actually served by
@@ -132,7 +144,12 @@ Before promoting `master` to `production`:
   only rollback evidence, stop Caddy, or switch traffic. Final Edge health is
   marked committed while the shared lock is still held; lock-release failure
   retains the healthy Edge, lock, and evidence and must never trigger a
-  post-commit rollback. The exact
+  rollback. The operator then prepares the separate exact-five-key
+  Edge-readiness input but does not edit the active env. P1-E06's first
+  lock-held preflight durably snapshots the recovery anchors, publishes only
+  those five keys to the active env, and re-verifies certificate readiness;
+  neither image nor database mutation may begin before both handoff and verify
+  pass. The exact
   staged release must generate fresh
   `npcink_cloud_certificate_renewal_readiness.v1` evidence as root with host
   Python `>=3.11`; the receipt is root-owned mode `0600`, expires after seven
@@ -294,6 +311,29 @@ the two corresponding old roots):
 - `NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID`;
 - `NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET`.
 
+The orchestrator freezes that exact six-key file under the lock. A
+post-migration/pre-activation failure retains the root-owned mode-`0600`
+maintenance snapshot and records its SHA-256 in `.cutover-failed`; naming the
+two old-root variables without this bound snapshot is not recovery evidence.
+Pre-migration failure and successful activation remove the private copy.
+
+It separately requires `--edge-readiness-env` outside the managed release
+tree. That root-owned mode-`0600`, non-symlink file contains exactly five
+non-secret keys: `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true` plus the certificate
+path, certificate-readiness evidence path, renewal timer, and persistent deploy
+hook path. Under `.deploy-lock`, the orchestrator freezes this input, snapshots
+the original current env, proves that only those five keys change, atomically
+publishes the augmented env, and records
+`p1_e06_edge_readiness_env_handoff.v1` without values. The augmented digest is
+the cutover baseline copied to the staged env. Before migration, handled
+failures and catchable signals restore the exact original bytes. An
+uncatchable `SIGKILL` or host power loss instead leaves the persistent snapshot
+and deploy lock for manual recovery. After migration starts, the lock, original
+snapshot, digest, and both old roots from the retained maintenance snapshot
+remain part of the mandatory whole
+recovery point. After activation commits, the healthy new runtime is never
+rolled back merely to restore the former env.
+
 It then stops and fences public plus all four writer services, publishes a fresh
 custom PostgreSQL backup and checksum, and pauses in the same process for
 independent off-host acknowledgement. The operator must pull the
@@ -345,7 +385,8 @@ and backend containers by file, while only explicitly reviewed keys may be
 imported into the root host shell. Once
 production migration begins and before activation commits, do not downgrade or
 restart old code. Restore the matched whole `0058` database backup, old
-application revision, old external env, and both old roots together. Failure of
+application revision, original external env snapshot, and the two old roots
+from the digest-bound maintenance snapshot together. Failure of
 either independently transactional `apply`, or of any later pre-activation
 step, requires that whole recovery point; retaining only one newly encrypted
 domain is forbidden. A database-only, code-only, env-only, or root-only

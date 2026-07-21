@@ -133,14 +133,16 @@ The exact-bundle smoke may replay the artifact through loopback NGINX over
 plain HTTP. That is a local verification exception, never a production public
 origin.
 
-P1-E06 has an independent production Edge hard gate. Before the cutover or
-first image mutation may start, install and activate host NGINX through the
-governed binding helper, pass `nginx -t` and the exact-host loopback-resolved
-HTTPS check, stop the retired project Caddy, and persist
-`NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`. The encryption cutover neither creates
-nor repairs this topology. Pure `--stage-only` upload and verification may run
-while this gate is pending because it does not inspect runtime state or mutate
-images.
+P1-E06 has an independent production Edge hard gate. Before invoking the
+cutover, install and activate host NGINX through the governed binding helper,
+pass `nginx -t` and the exact-host loopback-resolved HTTPS check, stop the
+retired project Caddy, and complete the certificate-readiness evidence below.
+Do not edit the active env. Prepare the separate exact-five-key Edge-readiness
+input only after that topology succeeds; P1-E06's first lock-held preflight
+publishes those keys and re-verifies the evidence before any image or database
+mutation. The encryption cutover neither creates nor repairs the Edge topology.
+Pure `--stage-only` upload and verification may run while this gate is pending
+because it does not inspect runtime state or mutate images.
 
 The gate also requires a named certificate-renewal owner, an enabled automatic
 renewal service/timer, a persistent root-owned non-writable executable hook in
@@ -185,8 +187,10 @@ sudo NPCINK_CLOUD_RELEASE_TOOL_PYTHON=/usr/bin/python3.11 \
   --evidence-path /var/lib/npcink-ai-cloud/edge/certificate-renewal-readiness.json
 ```
 
-Persist all four exact values in the active release env; formal runtime has no
-fallback for any of them:
+Place all four exact values in the protected exact-five-key Edge-readiness
+input shown in the P1-E06 procedure; P1-E06 alone persists them with the
+readiness flag into the active env. Formal runtime has no fallback for any of
+them:
 
 ```dotenv
 NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH=/etc/letsencrypt/live/cloud.npc.ink/fullchain.pem
@@ -477,7 +481,29 @@ backup, restore, key rewrite, pointer, worker, or cleanup sequence by hand.
    prove it has no group/world-writable path, and create
    `/var/backups/npcink-ai-cloud` plus `/run/npcink-ai-cloud` as root-owned mode
    `0700` directories before invoking the cutover.
-3. On the production host, create the untracked maintenance env outside the
+3. On the production host, create a separate untracked Edge-readiness env at
+   `/run/npcink-ai-cloud/p1-e06-edge-readiness.env`, outside the managed release
+   tree, root-owned and mode `0600`, with exactly these five non-secret keys:
+
+   ```text
+   NPCINK_CLOUD_EXTERNAL_EDGE_READY=true
+   NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH=/etc/letsencrypt/live/cloud.npc.ink/fullchain.pem
+   NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH=/var/lib/npcink-ai-cloud/edge/certificate-renewal-readiness.json
+   NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=certbot-renew.timer
+   NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH=/etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+   ```
+
+   Do not edit the active env directly. The P1-E06 orchestrator freezes this
+   exact file and the original current env while holding `.deploy-lock`, proves
+   that only these five keys change, fsyncs the lock owner and recovery
+   directory chain, atomically publishes the augmented env,
+   and writes value-free `p1_e06_edge_readiness_env_handoff.v1` digest evidence.
+   Handled pre-migration failures and catchable `HUP`/`INT`/`TERM` signals
+   restore the original env bytes. An uncatchable `SIGKILL` or host power loss
+   leaves the persistent snapshot and deploy lock for manual recovery. Once
+   migration starts, the original `.current-env.snapshot` and its digest remain
+   part of the mandatory whole recovery point.
+4. On the production host, create the untracked maintenance env outside the
    release tree, mode `0600`, with exactly these six keys. Keep values out of
    shell history, command arguments, logs, and Git:
 
@@ -492,9 +518,14 @@ backup, restore, key rewrite, pointer, worker, or cleanup sequence by hand.
 
    The two `*_OLD_ROOT_SECRET` values are maintenance inputs only. They may be
    passed to `dry-run` and `apply`, never to `inventory`, new-key-only
-   `verify`, or the activated runtime.
+   `verify`, or the activated runtime. The orchestrator freezes this exact
+   six-key file under `.deploy-lock`. A post-migration/pre-activation failure
+   retains `.maintenance-env.snapshot` and records its SHA-256 in
+   `.cutover-failed`; a variable-name list without that snapshot is not a
+   complete recovery point. Pre-migration failure and successful activation
+   remove the frozen private copy.
 
-4. Run the one-time orchestrator in the foreground with the three exact
+5. Run the one-time orchestrator in the foreground with the three exact
    acknowledgements. It prepares exact images through the governed
    `remote-load-and-up.sh` `prepare-only` mode, then stops and fences public
    services plus `api`, `worker`, `callback-worker`, and `ops-worker`. The
@@ -506,6 +537,7 @@ backup, restore, key rewrite, pointer, worker, or cleanup sequence by hand.
      --remote-dir /opt/npcink-ai-cloud \
      --staged-release "${STAGED_RELEASE}" \
      --host-python /usr/bin/python3.11 \
+     --edge-readiness-env /run/npcink-ai-cloud/p1-e06-edge-readiness.env \
      --maintenance-env /run/npcink-ai-cloud/runtime-data-reencrypt.env \
      --backup-path /var/backups/npcink-ai-cloud/p1-e06.dump \
      --off-host-receipt /run/npcink-ai-cloud/p1-e06-off-host-receipt.json \
@@ -515,7 +547,7 @@ backup, restore, key rewrite, pointer, worker, or cleanup sequence by hand.
      --confirm-production-cutover I_AUTHORIZE_THE_P1_E06_PRODUCTION_CUTOVER
    ```
 
-5. The orchestrator publishes a fresh mode-`0600` custom-format backup and
+6. The orchestrator publishes a fresh mode-`0600` custom-format backup and
    checksum, atomically writes its mode-`0600` handoff marker under the staged
    release's external evidence directory, and waits in the same process. It
    does not accept an ordinary same-host copy as off-host evidence. From the
@@ -540,7 +572,7 @@ backup, restore, key rewrite, pointer, worker, or cleanup sequence by hand.
    `off-host-receipt-verified.json` together with the source receipt path and
    receipt SHA-256. The terminal result carries that receipt digest; deleting
    or replacing the transient upload must not erase the validated evidence.
-6. After accepting the receipt, the same process proves an independent
+7. After accepting the receipt, the same process proves an independent
    PostgreSQL 16 restore and rehearses `0058 -> 0068`. Against that restored
    copy it runs `inventory -> dry-run -> apply -> verify` separately through
    `python -m app.dev.reencrypt_runtime_data` and
@@ -581,7 +613,7 @@ backup, restore, key rewrite, pointer, worker, or cleanup sequence by hand.
    A count-preserving replacement therefore fails closed. If an intentional
    pre-cutover inventory change occurs, stop and approve a newly reviewed
    digest instead of bypassing the check.
-7. The orchestrator writes both target roots and key IDs only to the staged
+8. The orchestrator writes both target roots and key IDs only to the staged
    external env, atomically activates the staged release, verifies API and new worker
    generation readiness, restores traffic, and validates the active release.
    Immediately after that validation it durably publishes
@@ -607,8 +639,10 @@ Failure recovery has two non-interchangeable boundaries:
   writers remain stopped when this verified pre-migration recovery succeeds.
 - Once production migration starts, do not downgrade and do not restart old
   code against the new or partially changed schema. Restore the whole fresh
-  `0058` database dump, previous application release, previous external env,
-  and both old roots together. Although the Runtime Data and Service Settings
+  `0058` database dump, previous application release, the original external env
+  from the retained `.current-env.snapshot`, and both old roots from the
+  digest-bound `.maintenance-env.snapshot` together.
+  Although the Runtime Data and Service Settings
   `apply` phases are independent transactions, failure of either phase or any
   later pre-activation step requires this same whole recovery point; retaining
   only one committed domain is forbidden. A code-only, env-only, root-only, or

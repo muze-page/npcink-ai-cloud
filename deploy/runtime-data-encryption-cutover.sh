@@ -22,6 +22,7 @@ usage() {
 Usage: deploy/runtime-data-encryption-cutover.sh \
   --remote-dir /opt/npcink-ai-cloud \
   --staged-release /opt/npcink-ai-cloud/release-<id> \
+  --edge-readiness-env /run/npcink-ai-cloud/p1-e06-edge-readiness.env \
   --maintenance-env /run/npcink-ai-cloud/runtime-data-reencrypt.env \
   --backup-path /var/backups/npcink-ai-cloud/p1-e06.dump \
   --off-host-receipt /run/npcink-ai-cloud/p1-e06-off-host-receipt.json \
@@ -41,6 +42,14 @@ release bundle. The maintenance env must be mode 0600 and contain exactly:
   NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=<target-root>
   NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=<target-key-id>
   NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-root>
+
+The separate Edge readiness env must be mode 0600 and contain exactly:
+
+  NPCINK_CLOUD_EXTERNAL_EDGE_READY=true
+  NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH=<absolute-path>
+  NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH=<absolute-path>
+  NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=<systemd-timer-unit>
+  NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH=<absolute-path>
 
 After the fresh backup is published, the script writes a mode-0600 handoff
 marker and waits for an operator-created receipt that did not exist at startup.
@@ -89,6 +98,7 @@ canonical_target() {
 
 REMOTE_DIR=""
 STAGED_RELEASE=""
+EDGE_READINESS_ENV=""
 MAINTENANCE_ENV=""
 BACKUP_PATH=""
 OFF_HOST_RECEIPT=""
@@ -109,6 +119,11 @@ while [ "$#" -gt 0 ]; do
 		--staged-release)
 			[ "$#" -ge 2 ] || fail "--staged-release requires a path"
 			STAGED_RELEASE="$2"
+			shift 2
+			;;
+		--edge-readiness-env)
+			[ "$#" -ge 2 ] || fail "--edge-readiness-env requires a path"
+			EDGE_READINESS_ENV="$2"
 			shift 2
 			;;
 		--maintenance-env)
@@ -163,7 +178,7 @@ done
 
 CURRENT_STAGE="preflight"
 for required_value in \
-	REMOTE_DIR STAGED_RELEASE MAINTENANCE_ENV BACKUP_PATH OFF_HOST_RECEIPT HOST_PYTHON_CANDIDATE; do
+	REMOTE_DIR STAGED_RELEASE EDGE_READINESS_ENV MAINTENANCE_ENV BACKUP_PATH OFF_HOST_RECEIPT HOST_PYTHON_CANDIDATE; do
 	[ -n "${!required_value}" ] || fail "missing required option for ${required_value}"
 done
 [ "${CONFIRM_OFF_HOST}" = "${OFF_HOST_ACK}" ] || fail "off-host handoff acknowledgement is missing"
@@ -207,6 +222,7 @@ REMOTE_DIR_MODE="$(mode_of "${REMOTE_DIR}")"
 (( (8#${REMOTE_DIR_MODE} & 0022) == 0 )) || fail "managed remote directory must not be group/world writable"
 
 require_absolute_target "${STAGED_RELEASE}" "staged release"
+require_absolute_target "${EDGE_READINESS_ENV}" "Edge readiness env"
 require_absolute_target "${MAINTENANCE_ENV}" "maintenance env"
 require_absolute_target "${BACKUP_PATH}" "backup path"
 require_absolute_target "${OFF_HOST_RECEIPT}" "off-host receipt"
@@ -220,6 +236,7 @@ STAGED_RELEASE="$(cd "${STAGED_RELEASE}" && pwd -P)"
 [[ "$(basename "${STAGED_RELEASE}")" =~ ^release-[A-Za-z0-9._-]+$ ]] || fail "staged release name is invalid"
 BACKUP_PATH="$(canonical_target "${BACKUP_PATH}")" || fail "backup parent is missing"
 OFF_HOST_RECEIPT="$(canonical_target "${OFF_HOST_RECEIPT}")" || fail "off-host receipt parent is missing"
+EDGE_READINESS_ENV="$(canonical_target "${EDGE_READINESS_ENV}")" || fail "Edge readiness env parent is missing"
 MAINTENANCE_ENV="$(canonical_target "${MAINTENANCE_ENV}")" || fail "maintenance env parent is missing"
 
 for required_file in \
@@ -240,6 +257,14 @@ done
 [ "$(stat -c '%u' "${MAINTENANCE_ENV}")" = "0" ] || fail "maintenance env must be owned by root"
 case "${MAINTENANCE_ENV}" in
 	"${REMOTE_DIR}"/*) fail "maintenance env must stay outside the managed release directory" ;;
+esac
+
+[ -f "${EDGE_READINESS_ENV}" ] || fail "Edge readiness env is missing"
+[ ! -L "${EDGE_READINESS_ENV}" ] || fail "Edge readiness env must not be a symbolic link"
+[ "$(mode_of "${EDGE_READINESS_ENV}")" = "600" ] || fail "Edge readiness env must have mode 0600"
+[ "$(stat -c '%u' "${EDGE_READINESS_ENV}")" = "0" ] || fail "Edge readiness env must be owned by root"
+case "${EDGE_READINESS_ENV}" in
+	"${REMOTE_DIR}"/*) fail "Edge readiness env must stay outside the managed release directory" ;;
 esac
 
 BACKUP_PARENT="$(dirname "${BACKUP_PATH}")"
@@ -376,11 +401,95 @@ IFS=$'\t' read -r \
 	fail "maintenance env inode proof is invalid"
 unset MAINTENANCE_ENV_SOURCE_PROOF
 
+# The one-time Edge handoff has its own exact, non-secret input contract. Keep
+# it separate from the six-key maintenance secret file so neither surface can
+# silently grow into a general active-env editor.
+EDGE_READINESS_ENV_SOURCE_PROOF="$(
+	"${HOST_PYTHON}" - "${EDGE_READINESS_ENV}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import stat
+import sys
+
+path = sys.argv[1]
+descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(1)
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit(1)
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+finally:
+    os.close(descriptor)
+raw = b"".join(chunks)
+text = raw.decode("utf-8")
+allowed = {
+    "NPCINK_CLOUD_EXTERNAL_EDGE_READY",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH",
+}
+values: dict[str, str] = {}
+for raw_line in text.splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    if "=" not in line:
+        raise SystemExit(1)
+    key, value = line.split("=", 1)
+    if key not in allowed or key in values or not value or value != value.strip():
+        raise SystemExit(1)
+    values[key] = value
+if set(values) != allowed:
+    raise SystemExit(1)
+if values["NPCINK_CLOUD_EXTERNAL_EDGE_READY"] != "true":
+    raise SystemExit(1)
+for name in (
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH",
+):
+    value = values[name]
+    if not os.path.isabs(value) or os.path.normpath(value) != value:
+        raise SystemExit(1)
+if not re.fullmatch(
+    r"[A-Za-z0-9_.@:-]+\.timer",
+    values["NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER"],
+):
+    raise SystemExit(1)
+print(f"{hashlib.sha256(raw).hexdigest()}\t{metadata.st_dev}\t{metadata.st_ino}")
+PY
+)" || fail "Edge readiness env contract is invalid"
+IFS=$'\t' read -r \
+	EDGE_READINESS_ENV_SOURCE_SHA256 \
+	EDGE_READINESS_ENV_SOURCE_DEVICE \
+	EDGE_READINESS_ENV_SOURCE_INODE <<<"${EDGE_READINESS_ENV_SOURCE_PROOF}"
+[[ "${EDGE_READINESS_ENV_SOURCE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+	fail "Edge readiness env content digest proof is invalid"
+[[ "${EDGE_READINESS_ENV_SOURCE_DEVICE}" =~ ^[0-9]+$ ]] || \
+	fail "Edge readiness env device proof is invalid"
+[[ "${EDGE_READINESS_ENV_SOURCE_INODE}" =~ ^[0-9]+$ ]] || \
+	fail "Edge readiness env inode proof is invalid"
+unset EDGE_READINESS_ENV_SOURCE_PROOF
+
 RELEASE_STATE_ROOT="${REMOTE_DIR}/.release-state"
 GLOBAL_ONE_OFF_LOCK_DIR="${RELEASE_STATE_ROOT}/.release-one-off.lock"
 STAGED_STATE_DIR="${RELEASE_STATE_ROOT}/$(basename "${STAGED_RELEASE}")"
 EVIDENCE_DIR="${STAGED_STATE_DIR}/p1-e06-runtime-data-cutover"
 MAINTENANCE_ENV_SNAPSHOT="${EVIDENCE_DIR}/.maintenance-env.snapshot"
+EDGE_READINESS_ENV_SNAPSHOT="${EVIDENCE_DIR}/.edge-readiness-env.snapshot"
+CURRENT_ENV_SNAPSHOT="${EVIDENCE_DIR}/.current-env.snapshot"
+EDGE_READINESS_HANDOFF_EVIDENCE="${EVIDENCE_DIR}/edge-readiness-env-handoff.json"
 GLOBAL_ACTIVATION_RECEIPT="${RELEASE_STATE_ROOT}/p1-e06-activation.json"
 GLOBAL_ACTIVATION_RECEIPT_TMP=""
 GLOBAL_ACTIVATION_RECEIPT_ABSENT_AT_START=0
@@ -393,7 +502,19 @@ FAILURE_MARKER="${REMOTE_DIR}/.cutover-failed"
 cleanup_private_cutover_artifacts() {
 	local path=""
 	local failed=0
-	for path in "${MAINTENANCE_ENV_SNAPSHOT:-}" "${GLOBAL_ACTIVATION_RECEIPT_TMP:-}"; do
+	local private_paths=(
+		"${EDGE_READINESS_ENV_SNAPSHOT:-}"
+		"${GLOBAL_ACTIVATION_RECEIPT_TMP:-}"
+	)
+	# A post-migration/pre-activation failure needs the exact frozen old roots
+	# for whole recovery. Success, initialization failure, and every
+	# pre-migration failure remove the private maintenance copy.
+	if [ "${MIGRATION_STARTED:-0}" != "1" ] || \
+		[ "${ACTIVATION_COMMITTED:-0}" = "1" ] || \
+		[ "${CUTOVER_SUCCEEDED:-0}" = "1" ]; then
+		private_paths+=("${MAINTENANCE_ENV_SNAPSHOT:-}")
+	fi
+	for path in "${private_paths[@]}"; do
 		[ -n "${path}" ] || continue
 		rm -f -- "${path}" >/dev/null 2>&1 || failed=1
 		if [ -e "${path}" ] || [ -L "${path}" ]; then
@@ -411,15 +532,16 @@ cleanup_private_cutover_artifacts() {
 	return "${failed}"
 }
 
-assert_maintenance_env_source_unchanged() {
-	[ -f "${MAINTENANCE_ENV}" ] && [ ! -L "${MAINTENANCE_ENV}" ] || return 1
-	[ "$(mode_of "${MAINTENANCE_ENV}")" = "600" ] || return 1
-	[ "$(stat -c '%u' "${MAINTENANCE_ENV}")" = "0" ] || return 1
+assert_verified_source_unchanged() {
+	local source="$1"
+	local expected_sha256="$2"
+	local expected_device="$3"
+	local expected_inode="$4"
+	[ -f "${source}" ] && [ ! -L "${source}" ] || return 1
+	[ "$(mode_of "${source}")" = "600" ] || return 1
+	[ "$(stat -c '%u' "${source}")" = "0" ] || return 1
 	"${HOST_PYTHON}" - \
-		"${MAINTENANCE_ENV}" \
-		"${MAINTENANCE_ENV_SOURCE_SHA256}" \
-		"${MAINTENANCE_ENV_SOURCE_DEVICE}" \
-		"${MAINTENANCE_ENV_SOURCE_INODE}" <<'PY'
+		"${source}" "${expected_sha256}" "${expected_device}" "${expected_inode}" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -450,6 +572,120 @@ finally:
     os.close(descriptor)
 if digest.hexdigest() != expected_sha256:
     raise SystemExit(1)
+PY
+}
+
+assert_maintenance_env_source_unchanged() {
+	assert_verified_source_unchanged \
+		"${MAINTENANCE_ENV}" \
+		"${MAINTENANCE_ENV_SOURCE_SHA256}" \
+		"${MAINTENANCE_ENV_SOURCE_DEVICE}" \
+		"${MAINTENANCE_ENV_SOURCE_INODE}"
+}
+
+assert_edge_readiness_env_source_unchanged() {
+	assert_verified_source_unchanged \
+		"${EDGE_READINESS_ENV}" \
+		"${EDGE_READINESS_ENV_SOURCE_SHA256}" \
+		"${EDGE_READINESS_ENV_SOURCE_DEVICE}" \
+		"${EDGE_READINESS_ENV_SOURCE_INODE}"
+}
+
+freeze_verified_source() {
+	local source="$1"
+	local snapshot="$2"
+	local expected_sha256="$3"
+	local expected_device="$4"
+	local expected_inode="$5"
+	"${HOST_PYTHON}" - \
+		"${source}" "${snapshot}" "${expected_sha256}" \
+		"${expected_device}" "${expected_inode}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import os
+import stat
+import sys
+
+source, snapshot, expected_sha256, expected_device, expected_inode = sys.argv[1:]
+source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    source_metadata = os.fstat(source_fd)
+    if not stat.S_ISREG(source_metadata.st_mode):
+        raise SystemExit(1)
+    if stat.S_IMODE(source_metadata.st_mode) != 0o600:
+        raise SystemExit(1)
+    if (
+        source_metadata.st_dev != int(expected_device)
+        or source_metadata.st_ino != int(expected_inode)
+    ):
+        raise SystemExit(1)
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(source_fd, 1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+finally:
+    os.close(source_fd)
+raw = b"".join(chunks)
+if hashlib.sha256(raw).hexdigest() != expected_sha256:
+    raise SystemExit(1)
+snapshot_fd = os.open(
+    snapshot,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+    0o600,
+)
+try:
+    view = memoryview(raw)
+    while view:
+        written = os.write(snapshot_fd, view)
+        view = view[written:]
+    os.fsync(snapshot_fd)
+    snapshot_metadata = os.fstat(snapshot_fd)
+    if stat.S_IMODE(snapshot_metadata.st_mode) != 0o600:
+        raise SystemExit(1)
+finally:
+    os.close(snapshot_fd)
+parent_fd = os.open(os.path.dirname(snapshot), os.O_RDONLY)
+try:
+    os.fsync(parent_fd)
+finally:
+    os.close(parent_fd)
+PY
+}
+
+fsync_p1_e06_recovery_anchors() {
+	# The active env handoff must never outrun the recovery state needed after
+	# SIGKILL or host power loss. Sync file data first, then every newly linked
+	# directory from the leaves back through the managed root.
+	"${HOST_PYTHON}" - \
+		"${DEPLOY_LOCK_OWNER_FILE}" \
+		"${DEPLOY_LOCK_DIR}" \
+		"${EVIDENCE_DIR}" \
+		"${STAGED_STATE_DIR}" \
+		"${RELEASE_STATE_ROOT}" \
+		"${REMOTE_DIR}" <<'PY'
+from __future__ import annotations
+
+import os
+import stat
+import sys
+
+for index, path in enumerate(sys.argv[1:]):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(descriptor)
+        if metadata.st_uid != os.geteuid():
+            raise SystemExit(1)
+        if index == 0:
+            if not stat.S_ISREG(metadata.st_mode):
+                raise SystemExit(1)
+        elif not stat.S_ISDIR(metadata.st_mode):
+            raise SystemExit(1)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 PY
 }
 
@@ -511,67 +747,17 @@ for protected_dir in "${RELEASE_STATE_ROOT}" "${STAGED_STATE_DIR}" "${EVIDENCE_D
 	[ "$(mode_of "${protected_dir}")" = "700" ] || \
 		fail "maintenance env snapshot parent must have mode 0700"
 done
+fsync_p1_e06_recovery_anchors || \
+	fail "P1-E06 lock and recovery directory anchors could not be durably synced"
 assert_maintenance_env_source_unchanged || \
 	fail "maintenance env changed before its lock-held snapshot was frozen"
-"${HOST_PYTHON}" - \
+freeze_verified_source \
 	"${MAINTENANCE_ENV}" \
 	"${MAINTENANCE_ENV_SNAPSHOT}" \
 	"${MAINTENANCE_ENV_SOURCE_SHA256}" \
 	"${MAINTENANCE_ENV_SOURCE_DEVICE}" \
-	"${MAINTENANCE_ENV_SOURCE_INODE}" <<'PY' || fail "maintenance env could not be frozen safely"
-from __future__ import annotations
-
-import hashlib
-import os
-import stat
-import sys
-
-source, snapshot, expected_sha256, expected_device, expected_inode = sys.argv[1:]
-source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
-try:
-    source_metadata = os.fstat(source_fd)
-    if not stat.S_ISREG(source_metadata.st_mode):
-        raise SystemExit(1)
-    if stat.S_IMODE(source_metadata.st_mode) != 0o600:
-        raise SystemExit(1)
-    if (
-        source_metadata.st_dev != int(expected_device)
-        or source_metadata.st_ino != int(expected_inode)
-    ):
-        raise SystemExit(1)
-    chunks: list[bytes] = []
-    while True:
-        chunk = os.read(source_fd, 1024 * 1024)
-        if not chunk:
-            break
-        chunks.append(chunk)
-finally:
-    os.close(source_fd)
-raw = b"".join(chunks)
-if hashlib.sha256(raw).hexdigest() != expected_sha256:
-    raise SystemExit(1)
-snapshot_fd = os.open(
-    snapshot,
-    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-    0o600,
-)
-try:
-    view = memoryview(raw)
-    while view:
-        written = os.write(snapshot_fd, view)
-        view = view[written:]
-    os.fsync(snapshot_fd)
-    snapshot_metadata = os.fstat(snapshot_fd)
-    if stat.S_IMODE(snapshot_metadata.st_mode) != 0o600:
-        raise SystemExit(1)
-finally:
-    os.close(snapshot_fd)
-parent_fd = os.open(os.path.dirname(snapshot), os.O_RDONLY)
-try:
-    os.fsync(parent_fd)
-finally:
-    os.close(parent_fd)
-PY
+	"${MAINTENANCE_ENV_SOURCE_INODE}" || \
+	fail "maintenance env could not be frozen safely"
 assert_maintenance_env_source_unchanged || \
 	fail "maintenance env changed while its lock-held snapshot was frozen"
 [ -f "${MAINTENANCE_ENV_SNAPSHOT}" ] && [ ! -L "${MAINTENANCE_ENV_SNAPSHOT}" ] || \
@@ -582,6 +768,28 @@ assert_maintenance_env_source_unchanged || \
 	fail "frozen maintenance env must be owned by root"
 [ "$(sha256sum "${MAINTENANCE_ENV_SNAPSHOT}" | awk '{print $1}')" = \
 	"${MAINTENANCE_ENV_SOURCE_SHA256}" ] || fail "frozen maintenance env digest differs from its source"
+
+CURRENT_STAGE="freeze-edge-readiness-env-after-lock"
+assert_edge_readiness_env_source_unchanged || \
+	fail "Edge readiness env changed before its lock-held snapshot was frozen"
+freeze_verified_source \
+	"${EDGE_READINESS_ENV}" \
+	"${EDGE_READINESS_ENV_SNAPSHOT}" \
+	"${EDGE_READINESS_ENV_SOURCE_SHA256}" \
+	"${EDGE_READINESS_ENV_SOURCE_DEVICE}" \
+	"${EDGE_READINESS_ENV_SOURCE_INODE}" || \
+	fail "Edge readiness env could not be frozen safely"
+assert_edge_readiness_env_source_unchanged || \
+	fail "Edge readiness env changed while its lock-held snapshot was frozen"
+[ -f "${EDGE_READINESS_ENV_SNAPSHOT}" ] && [ ! -L "${EDGE_READINESS_ENV_SNAPSHOT}" ] || \
+	fail "frozen Edge readiness env must be a regular non-symlink file"
+[ "$(mode_of "${EDGE_READINESS_ENV_SNAPSHOT}")" = "600" ] || \
+	fail "frozen Edge readiness env must have mode 0600"
+[ "$(stat -c '%u' "${EDGE_READINESS_ENV_SNAPSHOT}")" = "0" ] || \
+	fail "frozen Edge readiness env must be owned by root"
+[ "$(sha256sum "${EDGE_READINESS_ENV_SNAPSHOT}" | awk '{print $1}')" = \
+	"${EDGE_READINESS_ENV_SOURCE_SHA256}" ] || \
+	fail "frozen Edge readiness env digest differs from its source"
 
 # Export only from the frozen copy without source/eval. Compose v2.27 receives
 # only `-e KEY` flags, so no secret value enters argv or ordinary logs.
@@ -643,7 +851,9 @@ OLD_WRITER_IMAGE_IDS_FILE=""
 OLD_DATA_SERVICE_STATE_FILE=""
 NEW_DATA_SERVICE_IMAGE_IDS_FILE=""
 CURRENT_ENV_FILE=""
+CURRENT_ENV_ORIGINAL_SHA256=""
 CURRENT_ENV_SHA256=""
+EDGE_READINESS_HANDOFF_EVIDENCE_SHA256=""
 HANDOFF_MARKER="${EVIDENCE_DIR}/off-host-handoff.json"
 HANDOFF_TMP=""
 RECEIPT_EVIDENCE="${EVIDENCE_DIR}/off-host-receipt-verified.json"
@@ -719,6 +929,16 @@ write_failure_marker() {
 		printf 'activation_committed=%s\n' "${ACTIVATION_COMMITTED}"
 		if [ "${MIGRATION_STARTED}" = "1" ]; then
 			printf 'previous_external_env=%s\n' "${CURRENT_ENV_FILE}"
+			printf 'previous_external_env_snapshot=%s\n' "${CURRENT_ENV_SNAPSHOT}"
+			printf 'previous_external_env_snapshot_sha256=%s\n' \
+				"${CURRENT_ENV_ORIGINAL_SHA256}"
+			printf 'edge_readiness_handoff_evidence=%s\n' \
+				"${EDGE_READINESS_HANDOFF_EVIDENCE}"
+			printf 'edge_readiness_handoff_evidence_sha256=%s\n' \
+				"${EDGE_READINESS_HANDOFF_EVIDENCE_SHA256}"
+			printf 'maintenance_env_snapshot=%s\n' "${MAINTENANCE_ENV_SNAPSHOT}"
+			printf 'maintenance_env_snapshot_sha256=%s\n' \
+				"${MAINTENANCE_ENV_SOURCE_SHA256}"
 			printf 'required_old_root_env_names=%s\n' \
 				'NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET,NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET'
 		fi
@@ -1154,6 +1374,96 @@ publish_fresh_file() {
 		fail "fresh file publication was not atomic"
 }
 
+restore_original_edge_env() {
+	[ -n "${CURRENT_ENV_FILE}" ] && [ -n "${CURRENT_ENV_ORIGINAL_SHA256}" ] || return 1
+	[ -f "${CURRENT_ENV_SNAPSHOT}" ] && [ ! -L "${CURRENT_ENV_SNAPSHOT}" ] || return 1
+	[ "$(mode_of "${CURRENT_ENV_SNAPSHOT}")" = "600" ] || return 1
+	[ "$(stat -c '%u' "${CURRENT_ENV_SNAPSHOT}")" = "0" ] || return 1
+	[ "$(sha256sum "${CURRENT_ENV_SNAPSHOT}" | awk '{print $1}')" = \
+		"${CURRENT_ENV_ORIGINAL_SHA256}" ] || return 1
+	"${HOST_PYTHON}" - \
+		"${CURRENT_ENV_FILE}" \
+		"${CURRENT_ENV_SNAPSHOT}" \
+		"${CURRENT_ENV_ORIGINAL_SHA256}" <<'PY' || return 1
+from __future__ import annotations
+
+import hashlib
+import os
+import stat
+import sys
+
+target, snapshot, expected_sha256 = sys.argv[1:]
+snapshot_fd = os.open(snapshot, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    snapshot_metadata = os.fstat(snapshot_fd)
+    if not stat.S_ISREG(snapshot_metadata.st_mode):
+        raise SystemExit(1)
+    if stat.S_IMODE(snapshot_metadata.st_mode) != 0o600:
+        raise SystemExit(1)
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(snapshot_fd, 1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+finally:
+    os.close(snapshot_fd)
+raw = b"".join(chunks)
+if hashlib.sha256(raw).hexdigest() != expected_sha256:
+    raise SystemExit(1)
+
+target_fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    target_metadata = os.fstat(target_fd)
+    if not stat.S_ISREG(target_metadata.st_mode):
+        raise SystemExit(1)
+finally:
+    os.close(target_fd)
+
+temporary = os.path.join(
+    os.path.dirname(target),
+    f".{os.path.basename(target)}.p1-e06-restore.{os.getpid()}",
+)
+temporary_fd = os.open(
+    temporary,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+    0o600,
+)
+try:
+    view = memoryview(raw)
+    while view:
+        written = os.write(temporary_fd, view)
+        view = view[written:]
+    os.fchmod(temporary_fd, 0o600)
+    os.fchown(temporary_fd, target_metadata.st_uid, target_metadata.st_gid)
+    os.fsync(temporary_fd)
+finally:
+    os.close(temporary_fd)
+try:
+    observed = os.lstat(target)
+    if (
+        not stat.S_ISREG(observed.st_mode)
+        or observed.st_dev != target_metadata.st_dev
+        or observed.st_ino != target_metadata.st_ino
+    ):
+        raise SystemExit(1)
+    os.replace(temporary, target)
+    directory_fd = os.open(os.path.dirname(target), os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+finally:
+    if os.path.lexists(temporary):
+        os.unlink(temporary)
+PY
+	[ -f "${CURRENT_ENV_FILE}" ] && [ ! -L "${CURRENT_ENV_FILE}" ] || return 1
+	[ "$(mode_of "${CURRENT_ENV_FILE}")" = "600" ] || return 1
+	[ "$(stat -c '%u' "${CURRENT_ENV_FILE}")" = "0" ] || return 1
+	[ "$(sha256sum "${CURRENT_ENV_FILE}" | awk '{print $1}')" = \
+		"${CURRENT_ENV_ORIGINAL_SHA256}" ] || return 1
+}
+
 on_exit() {
 	local status="$?"
 	local outcome="validation_failed_before_image_or_database_mutation"
@@ -1164,6 +1474,14 @@ on_exit() {
 
 	cleanup_private_cutover_artifacts || recovery_failed=1
 	cleanup_restore_resources || recovery_failed=1
+	if [ "${MIGRATION_STARTED}" = "1" ] && [ "${ACTIVATION_COMMITTED}" != "1" ]; then
+		[ -f "${MAINTENANCE_ENV_SNAPSHOT}" ] && \
+			[ ! -L "${MAINTENANCE_ENV_SNAPSHOT}" ] && \
+			[ "$(mode_of "${MAINTENANCE_ENV_SNAPSHOT}" 2>/dev/null || true)" = "600" ] && \
+			[ "$(stat -c '%u' "${MAINTENANCE_ENV_SNAPSHOT}" 2>/dev/null || true)" = "0" ] && \
+			[ "$(sha256sum "${MAINTENANCE_ENV_SNAPSHOT}" 2>/dev/null | awk '{print $1}')" = \
+				"${MAINTENANCE_ENV_SOURCE_SHA256}" ] || recovery_failed=1
+	fi
 	# The governed one-off helper removes this global lock only after proving
 	# that its stopped/running candidate and protected stdin are both absent.
 	# Any residual filesystem object therefore makes automatic recovery claims
@@ -1195,6 +1513,12 @@ on_exit() {
 			outcome="full_database_restore_required"
 			recovery="restore_whole_database_previous_release_external_env_and_both_old_roots_together"
 		else
+			# Before migration starts, restore the exact pre-handoff env bytes before
+			# any old service can be restarted. After migration starts the snapshot is
+			# retained instead for the mandatory whole-recovery procedure.
+			if [ -f "${CURRENT_ENV_SNAPSHOT}" ] || [ -L "${CURRENT_ENV_SNAPSHOT}" ]; then
+				restore_original_edge_env || recovery_failed=1
+			fi
 			if [ "${IMAGE_PREPARE_STARTED}" = "1" ]; then
 				restore_release_image_tags || recovery_failed=1
 			fi
@@ -1301,7 +1625,252 @@ fi
 [ ! -L "${CURRENT_ENV_FILE}" ] && [ "$(mode_of "${CURRENT_ENV_FILE}")" = "600" ] || fail "current release env must be a mode 0600 regular file"
 [ "$(stat -c '%u' "${CURRENT_ENV_FILE}")" = "${CURRENT_UID}" ] || fail "current release env owner differs from the operator"
 [ -f "${PREVIOUS_RELEASE}/docker-compose.runtime.yml" ] || fail "previous exact runtime Compose file is missing"
+
+CURRENT_STAGE="apply-governed-edge-readiness-env-handoff"
+assert_edge_readiness_env_source_unchanged || \
+	fail "Edge readiness env changed before the governed handoff"
+CURRENT_ENV_ORIGINAL_SHA256="$(sha256sum "${CURRENT_ENV_FILE}" | awk '{print $1}')"
+[[ "${CURRENT_ENV_ORIGINAL_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+	fail "original current env digest proof is invalid"
+"${HOST_PYTHON}" - \
+	"${CURRENT_ENV_FILE}" \
+	"${EDGE_READINESS_ENV_SNAPSHOT}" \
+	"${CURRENT_ENV_SNAPSHOT}" \
+	"${EDGE_READINESS_HANDOFF_EVIDENCE}" \
+	"${EDGE_READINESS_ENV_SOURCE_SHA256}" \
+	"${CURRENT_ENV_ORIGINAL_SHA256}" <<'PY' || \
+	fail "governed Edge readiness env handoff failed"
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import stat
+import sys
+
+(
+    current_path,
+    edge_path,
+    snapshot_path,
+    evidence_path,
+    expected_source_sha256,
+    expected_current_sha256,
+) = sys.argv[1:]
+keys = {
+    "NPCINK_CLOUD_EXTERNAL_EDGE_READY",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_CERT_PATH",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_EVIDENCE_PATH",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER",
+    "NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH",
+}
+
+
+def read_regular(path: str) -> tuple[bytes, os.stat_result]:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SystemExit(1)
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise SystemExit(1)
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(descriptor)
+    return b"".join(chunks), metadata
+
+
+def parse_edge(raw: bytes) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in raw.decode("utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise SystemExit(1)
+        key, value = line.split("=", 1)
+        if key not in keys or key in values or not value or value != value.strip():
+            raise SystemExit(1)
+        values[key] = value
+    if set(values) != keys:
+        raise SystemExit(1)
+    return values
+
+
+current_raw, current_metadata = read_regular(current_path)
+edge_raw, _ = read_regular(edge_path)
+if hashlib.sha256(edge_raw).hexdigest() != expected_source_sha256:
+    raise SystemExit(1)
+if hashlib.sha256(current_raw).hexdigest() != expected_current_sha256:
+    raise SystemExit(1)
+edge_values = parse_edge(edge_raw)
+current_raw.decode("utf-8")
+if current_raw and not current_raw.endswith(b"\n"):
+    raise SystemExit(1)
+if os.path.lexists(snapshot_path) or os.path.lexists(evidence_path):
+    raise SystemExit(1)
+
+snapshot_fd = os.open(
+    snapshot_path,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+    0o600,
+)
+try:
+    view = memoryview(current_raw)
+    while view:
+        written = os.write(snapshot_fd, view)
+        view = view[written:]
+    os.fchmod(snapshot_fd, 0o600)
+    os.fchown(snapshot_fd, current_metadata.st_uid, current_metadata.st_gid)
+    os.fsync(snapshot_fd)
+finally:
+    os.close(snapshot_fd)
+evidence_directory_fd = os.open(os.path.dirname(snapshot_path), os.O_RDONLY)
+try:
+    os.fsync(evidence_directory_fd)
+finally:
+    os.close(evidence_directory_fd)
+
+kept_lines: list[bytes] = []
+for line in current_raw.splitlines(keepends=True):
+    decoded = line.rstrip(b"\r\n").decode("utf-8")
+    key = decoded.split("=", 1)[0] if "=" in decoded else ""
+    if key not in keys:
+        kept_lines.append(line)
+updated_raw = b"".join(kept_lines) + b"".join(
+    f"{key}={edge_values[key]}\n".encode("utf-8") for key in sorted(keys)
+)
+if b"".join(kept_lines) != b"".join(
+    line
+    for line in updated_raw.splitlines(keepends=True)
+    if (line.rstrip(b"\r\n").decode("utf-8").split("=", 1)[0]) not in keys
+):
+    raise SystemExit(1)
+
+# Re-prove the exact source inode immediately before the atomic replacement.
+observed_fd = os.open(current_path, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    observed_metadata = os.fstat(observed_fd)
+    observed_chunks: list[bytes] = []
+    while True:
+        chunk = os.read(observed_fd, 1024 * 1024)
+        if not chunk:
+            break
+        observed_chunks.append(chunk)
+finally:
+    os.close(observed_fd)
+if (
+    observed_metadata.st_dev != current_metadata.st_dev
+    or observed_metadata.st_ino != current_metadata.st_ino
+    or b"".join(observed_chunks) != current_raw
+):
+    raise SystemExit(1)
+
+temporary_path = os.path.join(
+    os.path.dirname(current_path),
+    f".{os.path.basename(current_path)}.p1-e06-edge.{os.getpid()}",
+)
+temporary_fd = os.open(
+    temporary_path,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+    0o600,
+)
+try:
+    view = memoryview(updated_raw)
+    while view:
+        written = os.write(temporary_fd, view)
+        view = view[written:]
+    os.fchmod(temporary_fd, 0o600)
+    os.fchown(temporary_fd, current_metadata.st_uid, current_metadata.st_gid)
+    os.fsync(temporary_fd)
+finally:
+    os.close(temporary_fd)
+try:
+    observed = os.lstat(current_path)
+    if (
+        not stat.S_ISREG(observed.st_mode)
+        or observed.st_dev != current_metadata.st_dev
+        or observed.st_ino != current_metadata.st_ino
+    ):
+        raise SystemExit(1)
+    os.replace(temporary_path, current_path)
+    current_directory_fd = os.open(os.path.dirname(current_path), os.O_RDONLY)
+    try:
+        os.fsync(current_directory_fd)
+    finally:
+        os.close(current_directory_fd)
+finally:
+    if os.path.lexists(temporary_path):
+        os.unlink(temporary_path)
+
+previous_sha256 = hashlib.sha256(current_raw).hexdigest()
+updated_sha256 = hashlib.sha256(updated_raw).hexdigest()
+payload = {
+    "contract": "p1_e06_edge_readiness_env_handoff.v1",
+    "status": "passed",
+    "keys": sorted(keys),
+    "source_sha256": expected_source_sha256,
+    "previous_env_sha256": previous_sha256,
+    "updated_env_sha256": updated_sha256,
+    "current_env_path": current_path,
+    "original_snapshot_path": snapshot_path,
+    "values_included": False,
+}
+evidence_temporary = f"{evidence_path}.tmp.{os.getpid()}"
+evidence_fd = os.open(
+    evidence_temporary,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+    0o600,
+)
+try:
+    encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    view = memoryview(encoded)
+    while view:
+        written = os.write(evidence_fd, view)
+        view = view[written:]
+    os.fchmod(evidence_fd, 0o600)
+    os.fchown(evidence_fd, current_metadata.st_uid, current_metadata.st_gid)
+    os.fsync(evidence_fd)
+finally:
+    os.close(evidence_fd)
+try:
+    os.replace(evidence_temporary, evidence_path)
+    evidence_directory_fd = os.open(os.path.dirname(evidence_path), os.O_RDONLY)
+    try:
+        os.fsync(evidence_directory_fd)
+    finally:
+        os.close(evidence_directory_fd)
+finally:
+    if os.path.lexists(evidence_temporary):
+        os.unlink(evidence_temporary)
+PY
 CURRENT_ENV_SHA256="$(sha256sum "${CURRENT_ENV_FILE}" | awk '{print $1}')"
+[ -f "${CURRENT_ENV_FILE}" ] && [ ! -L "${CURRENT_ENV_FILE}" ] && \
+	[ "$(mode_of "${CURRENT_ENV_FILE}")" = "600" ] && \
+	[ "$(stat -c '%u' "${CURRENT_ENV_FILE}")" = "${CURRENT_UID}" ] || \
+	fail "updated current env is not a protected regular file"
+[ -f "${CURRENT_ENV_SNAPSHOT}" ] && [ ! -L "${CURRENT_ENV_SNAPSHOT}" ] && \
+	[ "$(mode_of "${CURRENT_ENV_SNAPSHOT}")" = "600" ] && \
+	[ "$(stat -c '%u' "${CURRENT_ENV_SNAPSHOT}")" = "0" ] || \
+	fail "original current env snapshot is invalid"
+[ "$(sha256sum "${CURRENT_ENV_SNAPSHOT}" | awk '{print $1}')" = \
+	"${CURRENT_ENV_ORIGINAL_SHA256}" ] || fail "original current env snapshot digest is invalid"
+[[ "${CURRENT_ENV_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+	fail "updated current env digest proof is invalid"
+[ -f "${EDGE_READINESS_HANDOFF_EVIDENCE}" ] && \
+	[ ! -L "${EDGE_READINESS_HANDOFF_EVIDENCE}" ] && \
+	[ "$(mode_of "${EDGE_READINESS_HANDOFF_EVIDENCE}")" = "600" ] && \
+	[ "$(stat -c '%u' "${EDGE_READINESS_HANDOFF_EVIDENCE}")" = "0" ] || \
+	fail "Edge readiness env handoff evidence is invalid"
+EDGE_READINESS_HANDOFF_EVIDENCE_SHA256="$(
+	sha256sum "${EDGE_READINESS_HANDOFF_EVIDENCE}" | awk '{print $1}'
+)"
+[[ "${EDGE_READINESS_HANDOFF_EVIDENCE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+	fail "Edge readiness env handoff evidence digest is invalid"
 install -m 0600 "${CURRENT_ENV_FILE}" "${STAGED_ENV_FILE}"
 "${HOST_PYTHON}" - "${STAGED_ENV_FILE}" <<'PY' || fail "staged env legacy-root sanitization failed"
 import os
@@ -2174,6 +2743,14 @@ assert_new_data_services_healthy "${EXPECTED_SOURCE_REVISION}" || \
 	fail "target PostgreSQL/Redis proof drifted before production migration"
 assert_maintenance_env_source_unchanged || \
 	fail "maintenance env changed before production migration"
+[ "$(sha256sum "${CURRENT_ENV_FILE}" | awk '{print $1}')" = "${CURRENT_ENV_SHA256}" ] || \
+	fail "Edge-augmented previous env drifted before production migration"
+[ "$(sha256sum "${CURRENT_ENV_SNAPSHOT}" | awk '{print $1}')" = \
+	"${CURRENT_ENV_ORIGINAL_SHA256}" ] || \
+	fail "original previous env snapshot drifted before production migration"
+[ "$(sha256sum "${EDGE_READINESS_HANDOFF_EVIDENCE}" | awk '{print $1}')" = \
+	"${EDGE_READINESS_HANDOFF_EVIDENCE_SHA256}" ] || \
+	fail "Edge readiness handoff evidence drifted before production migration"
 
 CURRENT_STAGE="production-migrate-0058-to-head"
 MIGRATION_STARTED=1
@@ -2380,6 +2957,11 @@ assert_maintenance_env_source_unchanged || \
 	fail "maintenance env changed before final activation validation"
 [ "$(readlink -f "${CURRENT_LINK}")" = "${STAGED_RELEASE}" ] || fail "active release pointer drifted before completion"
 [ "$(sha256sum "${CURRENT_ENV_FILE}" | awk '{print $1}')" = "${CURRENT_ENV_SHA256}" ] || fail "previous recovery env drifted before completion"
+[ "$(sha256sum "${CURRENT_ENV_SNAPSHOT}" | awk '{print $1}')" = \
+	"${CURRENT_ENV_ORIGINAL_SHA256}" ] || fail "previous recovery env snapshot drifted before completion"
+[ "$(sha256sum "${EDGE_READINESS_HANDOFF_EVIDENCE}" | awk '{print $1}')" = \
+	"${EDGE_READINESS_HANDOFF_EVIDENCE_SHA256}" ] || \
+	fail "Edge readiness handoff evidence drifted before completion"
 [ "$(mode_of "${STAGED_ENV_FILE}")" = "600" ] || fail "active release env mode drifted before completion"
 [ "$(stat -c '%u' "${STAGED_ENV_FILE}")" = "0" ] || fail "active release env must remain owned by root"
 ACTIVE_DOMAIN_NAME="$(npcink_ai_cloud_read_env_value "${STAGED_ENV_FILE}" NPCINK_CLOUD_DOMAIN_NAME || true)"
