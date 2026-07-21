@@ -114,13 +114,12 @@ class ModelReferenceService:
         self,
         *,
         payload: dict[str, Any] | None = None,
-        source_url: str = MODELS_DEV_API_URL,
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         source_id = MODELS_DEV_SOURCE_ID
-        normalized_url = _string(source_url) or MODELS_DEV_API_URL
+        source_url = MODELS_DEV_API_URL
         try:
-            catalog_payload = payload if payload is not None else _fetch_json(normalized_url)
+            catalog_payload = payload if payload is not None else _fetch_json()
             provider_entries = _extract_provider_entries(catalog_payload)
             if not provider_entries:
                 raise ModelReferenceError(
@@ -132,7 +131,7 @@ class ModelReferenceService:
         except ModelReferenceError as error:
             self._record_source_error(
                 source_id=source_id,
-                source_url=normalized_url,
+                source_url=source_url,
                 error_code=error.error_code,
                 message=error.message,
                 now=now,
@@ -142,7 +141,7 @@ class ModelReferenceService:
             message = str(error) or error.__class__.__name__
             self._record_source_error(
                 source_id=source_id,
-                source_url=normalized_url,
+                source_url=source_url,
                 error_code="model_references.sync_failed",
                 message=message,
                 now=now,
@@ -159,7 +158,7 @@ class ModelReferenceService:
                 source = ModelReferenceSource(
                     source_id=source_id,
                     display_name="models.dev",
-                    source_url=normalized_url,
+                    source_url=source_url,
                     status="active",
                     last_synced_at=now,
                     last_error_code=None,
@@ -169,7 +168,7 @@ class ModelReferenceService:
                 session.add(source)
             else:
                 source.display_name = "models.dev"
-                source.source_url = normalized_url
+                source.source_url = source_url
                 source.status = "active"
                 source.last_synced_at = now
                 source.last_error_code = None
@@ -215,7 +214,7 @@ class ModelReferenceService:
         return {
             "surface": "admin_model_reference_sync",
             "source_id": source_id,
-            "source_url": normalized_url,
+            "source_url": source_url,
             "synced_at": now.isoformat(),
             "provider_count": len(provider_entries),
             "model_count": len(rows),
@@ -257,9 +256,9 @@ class ModelReferenceService:
             session.commit()
 
 
-def _fetch_json(source_url: str) -> dict[str, Any]:
+def _fetch_json() -> dict[str, Any]:
     with httpx.Client(timeout=20.0, headers={"User-Agent": "Npcink-AI-Cloud/1.0"}) as client:
-        response = client.get(source_url)
+        response = client.get(MODELS_DEV_API_URL)
         response.raise_for_status()
         payload = response.json()
     if not isinstance(payload, dict):
