@@ -80,12 +80,47 @@ function joinUrl(baseUrl: string, path: string): string {
   return `${normalizedBase}/${normalizedPath.replace(/^\//, '')}`;
 }
 
+function isIdempotencyKeyCharacter(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    character === '.' ||
+    character === '_' ||
+    character === ':' ||
+    character === '-'
+  );
+}
+
 function normalizeIdempotencyPrefix(value: string): string {
-  const normalized = String(value || '')
-    .trim()
-    .replace(/[^A-Za-z0-9._:-]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  return normalized || 'api_write';
+  const source = String(value || '').trim();
+  const normalized: string[] = [];
+  let previousCharacterWasInvalid = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (isIdempotencyKeyCharacter(character)) {
+      normalized.push(character);
+      previousCharacterWasInvalid = false;
+    } else if (!previousCharacterWasInvalid) {
+      normalized.push('_');
+      previousCharacterWasInvalid = true;
+    }
+  }
+
+  let start = 0;
+  while (start < normalized.length && normalized[start] === '_') {
+    start += 1;
+  }
+
+  let end = normalized.length;
+  while (end > start && normalized[end - 1] === '_') {
+    end -= 1;
+  }
+
+  const prefix = normalized.slice(start, end).join('');
+  return prefix || 'api_write';
 }
 
 function assertIdempotencyKey(value: string): string {
