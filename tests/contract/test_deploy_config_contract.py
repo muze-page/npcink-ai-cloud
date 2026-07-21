@@ -98,6 +98,38 @@ def _run_release_policy_with_restricted_path(
     )
 
 
+def _inflate_compose_service_block(
+    compose_path: Path,
+    service: str,
+    *,
+    marker_after_header: str = "",
+) -> None:
+    compose_text = compose_path.read_text()
+    service_block = _compose_service_block(compose_text, service)
+    service_header = f"  {service}:\n"
+    assert service_block.startswith(service_header)
+
+    if marker_after_header:
+        service_block = service_block.replace(
+            service_header,
+            service_header + marker_after_header,
+            1,
+        )
+
+    large_safe_tail = "".join(
+        f"    # release-policy-pipefill-{index:05d}-{'x' * 64}\n"
+        for index in range(16_384)
+    )
+    inflated_text = compose_text.replace(
+        _compose_service_block(compose_text, service),
+        service_block + "\n" + large_safe_tail,
+        1,
+    )
+
+    compose_path.unlink()
+    compose_path.write_text(inflated_text)
+
+
 def _documented_env_value(text: str, key: str) -> str:
     prefix = f"{key}="
     for token in text.replace("`", " ").split():
@@ -1680,6 +1712,51 @@ def test_lightweight_release_policy_gate_is_documented(tmp_path: Path) -> None:
         "pnpm run check:release-policy",
     ):
         assert marker in agents_text
+
+
+def test_release_policy_service_marker_checks_are_pipefail_safe(tmp_path: Path) -> None:
+    cloud_root = _cloud_root()
+    dependabot_text = (cloud_root / ".github" / "dependabot.yml").read_text()
+    script_text = (cloud_root / "scripts" / "check-release-policy.sh").read_text()
+    old_pipeline = (
+        'compose_service_block "${path}" "${service}" | grep -Fq -- "${marker}"'
+    )
+
+    required_case_root = tmp_path / "required-marker-large-service"
+    required_fixture = _release_policy_fixture_root(required_case_root, dependabot_text)
+    _inflate_compose_service_block(
+        required_fixture / "docker-compose.prod.yml",
+        "api",
+    )
+    required_result = _run_release_policy_with_restricted_path(
+        required_fixture,
+        required_case_root,
+    )
+    assert required_result.returncode == 0, required_result.stderr
+    assert "Lightweight release policy gate passed" in required_result.stdout
+
+    forbidden_case_root = tmp_path / "forbidden-marker-large-service"
+    forbidden_fixture = _release_policy_fixture_root(forbidden_case_root, dependabot_text)
+    _inflate_compose_service_block(
+        forbidden_fixture / "docker-compose.prod.yml",
+        "frontend",
+        marker_after_header="    env_file:\n      - .env.deploy\n",
+    )
+    forbidden_result = _run_release_policy_with_restricted_path(
+        forbidden_fixture,
+        forbidden_case_root,
+    )
+    assert forbidden_result.returncode != 0
+    assert (
+        "Forbidden frontend service marker in docker-compose.prod.yml: env_file:"
+        in forbidden_result.stderr
+    )
+
+    assert old_pipeline not in script_text
+    assert script_text.count(
+        'service_block="$(compose_service_block "${path}" "${service}")"'
+    ) == 2
+    assert script_text.count('grep -Fq -- "${marker}" <<<"${service_block}"') == 2
 
 
 def test_exact_release_docs_freeze_map_trust_and_cutover_batch_order() -> None:

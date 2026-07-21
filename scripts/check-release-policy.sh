@@ -73,7 +73,9 @@ require_service_marker() {
 	local path="$1"
 	local service="$2"
 	local marker="$3"
-	if ! compose_service_block "${path}" "${service}" | grep -Fq -- "${marker}"; then
+	local service_block
+	service_block="$(compose_service_block "${path}" "${service}")"
+	if ! grep -Fq -- "${marker}" <<<"${service_block}"; then
 		echo "[fail] Missing ${service} service marker in ${path}: ${marker}" >&2
 		exit 1
 	fi
@@ -83,7 +85,9 @@ reject_service_marker() {
 	local path="$1"
 	local service="$2"
 	local marker="$3"
-	if compose_service_block "${path}" "${service}" | grep -Fq -- "${marker}"; then
+	local service_block
+	service_block="$(compose_service_block "${path}" "${service}")"
+	if grep -Fq -- "${marker}" <<<"${service_block}"; then
 		echo "[fail] Forbidden ${service} service marker in ${path}: ${marker}" >&2
 		exit 1
 	fi
