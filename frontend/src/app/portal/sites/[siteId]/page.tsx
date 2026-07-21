@@ -1,22 +1,26 @@
 'use client';
 
 import React, { Suspense, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
-import { BackofficePageStack, BackofficeSectionPanel, BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+import { PortalPageStack, PortalSection, PortalCard } from '@/components/portal/PortalScaffold';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
+import { PortalSiteKnowledgePanel } from '@/components/portal/PortalSiteKnowledgePanel';
+import { PortalSiteServiceStatus } from '@/components/portal/PortalSiteServiceStatus';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import { PortalErrorState, PortalLoadingState, PortalSignedOutState } from '@/components/portal/PortalPageState';
 import { Modal } from '@/components/ui/Modal';
 import { useLocale } from '@/contexts/LocaleContext';
+import { usePortalSiteMonitoring } from '@/hooks/usePortalSiteMonitoring';
+import { usePortalSiteKnowledge } from '@/hooks/usePortalSiteKnowledge';
 import { useSession } from '@/hooks/useSession';
 import { portalClient, type PortalSiteSummaryRecord, type Site } from '@/lib/portal-client';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import {
   getPortalSiteDisplayName,
-  getPortalSiteWordPressUrl,
+  getPortalSiteUrl,
 } from '@/lib/portal-site-display';
-import { formatDate } from '@/lib/utils';
 
 function PortalSiteRecordContent() {
   const params = useParams<{ siteId?: string }>();
@@ -29,11 +33,14 @@ function PortalSiteRecordContent() {
   const [showRemoveModal, setShowRemoveModal] = useState(false);
   const [removeError, setRemoveError] = useState('');
   const [isRemovingSite, setIsRemovingSite] = useState(false);
+  const siteMonitoring = usePortalSiteMonitoring(siteId, t);
+  const siteKnowledge = usePortalSiteKnowledge(siteId, t);
 
   useEffect(() => {
+    setSummary(null);
+    setError('');
     if (!isAuthenticated || !siteId) return;
     let alive = true;
-    setError('');
     portalClient
       .getSiteSummary(siteId)
       .then((response) => {
@@ -83,25 +90,31 @@ function PortalSiteRecordContent() {
 
   const sessionSite = session.sites.find((item) => item.site_id === siteId) || null;
   const site: Site = {
-    ...(summary.site || {}),
-    ...(sessionSite || {}),
     site_id: siteId,
-    site_name: summary.site?.site_name || sessionSite?.site_name || siteId,
-    account_id: summary.site?.account_id || sessionSite?.account_id || summary.account_id || session.account_id || '',
-    status: (summary.site?.status || sessionSite?.status || 'inactive') as Site['status'],
-    created_at: summary.site?.created_at || sessionSite?.created_at || '',
+    name: summary.site?.name || sessionSite?.name || siteId,
+    site_url: summary.site?.site_url || sessionSite?.site_url || '',
+    platform_kind: summary.site?.platform_kind || sessionSite?.platform_kind || 'wordpress',
+    status: summary.site?.status || sessionSite?.status || 'inactive',
   };
-  const siteUrl = getPortalSiteWordPressUrl(site);
-  const siteNeedsAttention = site.status !== 'active' || !siteUrl;
+  const siteUrl = getPortalSiteUrl(site);
+  const monitoringNeedsAttention = siteMonitoring.overview
+    ? siteMonitoring.overview.health.status !== 'ok'
+      || siteMonitoring.overview.action_required.length > 0
+      || siteMonitoring.overview.quota.top_pressure !== 'none'
+    : false;
+  const siteNeedsAttention = site.status !== 'active'
+    || !siteUrl
+    || Boolean(summary.customer_status?.needs_attention)
+    || monitoringNeedsAttention;
   const siteStatusLabel = siteNeedsAttention
     ? t('portal.home.filter_attention_only', {}, 'Needs attention')
     : t('portal.home.risk_level_normal', {}, 'Normal');
-  const contactStatusLabel = t('portal.site_record_contact_available', {}, 'Available in Contact');
-  const canRemoveSites = Boolean(
-    session.allowed_actions?.includes('remove_sites') ||
-      session.accounts?.some((account) => account.allowed_actions?.includes('remove_sites'))
+  const canRemoveThisSite = Boolean(
+    session.selected_context?.site.site_id === siteId
+    && session.selected_context.allowed_actions.includes('remove_sites')
+    && site.status !== 'archived'
+    && site.status !== 'suspended'
   );
-  const canRemoveThisSite = canRemoveSites && site.status !== 'archived' && site.status !== 'suspended';
 
   const closeRemoveModal = () => {
     if (isRemovingSite) return;
@@ -110,12 +123,13 @@ function PortalSiteRecordContent() {
   };
 
   const handleRemoveSite = async () => {
+    if (!canRemoveThisSite) return;
     setIsRemovingSite(true);
     setRemoveError('');
     try {
       await portalClient.removeSite(site.site_id);
       await refresh();
-      router.push('/portal/sites');
+      router.push('/portal#sites');
     } catch (err) {
       setRemoveError(
         formatPortalErrorMessage(
@@ -130,7 +144,7 @@ function PortalSiteRecordContent() {
   };
 
   return (
-    <BackofficePageStack>
+    <PortalPageStack>
       <PortalWorkspaceHeader
         eyebrow={t('portal.site_record_label', {}, 'Site summary')}
         title={getPortalSiteDisplayName(site)}
@@ -143,21 +157,19 @@ function PortalSiteRecordContent() {
           {
             label: t('common.status', {}, 'Status'),
             value: siteStatusLabel,
-            detail: siteUrl || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
+            detail: siteNeedsAttention
+              ? t('portal.site_record_attention_action', {}, 'The site status or address needs confirmation.')
+              : t('portal.site_record_ready_action', {}, 'No action is needed for this site right now.'),
           },
           {
             label: t('portal.site_address_label', {}, 'Site address'),
             value: siteUrl ? t('portal.site_address_configured', {}, 'Configured') : t('portal.site_url_missing_short', {}, 'Site URL not configured'),
             detail: siteUrl || t('portal.site_record_address_missing_detail', {}, 'Add a site address so support can identify this site faster.'),
           },
-          {
-            label: t('common.created_at', {}, 'Created'),
-            value: site.created_at ? formatDate(site.created_at) : t('portal.home.package_pending_label', {}, 'To confirm'),
-          },
         ]}
       />
 
-      <BackofficeSectionPanel className="space-y-4" variant="portal">
+      <PortalSection className="space-y-4" variant="portal">
         <div className="max-w-2xl">
           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">
             {t('portal.site_record_current_label', {}, 'Site record')}
@@ -179,19 +191,9 @@ function PortalSiteRecordContent() {
               )}
           </p>
         </div>
-        <div className="grid gap-3 lg:grid-cols-3">
-          <BackofficeStackCard variant="portal">
-            <div className="space-y-1">
-              <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                {t('portal.site_address_label', {}, 'Site address')}
-              </p>
-              <p className="break-words text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {siteUrl || t('portal.site_url_missing', {}, 'WordPress URL not configured')}
-              </p>
-            </div>
-          </BackofficeStackCard>
-          <BackofficeStackCard variant="portal">
-            <div className="flex h-full items-start justify-between gap-3">
+        <div className="grid gap-3 lg:grid-cols-2">
+          <PortalCard variant="portal">
+            <div className="flex h-full flex-col items-start justify-between gap-4">
               <div className="space-y-1">
                 <p className="text-sm font-semibold text-slate-950 dark:text-white">
                   {t('portal.nav_account', {}, 'Contact')}
@@ -200,14 +202,16 @@ function PortalSiteRecordContent() {
                   {t(
                     'portal.site_record_contact_desc',
                     {},
-                    'Use the Contact page to confirm the email and service contact details for this account.'
+                    'Use the Account page to confirm the email and service contact details for this account.'
                   )}
                 </p>
               </div>
-              <BackofficeStatusBadge status="active" label={contactStatusLabel} />
+              <Link href="/portal/account" className="btn btn-secondary btn-sm">
+                {t('portal.site_record_contact_action', {}, 'Open account')}
+              </Link>
             </div>
-          </BackofficeStackCard>
-          <BackofficeStackCard variant="portal">
+          </PortalCard>
+          <PortalCard variant="portal">
             <div className="flex h-full items-start justify-between gap-3">
               <div className="space-y-1">
                 <p className="text-sm font-semibold text-slate-950 dark:text-white">
@@ -226,28 +230,55 @@ function PortalSiteRecordContent() {
                       'No action is needed for this site right now.'
                     )}
                 </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Link href={`/portal/sites/${encodeURIComponent(siteId)}#service-status`} className="btn btn-secondary btn-sm">
+                    {t('portal.site_record_service_status_action', {}, 'View service status')}
+                  </Link>
+                  {siteNeedsAttention ? (
+                    <Link href={`/portal/support?new=1&topic=site&site=${encodeURIComponent(siteId)}`} className="btn btn-secondary btn-sm">
+                      {t('portal.support_request_new_action', {}, 'Submit ticket')}
+                    </Link>
+                  ) : null}
+                </div>
                 {canRemoveThisSite ? (
                   <button
                     type="button"
-                    className="btn btn-danger btn-sm mt-3"
+                    className="btn btn-secondary btn-sm mt-3 text-red-700 hover:border-red-300 hover:bg-red-50 dark:text-red-300 dark:hover:border-red-900 dark:hover:bg-red-950/30"
                     onClick={() => setShowRemoveModal(true)}
                   >
                     {t('portal.remove_site_action', {}, 'Remove site')}
                   </button>
                 ) : null}
               </div>
-              <BackofficeStatusBadge
+              <PortalStatusBadge
                 status={siteNeedsAttention ? 'warning' : 'active'}
                 label={siteStatusLabel}
               />
             </div>
-          </BackofficeStackCard>
+          </PortalCard>
         </div>
-      </BackofficeSectionPanel>
+      </PortalSection>
+
+      <PortalSiteServiceStatus
+        t={t}
+        siteId={siteId}
+        overview={siteMonitoring.overview}
+        isLoading={siteMonitoring.isLoading}
+        error={siteMonitoring.error}
+        onRefresh={siteMonitoring.refresh}
+      />
+
+      <PortalSiteKnowledgePanel
+        summary={siteKnowledge.summary}
+        isLoading={siteKnowledge.isLoading}
+        error={siteKnowledge.error}
+        onRetry={siteKnowledge.refresh}
+      />
 
       <Modal
         isOpen={showRemoveModal}
         onClose={closeRemoveModal}
+        closeLabel={t('common.close', {}, 'Close')}
         closeOnOverlay={!isRemovingSite}
         title={t('portal.remove_site_action', {}, 'Remove site')}
         description={t(
@@ -278,7 +309,7 @@ function PortalSiteRecordContent() {
           ) : null}
         </div>
       </Modal>
-    </BackofficePageStack>
+    </PortalPageStack>
   );
 }
 

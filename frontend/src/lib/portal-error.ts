@@ -1,4 +1,4 @@
-import { PortalApiError } from './portal-client';
+import { ApiError } from './errors';
 
 type PortalTranslator = (
   key: string,
@@ -20,7 +20,7 @@ export function formatPortalErrorMessage(
   t: PortalTranslator,
   fallbackMessage: string
 ): string {
-  if (error instanceof PortalApiError) {
+  if (error instanceof ApiError) {
     switch (error.errorCode) {
       case 'portal.login_code_rate_limited':
         return appendErrorCode(

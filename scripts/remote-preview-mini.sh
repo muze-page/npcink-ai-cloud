@@ -25,7 +25,6 @@ ENABLE_TRACE_SINK="${ENABLE_TRACE_SINK:-1}"
 REMOTE_JAEGER_VERSION="${REMOTE_JAEGER_VERSION:-2.17.0}"
 REMOTE_JAEGER_ARCHIVE_URL="${REMOTE_JAEGER_ARCHIVE_URL:-https://github.com/jaegertracing/jaeger/releases/download/v${REMOTE_JAEGER_VERSION}/jaeger-${REMOTE_JAEGER_VERSION}-darwin-arm64.tar.gz}"
 TRACE_EXPORTER_ENDPOINT="${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318/v1/traces}"
-TRACE_SINK_OTLP_ENDPOINT="${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-host.docker.internal:4318}"
 TRACE_QUERY_URL="${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://${REMOTE_IP}:16686}"
 REMOTE_COMPOSE_ENV_PREFIX=""
 REMOTE_RUNTIME_ROOT_SCRIPT="\$HOME/.cache/npcink-ai-cloud-mini"
@@ -181,15 +180,11 @@ services:
       NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${REMOTE_IP},${REMOTE_IP}:${PREVIEW_PORT},127.0.0.1,127.0.0.1:${PREVIEW_PORT},127.0.0.1:8080,localhost,localhost:${PREVIEW_PORT},api,api:8000,proxy,proxy:8080
       NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST: http://${REMOTE_IP}:${PREVIEW_PORT},http://127.0.0.1:${PREVIEW_PORT},http://localhost:${PREVIEW_PORT}
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
-      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
       NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
 
   worker:
     environment:
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: 60
-      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
-      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
-      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
 
   callback-worker:
     build:
@@ -207,9 +202,6 @@ services:
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
       NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS: 5
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: 60
-      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
-      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
-      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -240,9 +232,6 @@ services:
       NPCINK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS: 60
       NPCINK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS: 60
       NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS: 60
-      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
-      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
-      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -292,7 +281,6 @@ for _ in \$(seq 1 10); do
 	sleep 1
 done
 nohup ${REMOTE_JAEGER_BINARY_SCRIPT} \
-	--set=receivers.otlp.protocols.grpc.endpoint=0.0.0.0:4317 \
 	--set=receivers.otlp.protocols.http.endpoint=0.0.0.0:4318 \
 	> ${REMOTE_JAEGER_LOG_SCRIPT} 2>&1 &
 echo \$! > ${REMOTE_JAEGER_PID_SCRIPT}
@@ -519,9 +507,9 @@ verify_remote_trace_sink() {
 	run_remote_cloud "
 service_name=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${NPCINK_CLOUD_OTEL_SERVICE_NAME:-npcink-ai-cloud}\"')\"
 trace_query_url=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-}\"')\"
-trace_sink=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-}\"')\"
-if [ -z \"\${trace_query_url}\" ] || [ -z \"\${trace_sink}\" ]; then
-	echo '[remote-preview] trace sink verification failed: trace env missing from api container' >&2
+trace_exporter=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-}\"')\"
+if [ -z \"\${trace_query_url}\" ] || [ -z \"\${trace_exporter}\" ]; then
+	echo '[remote-preview] trace verification failed: exporter/query env missing from api container' >&2
 	exit 1
 fi
 
@@ -537,7 +525,7 @@ for _ in \$(seq 1 24); do
 	sleep 2
 done
 
-echo \"[remote-preview] trace sink never observed service \${service_name}; query_url=\${trace_query_url} sink=\${trace_sink}\" >&2
+echo \"[remote-preview] trace sink never observed service \${service_name}; query_url=\${trace_query_url} exporter=\${trace_exporter}\" >&2
 printf '%s\n' \"\${services_json}\" >&2
 exit 1
 "

@@ -748,7 +748,9 @@ def _parse_datetime_text(value: str) -> datetime | None:
     for candidate in (text, text.replace(" ", "T")):
         try:
             parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=ALIPAY_GATEWAY_TIMEZONE)
+            return parsed.astimezone(UTC)
         except ValueError:
             continue
     return None

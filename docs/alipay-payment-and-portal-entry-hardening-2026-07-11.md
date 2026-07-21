@@ -1,5 +1,7 @@
 # Alipay Payment and Portal Entry Hardening - 2026-07-11
 
+Last updated: 2026-07-12
+
 ## Status
 
 Accepted implementation history and production handoff record.
@@ -326,3 +328,230 @@ After deployment:
   when the endpoint has no legitimate operator variation.
 - Keep customer order history honest: actions belong to pending state, while
   terminal states remain visible as records.
+
+## 9. July 11-12 Payment, Credit, and Price Consistency Closeout
+
+### Why The Second Investigation Was Needed
+
+After the signing fix reached production, a low-value credit-pack payment
+provided an important counterexample to the Portal display:
+
+- the internal payment order was already `paid`;
+- the Alipay trade number and processed payment event were persisted;
+- the credit ledger contained a `+10,000` purchase grant;
+- subsequent runtime activity had consumed `23` credits;
+- the browser still showed a pending notice and the visible quota still looked
+  like the Free package allowance.
+
+The payment itself was not lost. Three different read models had been confused:
+
+1. the browser return query was being treated as display state instead of
+   resolving the persisted order;
+2. the positive ledger grant was accounting evidence, but runtime quota still
+   had no durable remaining-balance record for the purchased credits;
+3. the Portal usage header and quota card used package-period or net-ledger
+   values that could not describe package allowance plus paid credits.
+
+The reusable debugging rule is: **prove provider state, order state, event
+state, ledger evidence, and spendable balance separately before changing
+credentials or replaying checkout**.
+
+### Accepted Truth Split
+
+The consistency work formalized three related but distinct truths:
+
+- `payment_orders`: sale and provider-state truth;
+- `paid_credit_grants`: remaining spendable balance and expiry truth;
+- `credit_ledger_entries`: immutable grant, consumption, adjustment, and audit
+  evidence.
+
+A ledger grant alone must not be interpreted as current spendable headroom.
+Conversely, the paid-credit balance must always remain traceable to a verified
+internal payment order and its ledger evidence. This is intentionally not a
+general-purpose wallet.
+
+The detailed architecture decision is recorded in
+`docs/decisions/001-payment-backed-credit-grants-and-package-pricing.md`.
+
+## 10. Paid-Credit Balance And Consumption Policy
+
+Commit `1e0d100d` (`fix(commercial): reconcile payments credits and pricing`)
+added migration `20260711_0059` and the `paid_credit_grants` model.
+
+Accepted behavior:
+
+- a successfully verified credit-pack payment creates one idempotent grant
+  linked to the account and payment order;
+- old successful purchases can be reconstructed lazily from trusted payment
+  and ledger evidence after the migration;
+- paid credits are account-scoped and remain usable across subscription-period
+  renewal or a package change until their own expiry;
+- the default purchase validity remains 365 days;
+- runtime spends the current package allowance first;
+- only the overage is allocated to paid-credit grants;
+- multiple paid grants use earliest-expiry-first ordering;
+- operator grants and adjustments continue to affect package net usage and are
+  not silently reclassified as purchased credits;
+- a refund reduces the remaining grant while retaining order, ledger, and
+  audit evidence.
+
+Portal now exposes these values separately:
+
+```text
+package remaining + paid-credit remaining = total currently available
+```
+
+The nearest paid-credit expiry is also visible. This avoids the previous
+failure mode where `+10,000` appeared in the ledger while the headline value
+showed only the package allowance or `0`.
+
+## 11. Sales Price And Model Cost Budget
+
+The Admin package page previously labeled `max_cost_per_period` as a package
+fee. That field is an internal provider-cost monitoring guardrail in USD, not
+the amount charged to a customer. The actual customer price lived in
+`plan_offers.amount`, while Portal copy also embedded fixed Plus and Pro values.
+
+The accepted split is:
+
+- **sales price (CNY / 30 days)**: customer-facing price used for future
+  checkout orders;
+- **model cost budget (USD / period)**: internal provider-cost threshold that
+  never changes the payment amount.
+
+Publishing a paid package version now synchronizes the canonical standard
+offer's amount and `plan_version_id`. Portal cards read live offer amount,
+currency, and trial days instead of fixed `15 / 29 / 14` values. Existing
+payment orders retain their purchase-time price and subject snapshots.
+
+If a standard offer is absent or inactive, Portal says that the package is not
+currently purchasable rather than showing a misleading `available` badge.
+
+Provider-facing subjects for new orders use stable Chinese customer copy, such
+as `Npcink AI Cloud 小积分包（10,000 AI 积分）`; editable internal catalog labels
+do not rewrite existing orders.
+
+## 12. Return-Page Reconciliation And Success Feedback
+
+The browser return URL remains navigation only. Portal now resolves the exact
+order through:
+
+```text
+GET /portal/v1/account/payment-orders/{order_id}
+```
+
+The return-page state machine is:
+
+- `pending`: poll every 3 seconds for at most 20 attempts;
+- `paid`: stop polling, refresh session, entitlements, quota, and order list,
+  then remove the return query from the address bar;
+- canceled, failed, or refunded: show a terminal explanation and a safe next
+  action;
+- timeout: preserve the order reference and offer manual refresh/support.
+
+Commit `ffcdab24` (`test(portal): close payment return feedback loop`) completed
+the customer feedback loop. A successful credit-pack notice now keeps showing
+after URL cleanup and groups the three important facts in one place:
+
+- credits added by this payment;
+- current total available credits after reconciliation;
+- nearest paid-credit expiry.
+
+The three metrics render only after the entitlement refresh completes, so the
+page does not briefly present the pre-payment balance as current truth. Missing
+quota data renders as unavailable rather than a false zero. The asynchronous
+status container uses polite live-region semantics for accessibility.
+
+## 13. Portal Navigation And Order-History Details
+
+The surrounding Portal polish was kept subordinate to the payment state
+machine:
+
+- desktop navigation uses `logo | centered menu | account actions` in one Grid
+  row;
+- tablet keeps a bounded horizontal navigation row;
+- mobile keeps the menu drawer;
+- checkout opens Alipay in a new tab, with an explicit fallback when the
+  browser blocks the popup;
+- payment orders have `all / pending / paid / closed` views;
+- canceled and expired unpaid orders remain visible in Portal for 7 days but
+  are not deleted from accounting or audit storage;
+- actions are owned by the backend `available_actions` contract rather than
+  inferred from frontend order metadata.
+
+These details reduce confusion without turning Portal into a second billing
+engine or WordPress control plane.
+
+## 14. Verification And Regression Coverage
+
+The consistency commit and feedback-loop commit passed the following combined
+local evidence:
+
+```text
+Focused payment/Portal backend suite: 104 passed
+Cloud contract suite:                  70 passed, 1 skipped
+Cloud domain suite:                   184 passed, 3 skipped
+Cloud API suite:                      486 passed
+Cloud perimeter:                       9 passed
+Portal workspace Playwright:           8 passed
+Admin operator Playwright:              9 passed
+Ruff:                                  passed
+Mypy:                                  204 source files passed
+Frontend contracts/type-check/lint:    passed
+```
+
+The new Playwright scenario is deliberately behavioral rather than a source
+regex alone. Its mocked provider/order seam performs:
+
+```text
+pending -> next poll paid -> entitlement refresh ->
+10,000 credited + 12,419 total available + expiry visible -> URL cleaned
+```
+
+Backend tests separately retain the cryptographic callback, exact-order access,
+grant idempotency, cross-period validity, expiry, price-to-offer synchronization,
+new-order price snapshot, package-first consumption, and paid-credit allocation
+coverage.
+
+## 15. Current Repository And Release Handoff
+
+As of 2026-07-12, the final consistency work is committed on:
+
+```text
+branch:  codex/payment-credit-price-consistency
+commits: 1e0d100d, ffcdab24
+```
+
+At this checkpoint the branch has not been pushed, merged to `master`, promoted
+to `production`, or deployed. Therefore the code phase is closed, but production
+delivery is not.
+
+The active worktree also contains unrelated provider and Site Knowledge changes.
+They must not be staged with this commercial history or used as the production
+release source. Follow the repository rule and use a clean worktree for release
+or promotion work.
+
+Required release sequence:
+
+1. push the focused branch and open a PR to `master`;
+2. require green CI and review the exact release scope;
+3. merge to `master` before promoting to `production`;
+4. include `Approved for production validation by operator.` in the production
+   promotion PR body;
+5. let the formal production workflow deploy application code and run Alembic
+   migration `20260711_0059`;
+6. create a new low-value payment and verify checkout, signed notification,
+   exact-order reconciliation, `10,000` credit arrival, package-first spending,
+   total balance, and expiry display;
+7. retain the previous production release as the rollback target until the
+   smoke result is recorded.
+
+The production policy's upgrade trigger is now relevant because paid credits
+have been exercised on the production service. Before expanding beyond bounded
+operator validation, enable or explicitly schedule GitHub branch protection
+and production-environment approval instead of relying indefinitely on the
+lightweight manual gate.
+
+No additional commercial feature work is recommended before this release
+closure. The next action is publish, migrate, and perform the production smoke,
+not add another payment state or balance abstraction.

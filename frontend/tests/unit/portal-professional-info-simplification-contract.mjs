@@ -5,10 +5,15 @@ import assert from 'node:assert/strict';
 const root = process.cwd();
 const billingSource = readFileSync(resolve(root, 'src/app/portal/billing/page.tsx'), 'utf8');
 const usageSource = readFileSync(resolve(root, 'src/app/portal/usage/page.tsx'), 'utf8');
+const creditTrendSource = readFileSync(resolve(root, 'src/components/portal/PortalCreditTrendPanel.tsx'), 'utf8');
 const aiInsightsPagePath = resolve(root, 'src/app/portal/ai-insights/page.tsx');
-const monitoringSource = readFileSync(resolve(root, 'src/app/portal/monitoring/page.tsx'), 'utf8');
+const monitoringPagePath = resolve(root, 'src/app/portal/monitoring/page.tsx');
+const sitesRedirectPagePath = resolve(root, 'src/app/portal/sites/page.tsx');
+const siteServiceStatusSource = readFileSync(resolve(root, 'src/components/portal/PortalSiteServiceStatus.tsx'), 'utf8');
+const siteKnowledgeSource = readFileSync(resolve(root, 'src/components/portal/PortalSiteKnowledgePanel.tsx'), 'utf8');
 const siteRecordSource = readFileSync(resolve(root, 'src/app/portal/sites/[siteId]/page.tsx'), 'utf8');
-const sitesSource = readFileSync(resolve(root, 'src/app/portal/sites/page.tsx'), 'utf8');
+const siteKnowledgePagePath = resolve(root, 'src/app/portal/site-knowledge/page.tsx');
+const sitesSource = readFileSync(resolve(root, 'src/components/portal/PortalSitesWorkspace.tsx'), 'utf8');
 const portalHomeSource = readFileSync(resolve(root, 'src/app/portal/page.tsx'), 'utf8');
 const auditSource = readFileSync(resolve(root, 'src/app/portal/audit/PortalAuditClient.tsx'), 'utf8');
 const pluginMonitoringSource = readFileSync(resolve(root, 'src/components/portal/PortalPluginMonitoringPanel.tsx'), 'utf8');
@@ -26,39 +31,55 @@ assert.doesNotMatch(
   'Portal package page must not expose package record IDs on the customer surface'
 );
 
-const usageDetailIndex = usageSource.indexOf('data-portal-usage="usage-detail"');
-const usageBeforeDetail = usageSource.slice(0, usageDetailIndex);
 assert.doesNotMatch(
-  usageBeforeDetail,
+  usageSource,
   /usage\.tokens_month|common\.cost|remaining_tokens_test_label|remaining_cost_test_label/,
-  'Portal usage summary must not expose token or cost counters before the detail disclosure'
+  'Portal usage must not expose token or cost counters'
 );
 assert.match(
-  usageBeforeDetail,
-  /summary_label[\s\S]*credit_ledger_title[\s\S]*credit_ledger_desc/,
-  'Portal usage summary should show customer-readable point records first'
+  usageSource,
+  /overview_title[\s\S]*view_tabs_label[\s\S]*PortalCreditTrendPanel[\s\S]*credit_events_title/,
+  'Portal usage should lead with current-period totals and task tabs before their panels'
 );
+assert.match(
+  creditTrendSource,
+  /primary_trend_title[\s\S]*trend_empty_title/,
+  'Portal usage trend must remain customer-facing and range based'
+);
+assert.match(creditTrendSource, /trend_window_1h[\s\S]*trend_window_30d/);
 assert.doesNotMatch(
   usageSource,
   /Model tokens|Other provider calls|Vector articles|Vector chunks|Provider cost breakdown|Input tokens|Output tokens|usage\.tokens_month|ai-credit-ledger-v2|Rate version/,
-  'Portal usage detail must use customer-facing point, budget, and knowledge labels instead of technical metering labels'
+  'Portal usage must not expose technical metering labels'
 );
-assert.match(
-  usageSource,
-  /package_service_uses_label[\s\S]*breakdown_tokens[\s\S]*package_budget_label/,
-  'Portal usage detail should keep service uses, points, and budget as the visible usage vocabulary'
-);
+assert.doesNotMatch(usageSource, /PortalUsageAdvancedDetails|view_tab_details|usage-detail/);
 
 assert.equal(
   existsSync(aiInsightsPagePath),
   false,
   'Portal service suggestions must not remain as a standalone customer page'
 );
+assert.equal(
+  existsSync(siteKnowledgePagePath),
+  false,
+  'Site knowledge must remain site-scoped instead of becoming a standalone Portal page'
+);
 
 assert.doesNotMatch(
-  monitoringSource,
+  siteServiceStatusSource,
   /Plugin monitoring|Installed plugin health|Vector observability|P95|top1|MonitoringTabs|PortalPluginMonitoringPanel|PortalMediaProcessingPanel|PortalSiteKnowledgePanel|workflow_status|evidence_summary|likely_cause|next_step|DiagnosticAdvisor|diagnosticAdvisor|suggestion_only|direct_wordpress_write|automatic_repair_allowed/,
   'Portal service status must avoid plugin/vector observability and diagnostic-advisor labels in the customer page'
+);
+assert.match(siteRecordSource, /<PortalSiteKnowledgePanel/);
+assert.match(
+  siteKnowledgeSource,
+  /current_document_count[\s\S]*search_queries_total[\s\S]*no_hit_total[\s\S]*last_indexed_at/,
+  'Portal site knowledge must stay limited to customer-facing coverage and recent-use facts'
+);
+assert.doesNotMatch(
+  siteKnowledgeSource,
+  /AnalyticsLineChart|AnalyticsBarChart|p95|top1|embedding_provider|embedding_model|embedding_dimensions|vector_backend|current_chunk_count|indexed_chunks_total|\.timeline|\.intents/,
+  'Portal site knowledge must not expose vector internals or operator performance diagnostics'
 );
 assert.match(
   pluginMonitoringSource,
@@ -127,25 +148,25 @@ assert.match(
   /portal\.sites\.connect_hint_title[\s\S]*portal\.sites\.connect_hint_desc/,
   'Portal site list should explain that new site connections start from the WordPress addon'
 );
-assert.doesNotMatch(
+assert.match(
   sitesSource,
-  /selectSite\(site\.site_id\)|home\.select_site_action|common\.current/,
-  'Portal site list must not expose current-site switching controls'
-);
-assert.doesNotMatch(
-  sitesSource,
-  /selectedSiteId|selectedSite\s*=|activeSite/,
-  'Portal site list must not derive account connection context from a current site'
+  /const handleSelectSite = async \(siteId: string\)[\s\S]*await selectSite\(siteId\)[\s\S]*portal\.select_site_action/,
+  'Portal site list must expose context switching only as an explicit customer action'
 );
 assert.match(
   sitesSource,
-  /portalAccountId[\s\S]*accountId=\{portalAccountId\}/,
-  'Portal site connection panel must use account context for addon binding'
+  /const selectedSiteId = session\?\.selected_context\?\.site\.site_id \|\| ''/,
+  'Portal site list must read current context only from selected_context'
+);
+assert.match(
+  sitesSource,
+  /portalClient\.listAddonConnectionAccounts\(\)[\s\S]*accounts=\{addonAccounts\}/,
+  'Portal addon binding must use the dedicated eligible-account candidate projection'
 );
 assert.doesNotMatch(
-  sitesSource,
-  /visibleSites\.find\(\(site\) => site\.account_id\)|currentSiteId=\{firstVisibleSiteId\}|firstVisibleSiteId/,
-  'Portal site connection panel must not derive account context from a site record compatibility fallback'
+  `${sitesSource}\n${portalHomeSource}`,
+  /visibleSites\.find\(\(site\) => site\.account_id\)|currentSiteId=\{firstVisibleSiteId\}|firstVisibleSiteId|sites\s*\[\s*0\s*\]|accounts\s*\[\s*0\s*\]/,
+  'Portal context and addon candidates must not use site/account first-item compatibility fallbacks'
 );
 assert.doesNotMatch(
   portalHomeSource,
@@ -166,12 +187,27 @@ assert.doesNotMatch(
 assert.doesNotMatch(
   auditSource,
   /usePortalSiteSelection|selectedSiteId|getAuditBundle\(siteId|getAuditBundle\(selectedSiteId|listAuditEvents\(siteId/,
-  'Portal recent activity must load account-level activity instead of depending on a selected site'
+  'Portal recent activity must keep using the account-level audit projection without a site query filter'
 );
 assert.match(
   auditSource,
-  /portalClient\.getAuditBundle\(\{ limit: 10 \}\)/,
-  'Portal recent activity must use the account-level audit bundle'
+  /const contextSiteId = session\?\.selected_context\?\.site\.site_id \|\| ''[\s\S]*if \(!isAuthenticated \|\| !requestContextSiteId\) return/,
+  'Portal recent activity must require an explicit selected context before loading account activity'
+);
+assert.match(
+  auditSource,
+  /useLayoutEffect\([\s\S]*setAuditEvents\(\[\]\)[\s\S]*setAuditSummary\(null\)[\s\S]*setVisibleLimit\(10\)/,
+  'Portal recent activity must clear records and paging when context changes'
+);
+assert.match(
+  auditSource,
+  /portalClient\.getAuditBundle\(\{ limit \}\)/,
+  'Portal recent activity must use the account-level audit bundle with the requested page size'
+);
+assert.match(
+  auditSource,
+  /loadActivity\(10\)/,
+  'Portal recent activity must keep the initial account-level page bounded to 10 records'
 );
 assert.match(
   auditSource,
@@ -183,10 +219,12 @@ assert.match(
   /title=\{t\('portal\.audit\.nav_label'[\s\S]*portal\.audit\.recent_desc/,
   'Portal recent activity should show plain recent activity copy without a filter console'
 );
+assert.equal(existsSync(monitoringPagePath), false, 'retired monitoring redirect must stay deleted');
+assert.equal(existsSync(sitesRedirectPagePath), false, 'retired sites redirect must stay deleted');
 assert.match(
-  monitoringSource,
-  /data-portal-support-deeplink="monitoring"/,
-  'Portal monitoring must stay available only as a support deep link'
+  siteRecordSource,
+  /<PortalSiteServiceStatus[\s\S]*overview=\{siteMonitoring\.overview\}/,
+  'Portal site record must own the customer-readable service status'
 );
 assert.match(
   auditSource,
@@ -195,8 +233,8 @@ assert.match(
 );
 
 for (const expectedCopy of [
-  "'portal.billing.customer_title': 'Package'",
-  "'portal.billing.customer_title': '套餐'",
+  "'portal.billing.customer_title': 'Package and rights'",
+  "'portal.billing.customer_title': '套餐与权益'",
   "'portal.site_record_current_label': 'Site record'",
   "'portal.site_record_current_label': '站点记录'",
   "'portal.audit.recent_desc': 'Only recent customer-readable activity is shown here.'",

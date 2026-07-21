@@ -17,10 +17,7 @@ from app.core.models import (
     SiteKnowledgeIndexSnapshot,
     SiteKnowledgeSearchMetric,
 )
-from app.domain.commercial.credits import (
-    record_credit_ledger_component,
-    vector_credit_component,
-)
+from app.domain.commercial.credits import SITE_KNOWLEDGE_INDEX_METERING_CLASS
 from app.domain.site_knowledge.contracts import (
     SITE_KNOWLEDGE_SEARCH_ABILITY,
     SITE_KNOWLEDGE_STATUS_ABILITY,
@@ -567,10 +564,10 @@ def _record_index_job_metric(
     metric.duration_ms = _duration_ms(execution_started_at, finished_at)
     metric.finished_at = finished_at
     session.flush()
-    _record_index_credit_ledger_entries(session=session, run=run, metric=metric)
+    _record_index_usage_meter_events(session=session, run=run, metric=metric)
 
 
-def _record_index_credit_ledger_entries(
+def _record_index_usage_meter_events(
     *,
     session: Session,
     run: RunRecord,
@@ -581,26 +578,32 @@ def _record_index_credit_ledger_entries(
         ("vector_documents", metric.indexed_documents),
         ("vector_chunks", metric.indexed_chunks),
     ):
-        component = vector_credit_component(source_type=source_type, quantity=quantity)
-        if component is None:
+        if quantity <= 0:
             continue
-        record_credit_ledger_component(
-            repository=repository,
+        repository.record_usage_meter_event(
             account_id=metric.account_id or run.account_id,
             site_id=metric.site_id or run.site_id,
             subscription_id=metric.subscription_id or run.subscription_id,
             plan_version_id=run.plan_version_id,
             run_id=metric.run_id,
             provider_call_id=None,
-            component=component,
-            source_id=metric.run_id,
-            idempotency_key=f"site_knowledge_index:{metric.run_id}:{source_type}",
-            metadata_json={
+            event_kind="site_knowledge_index",
+            meter_key=source_type,
+            quantity=float(quantity),
+            ability_family=run.ability_family,
+            channel=run.channel,
+            execution_kind=run.execution_kind,
+            execution_tier=run.execution_tier,
+            data_classification=run.data_classification,
+            currency=None,
+            dedupe_key=f"site_knowledge_index:{metric.run_id}:{source_type}",
+            payload_json={
+                "ability_name": run.ability_name,
+                "metering_class": SITE_KNOWLEDGE_INDEX_METERING_CLASS,
                 "site_knowledge_index_metric_id": int(metric.id or 0),
                 "sync_mode": str(metric.sync_mode or ""),
                 "status": str(metric.status or ""),
             },
-            created_at=metric.finished_at or metric.created_at,
         )
 
 

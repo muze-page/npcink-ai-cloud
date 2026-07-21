@@ -6,11 +6,13 @@ const clientPath = resolve(process.cwd(), 'src/lib/portal-client.ts');
 const proxyPath = resolve(process.cwd(), 'src/proxy.ts');
 const loginPagePath = resolve(process.cwd(), 'src/app/portal/login/page.tsx');
 const registerPagePath = resolve(process.cwd(), 'src/app/portal/register/page.tsx');
+const authShellPath = resolve(process.cwd(), 'src/components/portal/PortalAuthShell.tsx');
 
 const clientSource = readFileSync(clientPath, 'utf8');
 const proxySource = readFileSync(proxyPath, 'utf8');
 const loginSource = readFileSync(loginPagePath, 'utf8');
 const registerSource = readFileSync(registerPagePath, 'utf8');
+const authShellSource = readFileSync(authShellPath, 'utf8');
 
 assert.match(
   clientSource,
@@ -48,8 +50,8 @@ assert.match(
 );
 assert.match(
   loginSource,
-  /portal\.login\.existing_label[\s\S]*<form[\s\S]*href="\/portal\/register"/,
-  'portal login page must put the email login form and Free account entry in the same primary card'
+  /<PortalAuthShell[\s\S]*portal\.login\.existing_label[\s\S]*href="\/portal\/register"[\s\S]*<form/,
+  'portal login page must put the email form and Free account entry in the shared authentication shell'
 );
 assert.doesNotMatch(
   loginSource,
@@ -102,8 +104,15 @@ assert.match(
 );
 assert.match(
   registerSource,
-  /portal\.register\.chip[\s\S]*<form[\s\S]*portal\.register\.already_title/,
-  'portal registration page must put the Free signup form and sign-in return path in the same primary card'
+  /<PortalAuthShell[\s\S]*portal\.register\.chip[\s\S]*portal\.register\.already_title[\s\S]*<form/,
+  'portal registration page must put the Free signup form and sign-in return path in the shared authentication shell'
+);
+assert.match(loginSource, /PortalAuthShell/, 'portal login must use the shared authentication shell');
+assert.match(registerSource, /PortalAuthShell/, 'portal registration must use the shared authentication shell');
+assert.match(
+  authShellSource,
+  /data-portal-auth="shell"[\s\S]*<header>[\s\S]*\{children\}[\s\S]*<aside/,
+  'shared authentication shell must own the common title, form, and supporting-content layout'
 );
 assert.doesNotMatch(
   registerSource,

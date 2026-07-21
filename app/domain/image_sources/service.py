@@ -1086,7 +1086,6 @@ def _build_ai_generation_handoff(
             "contract_version": IMAGE_GENERATION_CONTRACT,
             "aspect_ratio": _default_generation_aspect_ratio(str(options.get("orientation") or "")),
             "resolution": "high",
-            "response_format": "url",
             "n": 1,
         },
         "required_local_fields": ["prompt"],

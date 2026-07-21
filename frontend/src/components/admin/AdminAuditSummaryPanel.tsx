@@ -7,10 +7,14 @@ import {
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
+import { resolveUiErrorMessage } from '@/lib/errors';
 import {
   formatDate,
   formatNumber as formatInteger,
 } from '@/lib/utils';
+
+const adminAuditSummaryClient = createApiClient({ idempotencyPrefix: 'admin_audit_summary' });
 
 type AuditSummaryGroup = {
   event_kind?: string;
@@ -49,6 +53,7 @@ export function AdminAuditSummaryPanel({
   const [summary, setSummary] = useState<AuditSummaryPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const href = useMemo(() => {
     const params = new URLSearchParams();
@@ -71,37 +76,22 @@ export function AdminAuditSummaryPanel({
       setError(null);
 
       try {
-        const response = await fetch(href, {
-          credentials: 'include',
-        });
-        const payload = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-          throw new Error(
-            String(
-              payload?.message ||
-                t(
-                  'admin.audit_summary.load_failed',
-                  {},
-                  'Failed to load recent audit summary.'
-                )
-            )
-          );
-        }
+        const response = await adminAuditSummaryClient.request<AuditSummaryPayload>(href);
 
         if (!cancelled) {
-          setSummary((payload?.data ?? null) as AuditSummaryPayload | null);
+          setSummary(response.data ?? null);
         }
       } catch (err) {
         if (!cancelled) {
           setError(
-            err instanceof Error
-              ? err.message
-              : t(
-                  'admin.audit_summary.load_failed',
-                  {},
-                  'Failed to load recent audit summary.'
-                )
+            resolveUiErrorMessage(
+              err,
+              t(
+                'admin.audit_summary.load_failed',
+                {},
+                'Failed to load recent audit summary.'
+              )
+            )
           );
         }
       } finally {
@@ -116,7 +106,7 @@ export function AdminAuditSummaryPanel({
     return () => {
       cancelled = true;
     };
-  }, [href, t]);
+  }, [href, reloadKey, t]);
 
   const totals = summary?.totals ?? {};
   const groups = Array.isArray(summary?.groups) ? summary.groups : [];
@@ -144,11 +134,20 @@ export function AdminAuditSummaryPanel({
       </div>
 
       {isLoading ? (
-        <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+        <p className="mt-4 text-sm text-slate-500 dark:text-slate-400" role="status">
           {t('common.loading', {}, 'Loading...')}
         </p>
       ) : error ? (
-        <p className="mt-4 text-sm text-red-600 dark:text-red-300">{error}</p>
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-3 dark:border-red-900/70 dark:bg-red-950/30" role="alert">
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm mt-3"
+            onClick={() => setReloadKey((current) => current + 1)}
+          >
+            {t('common.retry', {}, 'Retry')}
+          </button>
+        </div>
       ) : (
         <>
           <div className="mt-4">

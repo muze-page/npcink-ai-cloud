@@ -58,7 +58,7 @@ def _stage_report(
                         "account_id": "acct_live",
                         "site_id": "site_live",
                         "site_name": "Npcink Local Live",
-                        "wordpress_url": "http://npcink.local/",
+                        "site_url": "http://npcink.local/",
                         "scopes": ["runtime:resolve", "runtime:execute"],
                     }
                 },

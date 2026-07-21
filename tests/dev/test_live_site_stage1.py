@@ -26,7 +26,7 @@ def _stage_kwargs(tmp_path: Path) -> dict[str, object]:
         "account_id": "acct_live",
         "site_id": "site_live",
         "site_name": "Live Site",
-        "wordpress_url": "http://npcink.local/",
+        "site_url": "http://npcink.local/",
         "key_label": "Live key",
         "scopes": ["runtime:execute"],
         "timeout_seconds": 1,

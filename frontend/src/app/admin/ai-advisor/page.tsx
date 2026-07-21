@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BackofficeDiagnosticNotice,
   BackofficeMetricStrip,
   BackofficePageStack,
   BackofficePrimaryPanel,
@@ -12,8 +13,11 @@ import {
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { cn, formatNumber } from '@/lib/utils';
+
+const operationsAdvisorClient = createApiClient({ idempotencyPrefix: 'operations_advisor' });
 
 type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
 
@@ -539,6 +543,43 @@ function humanizeKey(value: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function advisorHeadlineText(value: string, t: Translator): string {
+  const known: Record<string, [string, string]> = {
+    'Operations posture is stable': ['admin.ai_advisor.diagnosis_operations_stable', 'Operations posture is stable'],
+    'Runtime failures need operations review': ['admin.ai_advisor.diagnosis_runtime_failures', 'Runtime failures need operations review'],
+    'Provider reliability needs review': ['admin.ai_advisor.diagnosis_provider_reliability', 'Provider reliability needs review'],
+    'Knowledge search value may be low': ['admin.ai_advisor.diagnosis_knowledge_value', 'Knowledge search value may be low'],
+    'Commercial follow-up is visible': ['admin.ai_advisor.diagnosis_commercial_followup', 'Commercial follow-up is visible'],
+    'Runtime delivery needs operator review': ['admin.ai_advisor.diagnosis_runtime_delivery', 'Runtime delivery needs operator review'],
+  };
+  const copy = known[value];
+  return copy ? t(copy[0], {}, copy[1]) : value || t('admin.ai_advisor.no_active_issue', {}, 'No active operator issue');
+}
+
+function advisorSummaryText(value: string, t: Translator): string {
+  const known: Record<string, [string, string]> = {
+    'Recent usage, runtime, provider, and knowledge signals do not show a high-priority operator action.': ['admin.ai_advisor.diagnosis_operations_stable_desc', 'Recent usage, runtime, provider, and knowledge signals do not show a high-priority operator action.'],
+    'Recent run failures are visible in the selected operations window.': ['admin.ai_advisor.diagnosis_runtime_failures_desc', 'Recent run failures are visible in the selected operations window.'],
+    'Provider errors or fallback pressure are present in recent traffic.': ['admin.ai_advisor.diagnosis_provider_reliability_desc', 'Provider errors or fallback pressure are present in recent traffic.'],
+    'Knowledge searches show elevated no-hit pressure in the selected window.': ['admin.ai_advisor.diagnosis_knowledge_value_desc', 'Knowledge searches show elevated no-hit pressure in the selected window.'],
+    'Subscription attention or near-term expiry signals are present.': ['admin.ai_advisor.diagnosis_commercial_followup_desc', 'Subscription attention or near-term expiry signals are present.'],
+    'Queue or callback pressure is present in recent runtime diagnostics.': ['admin.ai_advisor.diagnosis_runtime_delivery_desc', 'Queue or callback pressure is present in recent runtime diagnostics.'],
+  };
+  const copy = known[value];
+  return copy ? t(copy[0], {}, copy[1]) : value || t('admin.ai_advisor.no_summary', {}, 'Review the linked operational evidence.');
+}
+
+function advisorEvidenceLabel(kind: string, fallback: string, t: Translator): string {
+  const known: Record<string, [string, string]> = {
+    admin_overview: ['admin.ai_advisor.evidence_admin_overview', 'Commercial coverage and usage summary'],
+    runtime_diagnostics: ['admin.ai_advisor.evidence_runtime_diagnostics', 'Runtime queue, callback, and guard summary'],
+    site_knowledge_observability: ['admin.ai_advisor.evidence_site_knowledge', 'Knowledge search and index health summary'],
+    provider_call_records: ['admin.ai_advisor.evidence_provider_calls', 'Provider call metrics aggregated from run telemetry'],
+  };
+  const copy = known[kind];
+  return copy ? t(copy[0], {}, copy[1]) : fallback || humanizeKey(kind);
+}
+
 function getSignal(branch: SummaryBranch, code: string): Record<string, string | number | boolean | null> {
   return branch.source_context.advisor.signals.find((signal) => signal.code === code) ?? {};
 }
@@ -905,17 +946,17 @@ function OperationsWorkPanel({ data }: { data: AdvisorPreviewData }) {
   const severity = advisor.severity || branch.severity || 'info';
 
   return (
-    <BackofficeSectionPanel className="space-y-5">
+    <BackofficeSectionPanel className="space-y-5" data-ui="advisor-current-diagnosis">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
             {t('admin.ai_advisor.current_diagnosis', {}, 'Current diagnosis')}
           </p>
           <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-            {branch.headline || t('admin.ai_advisor.no_active_issue', {}, 'No active operator issue')}
+            {advisorHeadlineText(branch.headline, t)}
           </h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {advisor.summary || branch.operator_summary || t('admin.ai_advisor.no_summary', {}, 'Review the linked operational evidence.')}
+            {advisorSummaryText(advisor.summary || branch.operator_summary, t)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1012,7 +1053,7 @@ function OperationsWorkPanel({ data }: { data: AdvisorPreviewData }) {
             {advisor.evidence.length ? (
               advisor.evidence.slice(0, 5).map((item) => (
                 <div key={`${item.kind}-${item.ref}`} className="rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/45">
-                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.label || humanizeKey(item.kind)}</p>
+                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{advisorEvidenceLabel(item.kind, item.label, t)}</p>
                   <p className="mt-1 truncate font-mono text-[0.7rem] text-slate-500 dark:text-slate-400">{item.ref || item.kind}</p>
                 </div>
               ))
@@ -1028,10 +1069,19 @@ function OperationsWorkPanel({ data }: { data: AdvisorPreviewData }) {
   );
 }
 
-function AdvisorEvaluationDetails({ children }: { children: React.ReactNode }) {
+function AdvisorEvaluationDetails({
+  children,
+  onToggle,
+}: {
+  children: React.ReactNode;
+  onToggle?: (open: boolean) => void;
+}) {
   const { t } = useLocale();
   return (
-    <details className="rounded-xl border border-slate-200/80 bg-white/65 dark:border-slate-800 dark:bg-slate-950/30">
+    <details
+      className="rounded-xl border border-slate-200/80 bg-white/65 dark:border-slate-800 dark:bg-slate-950/30"
+      onToggle={(event) => onToggle?.(event.currentTarget.open)}
+    >
       <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-900/60">
         {t('admin.ai_advisor.evaluation_details', {}, 'AI evaluation details')}
       </summary>
@@ -1709,6 +1759,10 @@ function AdminAiAdvisorContent() {
   const [data, setData] = useState<AdvisorPreviewData | null>(null);
   const [historyItems, setHistoryItems] = useState<AdvisorHistoryItem[]>([]);
   const [valueMetrics, setValueMetrics] = useState<AdvisorValueMetrics | null>(null);
+  const [evaluationDetailsOpen, setEvaluationDetailsOpen] = useState(false);
+  const [evaluationDetailsLoading, setEvaluationDetailsLoading] = useState(false);
+  const [evaluationDetailsError, setEvaluationDetailsError] = useState('');
+  const [loadedEvaluationDetailsKey, setLoadedEvaluationDetailsKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [scope, setScope] = useState('operations');
@@ -1722,7 +1776,17 @@ function AdminAiAdvisorContent() {
   const [reviewingDisclosure, setReviewingDisclosure] = useState(false);
   const [copyMessage, setCopyMessage] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
+  const previewRequestActiveRef = useRef('');
+  const previewRequestCompletedRef = useRef('');
+  const previewRequestSequenceRef = useRef(0);
+  const evaluationDetailsRequestActiveRef = useRef('');
+  const evaluationDetailsRequestSequenceRef = useRef(0);
   const historyScope = data?.ai.scope || data?.baseline.scope || '';
+  const evaluationDetailsKey = [
+    historyScope || scope,
+    siteId.trim(),
+    data?.ai.generation.cache_key || data?.ai.ai_disclosure.generated_at || 'current',
+  ].join('|');
 
   const loadHistory = useCallback(async () => {
     const params = new URLSearchParams();
@@ -1733,17 +1797,14 @@ function AdminAiAdvisorContent() {
     if (siteId.trim()) {
       params.set('site_id', siteId.trim());
     }
-    const response = await fetch(`/api/admin/advisor/ops-summary-history?${params.toString()}`, {
-      credentials: 'include',
-    });
-    const payload = await response.json();
-    if (!response.ok || payload?.status === 'error') {
-      throw payload;
-    }
-    const items = Array.isArray(payload?.data?.items)
-      ? payload.data.items.map((item: any) => normalizeHistoryItem(item))
+    const response = await operationsAdvisorClient.request<unknown>(
+      `/api/admin/advisor/ops-summary-history?${params.toString()}`
+    );
+    const payload = response.data as { items?: unknown };
+    const items = Array.isArray(payload?.items)
+      ? payload.items.map((item: any) => normalizeHistoryItem(item))
       : [];
-    setHistoryItems(items);
+    return items;
   }, [historyScope, siteId]);
 
   const loadValueMetrics = useCallback(
@@ -1757,23 +1818,32 @@ function AdminAiAdvisorContent() {
       if (siteId.trim()) {
         valueParams.set('site_id', siteId.trim());
       }
-      const valueResponse = await fetch(`/api/admin/advisor/ops-summary-value?${valueParams.toString()}`, {
-        credentials: 'include',
-      });
-      const valuePayload = await valueResponse.json();
-      if (!valueResponse.ok || valuePayload?.status === 'error') {
-        throw valuePayload;
-      }
-      setValueMetrics(normalizeValueMetrics(valuePayload?.data ?? {}));
+      const valueResponse = await operationsAdvisorClient.request<unknown>(
+        `/api/admin/advisor/ops-summary-value?${valueParams.toString()}`
+      );
+      return normalizeValueMetrics(valueResponse.data ?? {});
     },
     [scope, siteId]
   );
 
-  const loadPreview = useCallback(async () => {
+  const loadPreview = useCallback(async (force = false) => {
+    const requestKey = [scope, siteId.trim(), providerId.trim(), modelId.trim(), forceRefresh, reloadKey].join('|');
+    if (
+      previewRequestActiveRef.current === requestKey ||
+      (!force && previewRequestCompletedRef.current === requestKey)
+    ) {
+      return;
+    }
+    const sequence = previewRequestSequenceRef.current + 1;
+    previewRequestSequenceRef.current = sequence;
+    previewRequestActiveRef.current = requestKey;
     setLoading(true);
     setError('');
+    setEvaluationDetailsError('');
+    setLoadedEvaluationDetailsKey('');
+    setHistoryItems([]);
+    setValueMetrics(null);
     try {
-      let nextData: AdvisorPreviewData | null = null;
       try {
         const params = new URLSearchParams();
         params.set('scope', scope);
@@ -1790,54 +1860,99 @@ function AdminAiAdvisorContent() {
           params.set('force_refresh', 'true');
         }
 
-        const response = await fetch(`/api/admin/advisor/ops-summary-preview?${params.toString()}`, {
-          credentials: 'include',
-        });
-        const payload = await response.json();
-        if (!response.ok || payload?.status === 'error') {
-          throw payload;
+        const response = await operationsAdvisorClient.request<unknown>(
+          `/api/admin/advisor/ops-summary-preview?${params.toString()}`
+        );
+        const nextData = normalizePreview(response.data ?? {});
+        if (sequence === previewRequestSequenceRef.current) {
+          setData(nextData);
         }
-        nextData = normalizePreview(payload?.data ?? {});
-        setData(nextData);
       } catch (previewError) {
-        setData(null);
-        setError(resolveUiErrorMessage(previewError, t('error.failed_load')));
-      }
-
-      const resolvedScope = nextData?.ai.scope || nextData?.baseline.scope || scope;
-      await loadValueMetrics(resolvedScope).catch(() => {
-        setValueMetrics(null);
-      });
-
-      if (nextData) {
-        const historyParams = new URLSearchParams();
-        historyParams.set('limit', '10');
-        if (resolvedScope) {
-          historyParams.set('scope', resolvedScope);
-        }
-        if (siteId.trim()) {
-          historyParams.set('site_id', siteId.trim());
-        }
-        const historyResponse = await fetch(`/api/admin/advisor/ops-summary-history?${historyParams.toString()}`, {
-          credentials: 'include',
-        });
-        const historyPayload = await historyResponse.json();
-        if (historyResponse.ok && historyPayload?.status !== 'error') {
-          setHistoryItems(
-            Array.isArray(historyPayload?.data?.items)
-              ? historyPayload.data.items.map((item: any) => normalizeHistoryItem(item))
-              : []
-          );
+        if (sequence === previewRequestSequenceRef.current) {
+          setData(null);
+          setError(resolveUiErrorMessage(previewError, t('error.failed_load')));
         }
       }
     } finally {
-      setLoading(false);
+      if (sequence === previewRequestSequenceRef.current) {
+        previewRequestActiveRef.current = '';
+        previewRequestCompletedRef.current = requestKey;
+        setLoading(false);
+      }
     }
-  }, [forceRefresh, loadValueMetrics, modelId, providerId, scope, siteId, t]);
+  }, [forceRefresh, modelId, providerId, reloadKey, scope, siteId, t]);
 
   useEffect(() => {
     void loadPreview();
   }, [loadPreview, reloadKey]);
+
+  const loadEvaluationDetails = useCallback(
+    async (force = false) => {
+      if (
+        !data ||
+        loading ||
+        (!force &&
+          (evaluationDetailsRequestActiveRef.current === evaluationDetailsKey ||
+            loadedEvaluationDetailsKey === evaluationDetailsKey))
+      ) {
+        return;
+      }
+
+      const sequence = evaluationDetailsRequestSequenceRef.current + 1;
+      evaluationDetailsRequestSequenceRef.current = sequence;
+      evaluationDetailsRequestActiveRef.current = evaluationDetailsKey;
+      setEvaluationDetailsLoading(true);
+      setEvaluationDetailsError('');
+      const results = await Promise.allSettled([
+        loadHistory(),
+        loadValueMetrics(historyScope || scope),
+      ] as const);
+      if (sequence !== evaluationDetailsRequestSequenceRef.current) {
+        return;
+      }
+      if (results[0].status === 'fulfilled') {
+        setHistoryItems(results[0].value);
+      }
+      if (results[1].status === 'fulfilled') {
+        setValueMetrics(results[1].value);
+      }
+      const failures = results.filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected'
+      );
+      if (failures.length > 0) {
+        setEvaluationDetailsError(
+          resolveUiErrorMessage(
+            failures[0].reason,
+            t(
+              'admin.ai_advisor.error_evaluation_details',
+              {},
+              'Some evaluation details could not be loaded.'
+            )
+          )
+        );
+      }
+      evaluationDetailsRequestActiveRef.current = '';
+      setLoadedEvaluationDetailsKey(evaluationDetailsKey);
+      setEvaluationDetailsLoading(false);
+    },
+    [
+      data,
+      evaluationDetailsKey,
+      historyScope,
+      loadHistory,
+      loadedEvaluationDetailsKey,
+      loading,
+      loadValueMetrics,
+      scope,
+      t,
+    ]
+  );
+
+  useEffect(() => {
+    if (evaluationDetailsOpen) {
+      void loadEvaluationDetails();
+    }
+  }, [evaluationDetailsOpen, loadEvaluationDetails]);
 
   const copyWithDisclosure = useCallback(
     async (value: string, disclosure: SummaryBranch['ai_disclosure']) => {
@@ -1863,22 +1978,18 @@ function AdminAiAdvisorContent() {
       setReviewingDisclosure(true);
       setError('');
       try {
-        const response = await fetch('/api/admin/advisor/ops-summary-review', {
+        const response = await operationsAdvisorClient.request<unknown>(
+          '/api/admin/advisor/ops-summary-review',
+          {
           method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
+          body: {
             cache_key: cacheKey,
             review_status: reviewStatus,
-          }),
-        });
-        const payload = await response.json();
-        if (!response.ok || payload?.status === 'error') {
-          throw payload;
-        }
-        const nextDisclosure = payload?.data?.ai_disclosure;
+          },
+          }
+        );
+        const payload = response.data as { ai_disclosure?: unknown };
+        const nextDisclosure = payload?.ai_disclosure;
         if (nextDisclosure && typeof nextDisclosure === 'object') {
           setData((current) => {
             if (!current) return current;
@@ -1891,15 +2002,16 @@ function AdminAiAdvisorContent() {
             };
           });
         }
-        await loadHistory().catch(() => undefined);
-        setReloadKey((current) => current + 1);
+        if (evaluationDetailsOpen) {
+          void loadEvaluationDetails(true);
+        }
       } catch (err) {
         setError(resolveUiErrorMessage(err, t('error.failed_save')));
       } finally {
         setReviewingDisclosure(false);
       }
     },
-    [data?.ai, loadHistory, t]
+    [data?.ai, evaluationDetailsOpen, loadEvaluationDetails, t]
   );
 
   const metricItems = useMemo(() => {
@@ -1952,17 +2064,16 @@ function AdminAiAdvisorContent() {
     return <LoadingFallback />;
   }
 
-  if (error && !valueMetrics) {
+  if (error && !data) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="max-w-md text-center">
-          <h2 className="mb-4 text-2xl font-bold text-red-600">{t('common.error')}</h2>
-          <p className="mb-6 text-gray-600 dark:text-gray-400">{error}</p>
-          <button onClick={() => void loadPreview()} className="btn btn-primary">
-            {t('common.retry')}
-          </button>
-        </div>
-      </div>
+      <BackofficePageStack>
+        <BackofficePrimaryPanel
+          eyebrow={t('admin.ai_advisor.eyebrow', {}, 'Internal operations')}
+          title={t('admin.ai_advisor.title', {}, 'Operations Advisor')}
+          description={t('admin.ai_advisor.load_error_desc', {}, 'The current diagnostic summary could not be loaded. No provider, routing, package, or WordPress state was changed.')}
+        />
+        <BackofficeDiagnosticNotice message={error} retryLabel={t('common.retry')} onRetry={() => void loadPreview(true)} />
+      </BackofficePageStack>
     );
   }
 
@@ -1976,13 +2087,7 @@ function AdminAiAdvisorContent() {
           {},
           'Generate read-only diagnostic summaries from Cloud operational evidence and compare rule baseline output with AI output.'
         )}
-        aside={
-          data ? (
-            <div className="w-full xl:w-[42rem]">
-              <BackofficeMetricStrip columnsClassName="md:grid-cols-2 xl:grid-cols-4" items={metricItems} />
-            </div>
-          ) : undefined
-        }
+        aside={data ? <BackofficeStatusBadge label={data.comparison.aiUsed ? t('admin.ai_advisor.ai_used', {}, 'AI used') : t('admin.ai_advisor.rules_only', {}, 'Rules only')} status={data.comparison.aiUsed ? 'success' : 'inactive'} /> : undefined}
       >
         <div className="flex flex-wrap items-center gap-3">
           {SCOPE_OPTIONS.map((option) => (
@@ -2004,6 +2109,7 @@ function AdminAiAdvisorContent() {
           <input
             type="text"
             value={siteIdInput}
+            aria-label={t('admin.ai_advisor.site_filter_label', {}, 'Site ID')}
             onChange={(event) => setSiteIdInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
@@ -2031,10 +2137,13 @@ function AdminAiAdvisorContent() {
           <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-900/60">
             {t('admin.ai_advisor.advanced_params', {}, 'Advanced evaluation parameters')}
           </summary>
-          <div className="flex flex-wrap items-center gap-3 border-t border-slate-200/80 px-4 py-3 dark:border-slate-800">
+          <div className="space-y-4 border-t border-slate-200/80 px-4 py-3 dark:border-slate-800">
+            <BackofficeMetricStrip columnsClassName="md:grid-cols-2 xl:grid-cols-4" items={metricItems} />
+            <div className="flex flex-wrap items-center gap-3">
             <input
               type="text"
               value={providerIdInput}
+              aria-label={t('admin.ai_advisor.provider_filter_label', {}, 'Provider ID')}
               onChange={(event) => setProviderIdInput(event.target.value)}
               placeholder="provider_id"
               className="h-8 w-40 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
@@ -2042,6 +2151,7 @@ function AdminAiAdvisorContent() {
             <input
               type="text"
               value={modelIdInput}
+              aria-label={t('admin.ai_advisor.model_filter_label', {}, 'Model ID')}
               onChange={(event) => setModelIdInput(event.target.value)}
               placeholder="model_id"
               className="h-8 w-56 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
@@ -2077,6 +2187,7 @@ function AdminAiAdvisorContent() {
                 'These parameters are only for internal AI summary evaluation. They do not change routing, packages, WordPress content, or customer state.'
               )}
             </p>
+            </div>
           </div>
         </details>
         {copyMessage ? (
@@ -2093,11 +2204,23 @@ function AdminAiAdvisorContent() {
       {data ? (
         <>
           <OperationsWorkPanel data={data} />
-          <SignalPanel branch={data.ai} />
-          <HistoryPanel items={historyItems} />
 
-          <AdvisorEvaluationDetails>
-            <ValueMetricsPanel valueMetrics={valueMetrics} />
+          <AdvisorEvaluationDetails onToggle={setEvaluationDetailsOpen}>
+            <SignalPanel branch={data.ai} />
+            {evaluationDetailsLoading ? <LoadingFallback /> : null}
+            {evaluationDetailsError ? (
+              <BackofficeDiagnosticNotice
+                message={evaluationDetailsError}
+                retryLabel={t('common.retry')}
+                onRetry={() => void loadEvaluationDetails(true)}
+              />
+            ) : null}
+            {loadedEvaluationDetailsKey === evaluationDetailsKey ? (
+              <>
+                <HistoryPanel items={historyItems} />
+                <ValueMetricsPanel valueMetrics={valueMetrics} />
+              </>
+            ) : null}
             <EffectComparisonPanel data={data} />
             <AiParticipationPanel data={data} />
             <ScenarioChecksPanel data={data} />

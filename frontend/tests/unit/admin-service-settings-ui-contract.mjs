@@ -7,26 +7,75 @@ const source = readFileSync(pagePath, 'utf8');
 
 assert.match(
   source,
-  /type ServiceSettingsTab = 'login' \| 'email' \| 'payment';/,
-  'service settings page must split content into login, email, and payment tabs'
+  /type ServiceSettingsTab = 'portal' \| 'qq' \| 'email' \| 'payment';/,
+  'service settings page must expose one independent configuration group per tab'
 );
 
 assert.match(
   source,
-  /label: t\('admin\.service_settings\.tab_login', \{\}, '登录配置'\)[\s\S]*label: t\('admin\.service_settings\.tab_email', \{\}, '邮件配置'\)[\s\S]*label: t\('admin\.service_settings\.tab_payment', \{\}, '支付配置'\)/,
-  'service settings tabs must use Chinese operator label fallbacks'
+  /label: t\('admin\.service_settings\.tab_portal', \{\}, '门户地址'\)[\s\S]*label: t\('admin\.service_settings\.tab_qq', \{\}, 'QQ 登录'\)[\s\S]*label: t\('admin\.service_settings\.tab_email', \{\}, '邮件配置'\)[\s\S]*label: t\('admin\.service_settings\.tab_payment', \{\}, '支付配置'\)/,
+  'service settings group navigation must use task-specific Chinese operator labels'
 );
 
 assert.match(
   source,
-  /async function readBackendPayload\(response: Response\)/,
-  'service settings page must parse backend responses through a safe helper'
+  /activeTab === 'portal'[\s\S]*id="service-settings-portal"[\s\S]*activeTab === 'qq'[\s\S]*id="service-settings-qq"/,
+  'Portal URL and QQ login must not render as two simultaneous forms in one group'
 );
 
 assert.match(
   source,
-  /contentType\.includes\('application\/json'\)/,
-  'safe response helper must inspect content-type before JSON parsing'
+  /savedForms, setSavedForms] = useState<SavedServiceSettingsForms[\s\S]*activeGroupDirty = \(\(\) =>[\s\S]*restoreActiveGroup/,
+  'configuration groups must compare against saved state and support explicit discard'
+);
+
+assert.match(
+  source,
+  /pendingTab[\s\S]*requestTabChange[\s\S]*<ConfirmModal[\s\S]*discard_and_switch/,
+  'switching groups with unsaved changes must require confirmation'
+);
+
+assert.match(
+  source,
+  /pendingNavigationHref[\s\S]*setPendingNavigationHref[\s\S]*addEventListener\('beforeunload'[\s\S]*unsaved_leave_title[\s\S]*discard_and_leave/,
+  'unsaved configuration must use an application confirmation for internal navigation and browser protection for unload'
+);
+assert.doesNotMatch(source, /window\.confirm/, 'service settings must not use a browser-native confirmation dialog');
+
+assert.match(
+  source,
+  /activeValidationIssues = \(\(\) =>[\s\S]*validation_public_url[\s\S]*validation_qq_app_id[\s\S]*validation_email_host[\s\S]*validation_payment_app_id/,
+  'each configuration group must expose contextual client validation'
+);
+
+assert.match(
+  source,
+  /useToast\(\)[\s\S]*operation_completed_title/,
+  'transient configuration success must use the global Toast surface'
+);
+
+assert.doesNotMatch(
+  source,
+  /\{notice \? \([\s\S]*role="status"/,
+  'success feedback must not insert a notice card into the configuration workspace'
+);
+
+assert.match(
+  source,
+  /settingsRequestActiveRef = useRef[\s\S]*settingsRequestSequenceRef = useRef/,
+  'initial service settings loading must deduplicate React development requests'
+);
+
+assert.match(
+  source,
+  /createApiClient[\s\S]*serviceSettingsClient\.request<ServiceSettingsData>/,
+  'service settings page must parse backend responses through the shared strict client'
+);
+
+assert.match(
+  source,
+  /function serviceSettingsRequestErrorMessage[\s\S]*error instanceof ApiError/,
+  'service settings page must preserve structured backend error handling'
 );
 
 assert.doesNotMatch(

@@ -21,10 +21,12 @@ from app.core.models import (
     IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
     PLATFORM_ADMIN_STATUS_ACTIVE,
+    PLATFORM_KIND_WORDPRESS,
     PRINCIPAL_STATUS_ACTIVE,
     PRINCIPAL_STATUS_DISABLED,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_STATUS_ACTIVE,
+    SITE_STATUS_ARCHIVED,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_PAST_DUE,
     SUBSCRIPTION_STATUS_SUSPENDED,
@@ -36,8 +38,9 @@ from app.domain.commercial.credits import (
     AI_CREDIT_COMPONENT_LABELS,
     AI_CREDIT_RATE_VERSION,
     build_credit_breakdown_from_ledger,
+    is_site_knowledge_index_meter_event,
+    package_credit_used,
     rounded_token_credits,
-    rounded_vector_chunk_credits,
 )
 from app.domain.commercial.errors import (
     CommercialNotFoundError,
@@ -82,6 +85,20 @@ _ADMIN_MALFORMED_ACCOUNT_RE = re.compile(
 )
 
 
+def _require_principal_session_version(principal: Any) -> int:
+    session_version = getattr(principal, "session_version", None)
+    if (
+        isinstance(session_version, bool)
+        or not isinstance(session_version, int)
+        or session_version < 1
+    ):
+        raise CommercialPermissionError(
+            "service.principal_session_invalid",
+            "platform admin principal session version is invalid",
+        )
+    return session_version
+
+
 class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
     def _serialize_platform_admin_grant(
         self,
@@ -102,7 +119,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "provider": str(getattr(identity, "provider", "") or ""),
             "external_subject": str(getattr(identity, "external_subject", "") or ""),
             "email": str(getattr(identity, "email", "") or ""),
-            "session_version": int(getattr(principal, "session_version", 1) or 1),
+            "session_version": _require_principal_session_version(principal),
+            "is_persisted": True,
             "metadata": metadata if isinstance(metadata, dict) else {},
             "created_at": self._serialize_datetime(getattr(identity, "created_at", None)),
             "updated_at": self._serialize_datetime(getattr(identity, "updated_at", None)),
@@ -185,6 +203,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                         f"platform admin '{normalized_principal_id}' was not found",
                     )
                 return {
+                    "grant_id": "",
                     "principal_id": normalized_principal_id,
                     "identity_type": IDENTITY_TYPE_PLATFORM_ADMIN,
                     "role": _canonicalize_platform_admin_role_for_write(bootstrap_role),
@@ -195,6 +214,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     "provider": "internal_token",
                     "external_subject": "",
                     "email": "",
+                    "session_version": 1,
+                    "is_persisted": False,
                     "metadata": {"bootstrap": True},
                     "created_at": None,
                     "updated_at": None,
@@ -254,7 +275,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
     ) -> dict[str, object]:
         now = self.now_factory()
         usage_since = now - timedelta(days=max(1, usage_window_days))
-        previous_usage_since = usage_since - timedelta(days=max(1, usage_window_days))
         audit_since = now - timedelta(minutes=max(1, audit_window_minutes))
         active_subscription_statuses = [
             SUBSCRIPTION_STATUS_TRIALING,
@@ -294,41 +314,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             status_counts = repository.summarize_subscription_status_counts()
             plan_counts = repository.summarize_subscription_plan_counts()
             usage_summary = repository.summarize_usage_meter_events_for_admin(since=usage_since)
-            usage_meter_events = repository.list_usage_meter_events_for_admin(
-                since=usage_since,
-                limit=None,
-            )
-            previous_usage_meter_events = [
-                event
-                for event in repository.list_usage_meter_events_for_admin(
-                    since=previous_usage_since,
-                    limit=None,
-                )
-                if (
-                    (event_created_at := getattr(event, "created_at", None)) is not None
-                    and cast(Any, self)._normalize_datetime(event_created_at) < usage_since
-                )
-            ]
-            credit_ledger_entries = repository.list_credit_ledger_entries(
-                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
-                since=usage_since,
-                until=now,
-                limit=None,
-            )
-            previous_credit_ledger_entries = repository.list_credit_ledger_entries(
-                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
-                since=previous_usage_since,
-                until=usage_since,
-                limit=None,
-            )
-            knowledge_index_usage = repository.summarize_site_knowledge_index_usage(
-                since=usage_since,
-                until=now,
-            )
-            previous_knowledge_index_usage = repository.summarize_site_knowledge_index_usage(
-                since=previous_usage_since,
-                until=usage_since,
-            )
             expiring_subscriptions = repository.list_subscriptions(
                 statuses=active_subscription_statuses,
                 current_period_end_before=now + timedelta(days=30),
@@ -409,19 +394,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         ]
         usage_totals = usage_summary.get("totals")
         usage_event_count = int(cast(Any, usage_summary.get("event_count") or 0))
-        platform_credit_summary = self._build_platform_credit_summary(
-            meter_events=usage_meter_events,
-            ledger_entries=credit_ledger_entries,
-            previous_meter_events=previous_usage_meter_events,
-            previous_ledger_entries=previous_credit_ledger_entries,
-            window_days=max(1, usage_window_days),
-            start_at=usage_since,
-            end_at=now,
-            previous_start_at=previous_usage_since,
-            previous_end_at=usage_since,
-            knowledge_index_usage=knowledge_index_usage,
-            previous_knowledge_index_usage=previous_knowledge_index_usage,
-        )
         attention_subscription_items = [
             _serialize_overview_subscription(subscription)
             for subscription in attention_subscriptions
@@ -458,7 +430,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "event_count": usage_event_count,
                 "totals": usage_totals if isinstance(usage_totals, dict) else {},
             },
-            "platform_credit_summary": platform_credit_summary,
             "recent_audit_summary": {
                 "window_minutes": max(1, audit_window_minutes),
                 "items": recent_audit,
@@ -841,12 +812,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             ).lower()
             if normalized_package and normalized_package not in package_blob:
                 continue
-            site_metadata = getattr(site, "metadata_json", None)
-            wordpress_url = (
-                str(site_metadata.get("wordpress_url") or "").strip()
-                if isinstance(site_metadata, dict)
-                else ""
-            )
+            site_url = str(getattr(site, "site_url", "") or "").strip()
             search_blob = " ".join(
                 [
                     principal_id,
@@ -855,7 +821,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     str(getattr(account, "name", "") or ""),
                     str(getattr(site, "site_id", "") or ""),
                     str(getattr(site, "name", "") or ""),
-                    wordpress_url,
+                    site_url,
                     str(package_summary.get("package_alias") or ""),
                 ]
             ).lower()
@@ -889,7 +855,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "site_id": str(getattr(site, "site_id", "") or ""),
                 "site_name": str(getattr(site, "name", "") or ""),
                 "site_status": str(getattr(site, "status", "") or ""),
-                "wordpress_url": wordpress_url,
+                "site_url": site_url,
+                "platform_kind": str(
+                    getattr(site, "platform_kind", "") or PLATFORM_KIND_WORDPRESS
+                ),
                 "subscription": subscription_payload,
                 "subscription_id": str(getattr(primary_subscription, "subscription_id", "") or ""),
                 "subscription_status": str(getattr(primary_subscription, "status", "") or ""),
@@ -1208,7 +1177,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         limit: int = 100,
     ) -> dict[str, object]:
         normalized_query = " ".join(str(q or "").strip().lower().split())
-        normalized_sort = sort if sort in {"created_at", "display_name"} else "created_at"
+        normalized_sort = sort if sort in {"created_at", "display_name", "risk"} else "created_at"
         normalized_offset = max(0, int(offset or 0))
 
         def account_payload_for(item: dict[str, object]) -> dict[str, object]:
@@ -1225,6 +1194,34 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 or str(account_payload.get("account_id") or "").strip()
             )
             return (display_name.lower(), str(account_payload.get("account_id") or ""))
+
+        def account_risk_sort_key(item: dict[str, object]) -> tuple[int, datetime, str, str]:
+            account_payload = account_payload_for(item)
+            account_status = str(account_payload.get("status") or "")
+            expiry_raw = item.get("nearest_expiry_at")
+            expiry = expiry_raw if isinstance(expiry_raw, datetime) else None
+            if expiry is None and isinstance(expiry_raw, str) and expiry_raw:
+                try:
+                    expiry = datetime.fromisoformat(expiry_raw.replace("Z", "+00:00"))
+                except ValueError:
+                    expiry = None
+            now = self.now_factory()
+            if expiry is not None and expiry.tzinfo is None and now.tzinfo is not None:
+                expiry = expiry.replace(tzinfo=now.tzinfo)
+            risk_rank = 3
+            if account_status == "suspended":
+                risk_rank = 0
+            elif bool(item.get("coverage_follow_up_required")):
+                risk_rank = 1
+            elif expiry is not None and expiry <= now + timedelta(days=14):
+                risk_rank = 2
+            display_name, account_id = account_display_sort_key(item)
+            return (
+                risk_rank,
+                expiry or datetime.max.replace(tzinfo=now.tzinfo),
+                display_name,
+                account_id,
+            )
 
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
@@ -1254,7 +1251,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 or package_kind
                 or top_plan_id
                 or normalized_query
-                or normalized_sort == "display_name"
+                or normalized_sort in {"display_name", "risk"}
                 or normalized_offset
                 else limit,
             )
@@ -1350,6 +1347,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             ]
         if normalized_sort == "display_name":
             items = sorted(items, key=account_display_sort_key)
+        elif normalized_sort == "risk":
+            items = sorted(items, key=account_risk_sort_key)
         total = len(items)
         if normalized_offset:
             items = items[normalized_offset:]
@@ -1710,7 +1709,11 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 account_id=account_id,
                 now=now,
             )
-            sites = repository.list_sites(account_id=account_id, limit=None)
+            sites = [
+                site
+                for site in repository.list_sites(account_id=account_id, limit=None)
+                if str(getattr(site, "status", "") or "") != SITE_STATUS_ARCHIVED
+            ]
             site_ids = [str(site.site_id or "") for site in sites if str(site.site_id or "")]
             subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
             if reconciled is not None:
@@ -1756,6 +1759,11 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 until=period_end_at,
                 limit=None,
             )
+            paid_credit = cast(Any, self)._paid_credit_balance_in_session(
+                repository,
+                account_id=account_id,
+                now=now,
+            )
             totals = cast(Any, self)._aggregate_meter_events(meter_events)
             budgets = cast(Any, self)._resolve_effective_subscription_budgets(
                 plan_version=plan_version,
@@ -1792,6 +1800,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 snapshot=None,
                 plan_version=plan_version,
             )
+            session.commit()
 
         service = cast(Any, self)
         site_count = len(sites)
@@ -1839,10 +1848,18 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             6,
         )
         if ledger_source:
-            credit_used = service._coerce_float(credit_ledger_summary.get("net_used_credits"))
-        credit_limit = service._coerce_float(budgets.get("max_ai_credits_per_period"))
-        if credit_limit <= 0:
-            credit_limit = service._coerce_float(budgets.get("max_runs_per_period"))
+            credit_used = package_credit_used(credit_ledger_entries)
+        package_credit_limit = service._coerce_float(
+            budgets.get("max_ai_credits_per_period")
+        )
+        if package_credit_limit <= 0:
+            package_credit_limit = service._coerce_float(budgets.get("max_runs_per_period"))
+        paid_credit_remaining = service._coerce_float(paid_credit.get("remaining"))
+        package_credit_remaining = max(0.0, package_credit_limit - credit_used)
+        credit_limit = round(
+            credit_used + package_credit_remaining + paid_credit_remaining,
+            6,
+        )
         credit_status = self._quota_status(used=credit_used, limit=credit_limit)
 
         resource_limits = [
@@ -1961,6 +1978,15 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                         if service._coerce_float(budgets.get("max_ai_credits_per_period")) > 0
                         else "max_runs_per_period"
                     ),
+                    "package_limit": round(package_credit_limit, 6),
+                    "package_remaining": round(package_credit_remaining, 6),
+                    "paid_remaining": round(paid_credit_remaining, 6),
+                    "paid_grant_count": int(paid_credit.get("grant_count") or 0),
+                    "paid_next_expires_at": paid_credit.get("next_expires_at") or "",
+                    "total_remaining": round(
+                        package_credit_remaining + paid_credit_remaining,
+                        6,
+                    ),
                 },
             ),
             "credit_policy": {
@@ -1968,6 +1994,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "period_policy": "subscription_period",
                 "renewal_policy": "monthly_plan_grant_resets_each_period",
                 "topup_policy": "operator_topups_apply_to_target_period_only",
+                "paid_credit_policy": "payment_order_grants_expire_independently",
             },
             "resource_limits": resource_limits,
             "internal_limits": internal_limits,
@@ -2112,6 +2139,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         limit: int = 50,
         offset: int = 0,
         source_type: str | None = None,
+        site_ids: list[str] | None = None,
     ) -> dict[str, object]:
         now = self.now_factory()
         normalized_limit = min(100, max(1, int(limit or 50)))
@@ -2137,6 +2165,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             )
             entries = repository.list_credit_ledger_entries(
                 account_ids=[account_id],
+                site_ids=site_ids,
                 subscription_id=subscription_id,
                 event_types=AI_CREDIT_VISIBLE_LEDGER_EVENT_TYPES,
                 source_types=source_types,
@@ -2147,6 +2176,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             )
             total = repository.count_credit_ledger_entries(
                 account_ids=[account_id],
+                site_ids=site_ids,
                 subscription_id=subscription_id,
                 event_types=AI_CREDIT_VISIBLE_LEDGER_EVENT_TYPES,
                 source_types=source_types,
@@ -2155,6 +2185,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             )
             summary_entries = repository.list_credit_ledger_entries(
                 account_ids=[account_id],
+                site_ids=site_ids,
                 subscription_id=subscription_id,
                 event_types=AI_CREDIT_VISIBLE_LEDGER_EVENT_TYPES,
                 source_types=source_types,
@@ -2202,6 +2233,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "rate_version": AI_CREDIT_RATE_VERSION,
             "filters": {
                 "source_type": normalized_source_type,
+                "site_ids": site_ids or [],
                 "limit": normalized_limit,
                 "offset": normalized_offset,
             },
@@ -2265,6 +2297,11 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "period_end_at": summary.get("period_end_at"),
             "status": portal_status,
             "credit": credit,
+            "credit_ledger_summary": (
+                summary.get("credit_ledger_summary")
+                if isinstance(summary.get("credit_ledger_summary"), dict)
+                else {}
+            ),
             "credit_policy": (
                 summary.get("credit_policy")
                 if isinstance(summary.get("credit_policy"), dict)
@@ -2288,11 +2325,14 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         *,
         limit: int = 25,
         offset: int = 0,
+        site_id: str | None = None,
     ) -> dict[str, object]:
+        normalized_site_id = str(site_id or "").strip()
         ledger = self.get_admin_account_credit_ledger(
             account_id,
             limit=min(50, max(1, int(limit or 25))),
             offset=max(0, int(offset or 0)),
+            site_ids=[normalized_site_id] if normalized_site_id else None,
         )
         raw_summary = ledger.get("summary")
         summary: dict[str, object] = (
@@ -2665,286 +2705,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             )
         return payload
 
-    def _build_platform_credit_summary(
-        self,
-        *,
-        meter_events: Sequence[object],
-        ledger_entries: Sequence[object],
-        previous_meter_events: Sequence[object],
-        previous_ledger_entries: Sequence[object],
-        window_days: int,
-        start_at: datetime,
-        end_at: datetime,
-        previous_start_at: datetime,
-        previous_end_at: datetime,
-        knowledge_index_usage: dict[str, int],
-        previous_knowledge_index_usage: dict[str, int],
-    ) -> dict[str, object]:
-        service = cast(Any, self)
-        totals = service._aggregate_meter_events(meter_events)
-        ledger_source = bool(ledger_entries)
-        breakdown = build_credit_breakdown_from_ledger(ledger_entries)
-        if not breakdown:
-            breakdown = self._build_admin_account_credit_breakdown(
-                meter_events=meter_events,
-                totals=totals,
-                indexed_document_count=service._coerce_int(
-                    knowledge_index_usage.get("indexed_documents")
-                ),
-                indexed_chunk_count=service._coerce_int(
-                    knowledge_index_usage.get("indexed_chunks")
-                ),
-            )
-        credit_used = round(
-            sum(service._coerce_float(item.get("credits")) for item in breakdown),
-            6,
-        )
-        previous_totals = service._aggregate_meter_events(previous_meter_events)
-        previous_ledger_source = bool(previous_ledger_entries)
-        previous_breakdown = build_credit_breakdown_from_ledger(previous_ledger_entries)
-        if not previous_breakdown:
-            previous_breakdown = self._build_admin_account_credit_breakdown(
-                meter_events=previous_meter_events,
-                totals=previous_totals,
-                indexed_document_count=service._coerce_int(
-                    previous_knowledge_index_usage.get("indexed_documents")
-                ),
-                indexed_chunk_count=service._coerce_int(
-                    previous_knowledge_index_usage.get("indexed_chunks")
-                ),
-            )
-        previous_credit_used = round(
-            sum(service._coerce_float(item.get("credits")) for item in previous_breakdown),
-            6,
-        )
-        account_events: dict[str, list[object]] = defaultdict(list)
-        for event in meter_events:
-            account_id = str(getattr(event, "account_id", "") or "")
-            if account_id:
-                account_events[account_id].append(event)
-        account_ledger_entries: dict[str, list[object]] = defaultdict(list)
-        for entry in ledger_entries:
-            account_id = str(getattr(entry, "account_id", "") or "")
-            if account_id:
-                account_ledger_entries[account_id].append(entry)
-        top_accounts = []
-        account_ids = set(account_events.keys()) | set(account_ledger_entries.keys())
-        for account_id in account_ids:
-            events = account_events.get(account_id, [])
-            account_totals = service._aggregate_meter_events(events)
-            account_breakdown = build_credit_breakdown_from_ledger(
-                account_ledger_entries.get(account_id, [])
-            )
-            if not account_breakdown:
-                account_breakdown = self._build_admin_account_credit_breakdown(
-                    meter_events=events,
-                    totals=account_totals,
-                    indexed_document_count=0,
-                    indexed_chunk_count=0,
-                )
-            account_credit_used = round(
-                sum(service._coerce_float(item.get("credits")) for item in account_breakdown),
-                6,
-            )
-            top_accounts.append(
-                {
-                    "account_id": account_id,
-                    "credits": account_credit_used,
-                    "runs": service._coerce_float(account_totals.get("runs")),
-                    "provider_calls": service._coerce_float(account_totals.get("provider_calls")),
-                    "tokens_total": service._coerce_float(account_totals.get("tokens_total")),
-                }
-            )
-        top_accounts = sorted(
-            top_accounts,
-            key=lambda item: service._coerce_float(item.get("credits")),
-            reverse=True,
-        )[:5]
-        trend = self._build_platform_credit_trend(
-            current_used=credit_used,
-            previous_used=previous_credit_used,
-            previous_start_at=previous_start_at,
-            previous_end_at=previous_end_at,
-        )
-        watch_items = self._build_platform_credit_watch_items(
-            current_used=credit_used,
-            trend=trend,
-            breakdown=breakdown,
-            top_accounts=top_accounts,
-            ledger_source=ledger_source,
-            previous_ledger_source=previous_ledger_source,
-        )
-        return {
-            "window_days": max(1, int(window_days or 1)),
-            "period_start_at": self._serialize_datetime(start_at),
-            "period_end_at": self._serialize_datetime(end_at),
-            "previous_period_start_at": self._serialize_datetime(previous_start_at),
-            "previous_period_end_at": self._serialize_datetime(previous_end_at),
-            "credit": self._quota_metric(
-                key="platform_ai_credits",
-                label="Platform AI credits",
-                used=credit_used,
-                limit=0,
-                unit="credit",
-                extra={
-                    "estimated": not ledger_source,
-                    "rate_version": (
-                        AI_CREDIT_RATE_VERSION if ledger_source else "ai-credit-estimate-v2"
-                    ),
-                    "scope": "platform",
-                    "source": "ledger" if ledger_source else "estimate",
-                },
-            ),
-            "breakdown": breakdown,
-            "top_accounts": top_accounts,
-            "trend": trend,
-            "watch_items": watch_items,
-        }
-
-    def _build_platform_credit_trend(
-        self,
-        *,
-        current_used: float,
-        previous_used: float,
-        previous_start_at: datetime,
-        previous_end_at: datetime,
-    ) -> dict[str, object]:
-        service = cast(Any, self)
-        current_value = round(service._coerce_float(current_used), 6)
-        previous_value = round(service._coerce_float(previous_used), 6)
-        delta = round(current_value - previous_value, 6)
-        if previous_value > 0:
-            delta_percent = round((delta / previous_value) * 100, 2)
-        elif current_value > 0:
-            delta_percent = None
-        else:
-            delta_percent = 0.0
-        if current_value > 0 and previous_value <= 0:
-            status = "new_activity"
-        elif abs(delta) < 0.000001:
-            status = "flat"
-        elif delta > 0:
-            status = "up"
-        else:
-            status = "down"
-        return {
-            "current_used": current_value,
-            "previous_used": previous_value,
-            "delta": delta,
-            "delta_percent": delta_percent,
-            "status": status,
-            "previous_period_start_at": self._serialize_datetime(previous_start_at),
-            "previous_period_end_at": self._serialize_datetime(previous_end_at),
-        }
-
-    def _build_platform_credit_watch_items(
-        self,
-        *,
-        current_used: float,
-        trend: dict[str, object],
-        breakdown: list[dict[str, object]],
-        top_accounts: list[dict[str, object]],
-        ledger_source: bool,
-        previous_ledger_source: bool,
-    ) -> list[dict[str, object]]:
-        service = cast(Any, self)
-        current_value = service._coerce_float(current_used)
-        items: list[dict[str, object]] = []
-        delta = service._coerce_float(trend.get("delta"))
-        previous_value = service._coerce_float(trend.get("previous_used"))
-        delta_percent = trend.get("delta_percent")
-        if current_value > 0 and previous_value <= 0:
-            items.append(
-                {
-                    "code": "credit_new_activity",
-                    "severity": "info",
-                    "title": "New platform credit activity",
-                    "detail": "The previous comparison window had no AI credit consumption.",
-                    "metric": "ai_credits",
-                    "value": current_value,
-                    "href": "/admin/accounts",
-                }
-            )
-        elif (
-            current_value >= 10
-            and delta >= 10
-            and isinstance(delta_percent, (int, float))
-            and float(delta_percent) >= 50
-        ):
-            items.append(
-                {
-                    "code": "credit_usage_spike",
-                    "severity": "warning",
-                    "title": "AI credit usage rose sharply",
-                    "detail": "Current usage is at least 50% above the previous comparison window.",
-                    "metric": "ai_credits",
-                    "value": current_value,
-                    "delta": round(delta, 6),
-                    "href": "/admin/accounts",
-                }
-            )
-
-        top_account = top_accounts[0] if top_accounts else None
-        if top_account is not None and current_value >= 10:
-            account_credits = service._coerce_float(top_account.get("credits"))
-            if account_credits / max(current_value, 1.0) >= 0.6:
-                account_id = str(top_account.get("account_id") or "")
-                items.append(
-                    {
-                        "code": "credit_account_concentration",
-                        "severity": "warning",
-                        "title": "Consumption is concentrated in one account",
-                        "detail": (
-                            "The top account accounts for at least 60% of this window's AI credits."
-                        ),
-                        "metric": "ai_credits",
-                        "value": round(account_credits, 6),
-                        "account_id": account_id,
-                        "href": (
-                            f"/admin/accounts/{account_id}" if account_id else "/admin/accounts"
-                        ),
-                    }
-                )
-
-        top_component = max(
-            breakdown,
-            key=lambda item: service._coerce_float(item.get("credits")),
-            default=None,
-        )
-        if top_component is not None and current_value >= 10:
-            component_credits = service._coerce_float(top_component.get("credits"))
-            if component_credits / max(current_value, 1.0) >= 0.65:
-                items.append(
-                    {
-                        "code": "credit_component_concentration",
-                        "severity": "info",
-                        "title": "One meter family dominates usage",
-                        "detail": (
-                            "One credit component accounts for at least 65% of "
-                            "this window's consumption."
-                        ),
-                        "metric": str(top_component.get("key") or "ai_credits"),
-                        "value": round(component_credits, 6),
-                        "href": "/admin/accounts",
-                    }
-                )
-
-        if not ledger_source and previous_ledger_source:
-            items.append(
-                {
-                    "code": "credit_source_changed_to_estimate",
-                    "severity": "warning",
-                    "title": "Current window is using estimated credits",
-                    "detail": (
-                        "The comparison window had ledger entries, but the current "
-                        "window is falling back to meter estimates."
-                    ),
-                    "metric": "ai_credits",
-                    "value": current_value,
-                    "href": "/admin/accounts",
-                }
-            )
-        return items[:4]
 
     def _build_admin_account_credit_breakdown(
         self,
@@ -2958,7 +2718,14 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         web_search_calls = 0.0
         image_calls = 0.0
         other_provider_calls = 0.0
+        maintenance_totals: dict[str, float] = defaultdict(float)
         for event in meter_events:
+            if is_site_knowledge_index_meter_event(event):
+                meter_key = str(getattr(event, "meter_key", "") or "")
+                maintenance_totals[meter_key] += service._coerce_float(
+                    getattr(event, "quantity", 0.0)
+                )
+                continue
             if str(getattr(event, "meter_key", "") or "") != "provider_calls":
                 continue
             execution_kind = str(getattr(event, "execution_kind", "") or "").lower()
@@ -2970,8 +2737,16 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 image_calls += quantity
             else:
                 other_provider_calls += quantity
-        run_count = service._coerce_float(totals.get("runs"))
-        token_credits = rounded_token_credits(service._coerce_float(totals.get("tokens_total")))
+        run_count = max(
+            0.0,
+            service._coerce_float(totals.get("runs")) - maintenance_totals["runs"],
+        )
+        token_count = max(
+            0.0,
+            service._coerce_float(totals.get("tokens_total"))
+            - maintenance_totals["tokens_total"],
+        )
+        token_credits = rounded_token_credits(token_count)
         items = [
             {
                 "key": "runs",
@@ -2984,7 +2759,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             {
                 "key": "tokens_total",
                 "label": "Model tokens",
-                "quantity": round(service._coerce_float(totals.get("tokens_total")), 6),
+                "quantity": round(token_count, 6),
                 "unit": "token",
                 "rate": 1.0,
                 "rate_unit": "1000_tokens_rounded_up",
@@ -3016,20 +2791,19 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             },
             {
                 "key": "vector_documents",
-                "label": "Vector indexed articles",
+                "label": "Vector indexed articles (meter only)",
                 "quantity": indexed_document_count,
                 "unit": "document",
-                "rate": 2.0,
-                "credits": round(indexed_document_count * 2.0, 6),
+                "rate": 0.0,
+                "credits": 0.0,
             },
             {
                 "key": "vector_chunks",
-                "label": "Vector indexed chunks",
+                "label": "Vector indexed chunks (meter only)",
                 "quantity": indexed_chunk_count,
                 "unit": "chunk",
-                "rate": 1.0,
-                "rate_unit": "10_chunks",
-                "credits": rounded_vector_chunk_credits(indexed_chunk_count),
+                "rate": 0.0,
+                "credits": 0.0,
             },
         ]
         return [item for item in items if service._coerce_float(item.get("quantity")) > 0]

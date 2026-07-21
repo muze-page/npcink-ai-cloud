@@ -9,6 +9,8 @@ from typing import Any
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from app.domain.media_derivatives.contracts import (
+    MAX_DELIVERABLE_ARTIFACT_BYTES,
+    MAX_IMAGE_DIMENSION,
     MAX_PIXEL_COUNT,
     MIME_TYPE_BY_FORMAT,
     PILLOW_FORMAT_BY_TARGET,
@@ -16,6 +18,7 @@ from app.domain.media_derivatives.contracts import (
 from app.domain.media_derivatives.errors import (
     MediaDerivativeAnimatedSourceUnavailableError,
     MediaDerivativeFormatUnavailableError,
+    MediaDerivativeOutputTooLargeError,
     MediaDerivativeProcessingFailedError,
     MediaDerivativeSourceDecodeFailedError,
     MediaDerivativeSourceTooLargeError,
@@ -55,17 +58,42 @@ def _check_format_available(target_format: str) -> None:
 
 def _open_static_image(image_bytes: bytes) -> Image.Image:
     try:
-        img = Image.open(BytesIO(image_bytes))
-        img.verify()
+        with Image.open(BytesIO(image_bytes)) as probe:
+            if (
+                probe.width < 1
+                or probe.height < 1
+                or probe.width > MAX_IMAGE_DIMENSION
+                or probe.height > MAX_IMAGE_DIMENSION
+                or probe.width * probe.height > MAX_PIXEL_COUNT
+            ):
+                raise MediaDerivativeSourceTooLargeError()
+            if int(getattr(probe, "n_frames", 1)) > 1:
+                raise MediaDerivativeAnimatedSourceUnavailableError()
+            probe.verify()
+    except (
+        MediaDerivativeAnimatedSourceUnavailableError,
+        MediaDerivativeSourceTooLargeError,
+    ):
+        raise
+    except Image.DecompressionBombError:
+        raise MediaDerivativeSourceTooLargeError() from None
     except Exception:
         raise MediaDerivativeSourceDecodeFailedError() from None
 
     img = Image.open(BytesIO(image_bytes))
-    if img.width * img.height > MAX_PIXEL_COUNT:
+    if (
+        img.width < 1
+        or img.height < 1
+        or img.width > MAX_IMAGE_DIMENSION
+        or img.height > MAX_IMAGE_DIMENSION
+        or img.width * img.height > MAX_PIXEL_COUNT
+    ):
+        img.close()
         raise MediaDerivativeSourceTooLargeError()
-    img.load()
     if hasattr(img, "n_frames") and getattr(img, "n_frames", 1) > 1:
+        img.close()
         raise MediaDerivativeAnimatedSourceUnavailableError()
+    img.load()
     return img
 
 
@@ -306,7 +334,9 @@ def _save_image(
         pillow_format = PILLOW_FORMAT_BY_TARGET[target_format]
 
     mime_type = MIME_TYPE_BY_FORMAT[resolved_format]
-    save_kwargs: dict[str, Any] = {}
+    # Never let Pillow's source-info fallback copy private ICC or EXIF/GPS
+    # metadata into any derivative, including original-format and PNG outputs.
+    save_kwargs: dict[str, Any] = {"exif": b"", "icc_profile": None}
     output_image = image
 
     if resolved_format == "jpeg":
@@ -333,6 +363,7 @@ def _save_image(
         if output_image.mode not in ("RGB", "RGBA"):
             output_image = output_image.convert("RGB")
 
+    output_image.info.clear()
     buf = BytesIO()
     output_image.save(buf, format=pillow_format, **save_kwargs)
     return buf.getvalue(), mime_type, resolved_format
@@ -364,12 +395,14 @@ def process_media_derivative(
             img_exif = img.getexif()
             if img_exif:
                 orientation = img_exif.get(ExifTags.Base.Orientation, None)
+                source_format = img.format
                 if orientation == 3:
                     img = img.rotate(180, expand=True)
                 elif orientation == 6:
                     img = img.rotate(270, expand=True)
                 elif orientation == 8:
                     img = img.rotate(90, expand=True)
+                img.format = source_format
         except Exception:
             pass
 
@@ -382,53 +415,45 @@ def process_media_derivative(
             str((watermark_options or {}).get("text") or "AI").strip()
         )
 
-        if (
-            target_format == "original"
-            and not crop_requested
-            and not watermark_bytes
-            and not text_watermark_requested
-        ):
-            output_bytes = source_bytes
-            result_width = img.width
-            result_height = img.height
-            fmt = img.format or "PNG"
-            mime_type = MIME_TYPE_BY_FORMAT.get(fmt.lower(), "image/png")
-        else:
-            if crop_requested:
-                img = _apply_aspect_ratio_crop(
-                    img,
-                    crop_options=crop_options or {},
-                    warnings=warnings,
-                )
-
-            if img.width > max_width:
-                ratio = max_width / img.width
-                new_height = int(img.height * ratio)
-                img = img.resize((max_width, new_height), RESAMPLE_LANCZOS)
-
-            if watermark_bytes:
-                img = _apply_image_watermark(
-                    img,
-                    watermark_bytes=watermark_bytes,
-                    watermark_options=watermark_options or {},
-                )
-                watermark_applied = True
-            elif text_watermark_requested:
-                img = _apply_text_watermark(
-                    img,
-                    watermark_options=watermark_options or {},
-                )
-                watermark_applied = True
-
-            output_bytes, mime_type, fmt = _save_image(
+        if crop_requested:
+            img = _apply_aspect_ratio_crop(
                 img,
-                target_format=target_format,
-                quality=quality,
+                crop_options=crop_options or {},
                 warnings=warnings,
-                watermark_applied=watermark_applied,
             )
-            result_width = img.width
-            result_height = img.height
+
+        if img.width > max_width:
+            source_format = img.format
+            ratio = max_width / img.width
+            new_height = int(img.height * ratio)
+            img = img.resize((max_width, new_height), RESAMPLE_LANCZOS)
+            img.format = source_format
+
+        if watermark_bytes:
+            img = _apply_image_watermark(
+                img,
+                watermark_bytes=watermark_bytes,
+                watermark_options=watermark_options or {},
+            )
+            watermark_applied = True
+        elif text_watermark_requested:
+            img = _apply_text_watermark(
+                img,
+                watermark_options=watermark_options or {},
+            )
+            watermark_applied = True
+
+        output_bytes, mime_type, fmt = _save_image(
+            img,
+            target_format=target_format,
+            quality=quality,
+            warnings=warnings,
+            watermark_applied=watermark_applied,
+        )
+        if len(output_bytes) > MAX_DELIVERABLE_ARTIFACT_BYTES:
+            raise MediaDerivativeOutputTooLargeError()
+        result_width = img.width
+        result_height = img.height
 
         checksum = hashlib.sha256(output_bytes).hexdigest()
         return MediaDerivativeResult(
@@ -446,6 +471,7 @@ def process_media_derivative(
     except (
         MediaDerivativeSourceDecodeFailedError,
         MediaDerivativeFormatUnavailableError,
+        MediaDerivativeOutputTooLargeError,
         MediaDerivativeSourceTooLargeError,
         MediaDerivativeAnimatedSourceUnavailableError,
     ):

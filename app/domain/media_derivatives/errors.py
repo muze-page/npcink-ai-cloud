@@ -9,15 +9,6 @@ class MediaDerivativeErrorBase(Exception):
         self.message = message
 
 
-class MediaDerivativeInvalidSourceError(MediaDerivativeErrorBase):
-    def __init__(self) -> None:
-        super().__init__(
-            400,
-            "media_derivative.invalid_source",
-            "exactly one source mode is required",
-        )
-
-
 class MediaDerivativeFormatUnavailableError(MediaDerivativeErrorBase):
     def __init__(self, fmt: str) -> None:
         super().__init__(
@@ -27,30 +18,75 @@ class MediaDerivativeFormatUnavailableError(MediaDerivativeErrorBase):
         )
 
 
-class MediaDerivativeInvalidFormatError(MediaDerivativeErrorBase):
-    def __init__(self, fmt: str) -> None:
-        super().__init__(
-            422,
-            "media_derivative.invalid_format",
-            f"target_format '{fmt}' is not supported",
-        )
-
-
-class MediaDerivativeSourceMediaTypeUnavailableError(MediaDerivativeErrorBase):
-    def __init__(self, media_type: str) -> None:
-        super().__init__(
-            422,
-            "media_derivative.source_media_type_unavailable",
-            f"source_media_type '{media_type}' is not supported",
-        )
-
-
-class MediaDerivativeUploadTooLargeError(MediaDerivativeErrorBase):
+class MediaUploadTooLargeError(MediaDerivativeErrorBase):
     def __init__(self) -> None:
         super().__init__(
             413,
-            "media_derivative.upload_too_large",
+            "media_upload.upload_too_large",
             "uploaded file exceeds the size limit",
+        )
+
+
+class MediaUploadContentTypeMismatchError(MediaDerivativeErrorBase):
+    def __init__(self, declared: str, detected: str) -> None:
+        super().__init__(
+            422,
+            "media_upload.content_type_mismatch",
+            f"declared content type '{declared}' does not match detected type '{detected}'",
+        )
+
+
+class MediaUploadFormatUnavailableError(MediaDerivativeErrorBase):
+    def __init__(self, fmt: str) -> None:
+        super().__init__(
+            422,
+            "media_upload.format_unavailable",
+            f"uploaded image format '{fmt}' is not supported",
+        )
+
+
+class MediaUploadReplayUnavailableError(MediaDerivativeErrorBase):
+    def __init__(self) -> None:
+        super().__init__(
+            409,
+            "media_upload.replay_unavailable",
+            "the idempotent upload evidence exists but its artifact is unavailable",
+        )
+
+
+class MediaJobArtifactNotFoundError(MediaDerivativeErrorBase):
+    def __init__(self, role: str) -> None:
+        super().__init__(
+            404,
+            f"media_job.{role}_artifact_not_found",
+            f"referenced {role} artifact was not found",
+        )
+
+
+class MediaJobArtifactExpiredError(MediaDerivativeErrorBase):
+    def __init__(self, role: str) -> None:
+        super().__init__(
+            410,
+            f"media_job.{role}_artifact_expired",
+            f"referenced {role} artifact has expired",
+        )
+
+
+class MediaJobArtifactUnavailableError(MediaDerivativeErrorBase):
+    def __init__(self, role: str) -> None:
+        super().__init__(
+            503,
+            f"media_job.{role}_artifact_unavailable",
+            f"referenced {role} artifact bytes are unavailable",
+        )
+
+
+class MediaJobQueueFullError(MediaDerivativeErrorBase):
+    def __init__(self) -> None:
+        super().__init__(
+            429,
+            "media_derivative.site_queue_full",
+            "site media derivative queue is full; retry later",
         )
 
 
@@ -69,6 +105,15 @@ class MediaDerivativeSourceTooLargeError(MediaDerivativeErrorBase):
             422,
             "media_derivative.source_too_large",
             "source image exceeds pixel count safety limit",
+        )
+
+
+class MediaDerivativeOutputTooLargeError(MediaDerivativeErrorBase):
+    def __init__(self) -> None:
+        super().__init__(
+            413,
+            "media_derivative.output_too_large",
+            "generated derivative exceeds the deliverable artifact size limit",
         )
 
 
@@ -91,16 +136,7 @@ class MediaDerivativeProcessingFailedError(MediaDerivativeErrorBase):
         super().__init__(422, "media_derivative.processing_failed", message)
 
 
-class MediaDerivativeSourceArtifactNotFoundError(MediaDerivativeErrorBase):
-    def __init__(self) -> None:
-        super().__init__(
-            404,
-            "media_derivative.source_artifact_not_found",
-            "referenced source artifact not found",
-        )
-
-
-class MediaDerivativeArtifactExpiredError(MediaDerivativeErrorBase):
+class MediaArtifactExpiredError(MediaDerivativeErrorBase):
     def __init__(self, artifact_id: str) -> None:
         super().__init__(
             410,

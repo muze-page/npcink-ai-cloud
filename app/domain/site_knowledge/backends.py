@@ -275,6 +275,14 @@ class ZillizCloudSiteKnowledgeBackend:
             "source_type",
             "source_id",
             "parent_post_id",
+            "chunk_index",
+            "post_type",
+            "post_status",
+            "title",
+            "url",
+            "chunk_text",
+            "content_hash",
+            "indexed_at",
         }
         missing_fields = sorted(field for field in required_fields if field not in fields_by_name)
         if missing_fields:
@@ -297,10 +305,34 @@ class ZillizCloudSiteKnowledgeBackend:
             params.get("dim") if isinstance(params, dict) else None,
             default=0,
         )
-        if dimension and dimension != self.dimension:
+        if dimension != self.dimension:
             raise SiteKnowledgeBackendError(
                 "site_knowledge.zilliz_schema_incompatible",
                 "Zilliz site knowledge collection dimensions do not match configuration",
+            )
+        index_names_value = self.client.list_indexes(
+            collection_name=self.collection,
+            field_name="vector",
+        )
+        index_names = index_names_value if isinstance(index_names_value, list) else []
+        metrics: list[str] = []
+        for index_name in index_names:
+            description = self.client.describe_index(
+                collection_name=self.collection,
+                index_name=str(index_name),
+            )
+            if not isinstance(description, dict):
+                continue
+            params = description.get("params")
+            metric = description.get("metric_type")
+            if not metric and isinstance(params, dict):
+                metric = params.get("metric_type")
+            if metric:
+                metrics.append(str(metric).upper())
+        if self.metric_type not in metrics:
+            raise SiteKnowledgeBackendError(
+                "site_knowledge.zilliz_schema_incompatible",
+                "Zilliz site knowledge collection metric does not match configuration",
             )
 
     def _delete(self, *, expr: str) -> None:

@@ -1,0 +1,54 @@
+x-proof-environment: &proof-environment
+  NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://p5_b4_proof:p5_b4_disposable@postgres:5432/npcink_p5_b4_hot_query_proof
+  P5_B4_CLOUD_REVISION: ${P5_B4_CLOUD_REVISION:?P5_B4_CLOUD_REVISION is required}
+  P5_B4_COMPOSE_SHA256: ${P5_B4_COMPOSE_SHA256:?P5_B4_COMPOSE_SHA256 is required}
+  P5_B4_WRAPPER_SHA256: ${P5_B4_WRAPPER_SHA256:?P5_B4_WRAPPER_SHA256 is required}
+  P5_B4_WORKTREE_DIRTY: ${P5_B4_WORKTREE_DIRTY:?P5_B4_WORKTREE_DIRTY is required}
+  P5_B4_WORKTREE_STATUS_SHA256: ${P5_B4_WORKTREE_STATUS_SHA256:?P5_B4_WORKTREE_STATUS_SHA256 is required}
+  P5_B4_WORKTREE_DIRTY_ENTRY_COUNT: ${P5_B4_WORKTREE_DIRTY_ENTRY_COUNT:?P5_B4_WORKTREE_DIRTY_ENTRY_COUNT is required}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: npcink_p5_b4_hot_query_proof
+      POSTGRES_USER: p5_b4_proof
+      POSTGRES_PASSWORD: p5_b4_disposable
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U p5_b4_proof -d npcink_p5_b4_hot_query_proof
+      interval: 1s
+      timeout: 2s
+      retries: 60
+    volumes:
+      - p5-b4-query-proof-postgres:/var/lib/postgresql/data
+    stop_grace_period: 1s
+
+  proof-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PACKAGE_EXTRAS: "[dev]"
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      <<: *proof-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    command:
+      - python
+      - scripts/p5_b4_hot_query_proof.py
+      - --confirm-disposable
+    tmpfs:
+      - /tmp
+    stop_grace_period: 1s
+
+volumes:
+  p5-b4-query-proof-postgres:

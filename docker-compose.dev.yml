@@ -47,7 +47,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PACKAGE_EXTRAS: "[dev]"
+        PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-api:dev
     restart: unless-stopped
     command: >-
@@ -67,6 +67,7 @@ services:
       NPCINK_CLOUD_LOG_LEVEL: DEBUG
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-dev-portal-preview-token-32-bytes}
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     expose:
@@ -79,6 +80,7 @@ services:
     volumes:
       - .:/app
       - ../scripts:/scripts:ro
+      - cloud-artifacts-dev:/var/lib/npcink-ai-cloud/artifacts
 
   worker:
     profiles:
@@ -87,7 +89,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PACKAGE_EXTRAS: "[dev]"
+        PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-worker:dev
     restart: unless-stopped
     command: python -m app.workers.runtime_queue
@@ -99,6 +101,7 @@ services:
       NPCINK_CLOUD_LOG_LEVEL: DEBUG
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
@@ -107,6 +110,7 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+      - cloud-artifacts-dev:/var/lib/npcink-ai-cloud/artifacts
 
   callback-worker:
     profiles:
@@ -115,7 +119,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PACKAGE_EXTRAS: "[dev]"
+        PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-callback-worker:dev
     restart: unless-stopped
     command: python -m app.workers.callback_dispatch
@@ -143,7 +147,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PACKAGE_EXTRAS: "[dev]"
+        PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-ops-worker:dev
     restart: unless-stopped
     command: python -m app.workers.ops_cadence
@@ -156,6 +160,7 @@ services:
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
@@ -164,20 +169,23 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+      - cloud-artifacts-dev:/var/lib/npcink-ai-cloud/artifacts
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: frontend/Dockerfile.dev
     image: npcink-ai-cloud-frontend:dev
     restart: unless-stopped
-    command: sh -lc "node node_modules/next/dist/bin/next dev --webpack -H 0.0.0.0"
-    env_file:
-      - ./.env
-      - ./.env.local
+    command: >-
+      sh -lc "cd /app &&
+      corepack enable &&
+      pnpm install --frozen-lockfile --filter frontend... &&
+      exec node frontend/node_modules/next/dist/bin/next dev --webpack -H 0.0.0.0"
     environment:
       CLOUD_API_BASE_URL: http://api:8000
       CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:8010}
+      NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       NODE_OPTIONS: --max-old-space-size=1536
       NEXT_TELEMETRY_DISABLED: "1"
@@ -185,13 +193,14 @@ services:
     expose:
       - "3000"
     volumes:
-      - ./frontend:/app
-      - cloud-frontend-node-modules-dev:/app/node_modules
-      - cloud-frontend-next-cache-dev:/app/.next
+      - ./frontend:/app/frontend
+      - cloud-frontend-node-modules-dev:/app/frontend/node_modules
+      - cloud-frontend-next-cache-dev:/app/frontend/.next
     depends_on:
       - api
 
 volumes:
+  cloud-artifacts-dev:
   cloud-postgres-dev:
   cloud-redis-dev:
   cloud-frontend-node-modules-dev:

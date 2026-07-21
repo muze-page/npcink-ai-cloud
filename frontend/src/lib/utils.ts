@@ -23,7 +23,11 @@ function getValidDate(date: string | Date | undefined): Date | null {
   if (!date) {
     return null;
   }
-  const value = typeof date === 'string' ? new Date(date) : date;
+  const normalizedDate =
+    typeof date === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(date.trim())
+      ? `${date.trim().replace(' ', 'T')}Z`
+      : date;
+  const value = typeof normalizedDate === 'string' ? new Date(normalizedDate) : normalizedDate;
   if (Number.isNaN(value.getTime())) {
     return null;
   }

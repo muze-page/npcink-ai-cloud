@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import hmac
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 import jwt
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from jwt import ExpiredSignatureError, InvalidTokenError
+from jwt import InvalidTokenError
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.envelope import build_envelope
@@ -18,6 +19,7 @@ from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import PRINCIPAL_STATUS_ACTIVE
 from app.core.security import (
+    PUBLIC_REPLAY_POLICY_METHOD_DEFAULT,
     PUBLIC_RUNTIME_MAX_BODY_BYTES,
     REPLAY_SCOPE_INTERNAL,
     REPLAY_SCOPE_INTERNAL_POST,
@@ -25,6 +27,7 @@ from app.core.security import (
     RUNTIME_GUARD_SURFACE_INTERNAL,
     RequestAuthContext,
     RequestAuthError,
+    RequestBodyEvidenceLoader,
     _enforce_guard_cooldown,
     _enforce_short_window_rate_limit,
     _reserve_replay_receipt,
@@ -44,6 +47,20 @@ PORTAL_LOGIN_CODE_REQUEST_SCOPE_CLIENT = "portal_login_code_client"
 PORTAL_LOGIN_CODE_REQUEST_WINDOW_SECONDS = 15 * 60
 PORTAL_LOGIN_CODE_MAX_REQUESTS_PER_EMAIL_WINDOW = 5
 PORTAL_LOGIN_CODE_MAX_REQUESTS_PER_CLIENT_WINDOW = 10
+PORTAL_SITE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,191}$")
+PORTAL_SESSION_ISSUER = "npcink-ai-cloud"
+PORTAL_SESSION_AUDIENCE = "npcink-ai-cloud-portal"
+PORTAL_SESSION_PURPOSE = "portal_session"
+PORTAL_SESSION_ALGORITHM = "HS256"
+PORTAL_SESSION_REQUIRED_CLAIMS = (
+    "iss",
+    "aud",
+    "sub",
+    "purpose",
+    "session_version",
+    "iat",
+    "exp",
+)
 
 
 @dataclass(slots=True)
@@ -58,6 +75,13 @@ class PortalBearerTokenError(ValueError):
         self.status_code = status_code
         self.error_code = error_code
         self.message = message
+
+
+def normalize_portal_site_id(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    site_id = value.strip()
+    return site_id if PORTAL_SITE_ID_PATTERN.fullmatch(site_id) else ""
 
 
 def _normalize_local_debug_origin(value: str) -> str:
@@ -132,27 +156,45 @@ def build_portal_session_token(
     session_version: int = 1,
     expires_at: datetime | None = None,
 ) -> str:
+    if (
+        not isinstance(principal_id, str)
+        or not principal_id.strip()
+        or principal_id != principal_id.strip()
+    ):
+        raise ValueError("principal_id must be a non-empty canonical string")
+    if (
+        isinstance(session_version, bool)
+        or not isinstance(session_version, int)
+        or session_version < 1
+    ):
+        raise ValueError("session_version must be a positive integer")
+    if site_id != "" and (
+        not isinstance(site_id, str) or normalize_portal_site_id(site_id) != site_id
+    ):
+        raise ValueError("site_id must be a canonical portal site id")
     now = datetime.now(UTC)
     resolved_expires_at = expires_at or (
         now + timedelta(seconds=resolve_portal_session_ttl_seconds(settings))
     )
+    issued_at_timestamp = int(now.timestamp())
+    expires_at_timestamp = int(resolved_expires_at.timestamp())
+    if expires_at_timestamp <= issued_at_timestamp:
+        raise ValueError("expires_at must be later than the token issue time")
     payload: dict[str, Any] = {
+        "iss": _resolve_portal_jwt_issuer(settings),
+        "aud": _resolve_portal_jwt_audience(settings),
         "sub": principal_id,
-        "purpose": "portal_session",
-        "session_version": int(session_version or 1),
-        "iat": int(now.timestamp()),
-        "exp": int(resolved_expires_at.timestamp()),
+        "purpose": PORTAL_SESSION_PURPOSE,
+        "session_version": session_version,
+        "iat": issued_at_timestamp,
+        "exp": expires_at_timestamp,
     }
-    if settings.portal_jwt_issuer:
-        payload["iss"] = settings.portal_jwt_issuer
-    if settings.portal_jwt_audience:
-        payload["aud"] = settings.portal_jwt_audience
     if site_id:
         payload["site_id"] = site_id
     return jwt.encode(
         payload,
         _resolve_portal_link_signing_secret(settings),
-        algorithm=settings.portal_jwt_algorithm,
+        algorithm=PORTAL_SESSION_ALGORITHM,
     )
 
 
@@ -161,6 +203,16 @@ def _resolve_portal_link_signing_secret(settings: Settings) -> str:
     if not secret:
         raise RuntimeError("Portal auth is not configured.")
     return secret
+
+
+def _resolve_portal_jwt_issuer(settings: Settings) -> str:
+    issuer = str(settings.portal_jwt_issuer or "").strip()
+    return issuer or PORTAL_SESSION_ISSUER
+
+
+def _resolve_portal_jwt_audience(settings: Settings) -> str:
+    audience = str(settings.portal_jwt_audience or "").strip()
+    return audience or PORTAL_SESSION_AUDIENCE
 
 
 def resolve_portal_session_ttl_seconds(settings: Settings) -> int:
@@ -183,6 +235,130 @@ def _jwt_payload_dict(payload: object) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _raise_invalid_portal_claims(*, error_code: str, message: str) -> None:
+    raise PortalBearerTokenError(403, error_code, message)
+
+
+def _validate_portal_session_claims(
+    settings: Settings,
+    payload: object,
+    *,
+    expired_error_code: str,
+    expired_message: str,
+    invalid_error_code: str,
+    invalid_message: str,
+) -> dict[str, Any]:
+    claims = _jwt_payload_dict(payload)
+    principal_id = claims.get("sub")
+    session_version = claims.get("session_version")
+    issued_at = claims.get("iat")
+    expires_at = claims.get("exp")
+    not_before = claims.get("nbf")
+    if (
+        claims.get("iss") != _resolve_portal_jwt_issuer(settings)
+        or claims.get("aud") != _resolve_portal_jwt_audience(settings)
+        or claims.get("purpose") != PORTAL_SESSION_PURPOSE
+        or not isinstance(principal_id, str)
+        or not principal_id.strip()
+        or principal_id != principal_id.strip()
+        or isinstance(session_version, bool)
+        or not isinstance(session_version, int)
+        or session_version < 1
+        or isinstance(issued_at, bool)
+        or not isinstance(issued_at, int)
+        or issued_at < 0
+        or isinstance(expires_at, bool)
+        or not isinstance(expires_at, int)
+        or expires_at <= issued_at
+        or (
+            "nbf" in claims
+            and (isinstance(not_before, bool) or not isinstance(not_before, int) or not_before < 0)
+        )
+    ):
+        _raise_invalid_portal_claims(
+            error_code=invalid_error_code,
+            message=invalid_message,
+        )
+    issued_at_timestamp = cast(int, issued_at)
+    expires_at_timestamp = cast(int, expires_at)
+    not_before_timestamp = cast(int | None, not_before)
+    try:
+        datetime.fromtimestamp(issued_at_timestamp, tz=UTC)
+        datetime.fromtimestamp(expires_at_timestamp, tz=UTC)
+        if not_before_timestamp is not None:
+            datetime.fromtimestamp(not_before_timestamp, tz=UTC)
+    except (OverflowError, OSError, ValueError) as error:
+        raise PortalBearerTokenError(403, invalid_error_code, invalid_message) from error
+
+    now_timestamp = datetime.now(UTC).timestamp()
+    if issued_at_timestamp > now_timestamp or (
+        not_before_timestamp is not None
+        and (not_before_timestamp > now_timestamp or not_before_timestamp > expires_at_timestamp)
+    ):
+        _raise_invalid_portal_claims(
+            error_code=invalid_error_code,
+            message=invalid_message,
+        )
+    if expires_at_timestamp <= now_timestamp:
+        raise PortalBearerTokenError(401, expired_error_code, expired_message)
+
+    if "site_id" in claims:
+        site_id = claims["site_id"]
+        if (
+            not isinstance(site_id, str)
+            or not site_id
+            or normalize_portal_site_id(site_id) != site_id
+        ):
+            _raise_invalid_portal_claims(
+                error_code=invalid_error_code,
+                message=invalid_message,
+            )
+    return claims
+
+
+def _decode_portal_session_claims(
+    settings: Settings,
+    token: str,
+    *,
+    signing_secret: str,
+    expired_error_code: str,
+    expired_message: str,
+    invalid_error_code: str,
+    invalid_message: str,
+) -> dict[str, Any]:
+    decode_kwargs: dict[str, Any] = {
+        "jwt": token,
+        "key": signing_secret,
+        "algorithms": [PORTAL_SESSION_ALGORITHM],
+        "options": {
+            "require": list(PORTAL_SESSION_REQUIRED_CLAIMS),
+            "verify_exp": False,
+            "verify_iat": False,
+            "verify_nbf": False,
+        },
+        "issuer": _resolve_portal_jwt_issuer(settings),
+        "audience": _resolve_portal_jwt_audience(settings),
+    }
+
+    try:
+        payload = jwt.decode(**decode_kwargs)
+    except (InvalidTokenError, TypeError, ValueError, OverflowError) as error:
+        raise PortalBearerTokenError(
+            403,
+            invalid_error_code,
+            invalid_message,
+        ) from error
+
+    return _validate_portal_session_claims(
+        settings,
+        payload,
+        expired_error_code=expired_error_code,
+        expired_message=expired_message,
+        invalid_error_code=invalid_error_code,
+        invalid_message=invalid_message,
+    )
+
+
 def decode_portal_bearer_claims(settings: Settings, token: str) -> dict[str, Any]:
     if not settings.portal_jwt_secret:
         raise PortalBearerTokenError(
@@ -190,69 +366,27 @@ def decode_portal_bearer_claims(settings: Settings, token: str) -> dict[str, Any
             "auth.portal_not_configured",
             "portal auth is not configured",
         )
-    decode_kwargs: dict[str, Any] = {
-        "jwt": token,
-        "key": settings.portal_jwt_secret,
-        "algorithms": [settings.portal_jwt_algorithm],
-    }
-    if settings.portal_jwt_issuer:
-        decode_kwargs["issuer"] = settings.portal_jwt_issuer
-    if settings.portal_jwt_audience:
-        decode_kwargs["audience"] = settings.portal_jwt_audience
-
-    try:
-        payload = jwt.decode(**decode_kwargs)
-    except ExpiredSignatureError as error:
-        raise PortalBearerTokenError(
-            401,
-            "auth.portal_token_expired",
-            "portal token has expired",
-        ) from error
-    except InvalidTokenError as error:
-        raise PortalBearerTokenError(
-            403,
-            "auth.portal_token_invalid",
-            "invalid portal bearer token",
-        ) from error
-
-    return _jwt_payload_dict(payload)
+    return _decode_portal_session_claims(
+        settings,
+        token,
+        signing_secret=settings.portal_jwt_secret,
+        expired_error_code="auth.portal_token_expired",
+        expired_message="portal token has expired",
+        invalid_error_code="auth.portal_token_invalid",
+        invalid_message="invalid portal bearer token",
+    )
 
 
 def decode_portal_session_cookie_claims(settings: Settings, token: str) -> dict[str, Any]:
-    decode_kwargs: dict[str, Any] = {
-        "jwt": token,
-        "key": _resolve_portal_link_signing_secret(settings),
-        "algorithms": [settings.portal_jwt_algorithm],
-    }
-    if settings.portal_jwt_issuer:
-        decode_kwargs["issuer"] = settings.portal_jwt_issuer
-    if settings.portal_jwt_audience:
-        decode_kwargs["audience"] = settings.portal_jwt_audience
-
-    try:
-        payload = jwt.decode(**decode_kwargs)
-    except ExpiredSignatureError as error:
-        raise PortalBearerTokenError(
-            401,
-            "auth.portal_session_expired",
-            "portal session has expired",
-        ) from error
-    except InvalidTokenError as error:
-        raise PortalBearerTokenError(
-            403,
-            "auth.portal_session_invalid",
-            "invalid portal session token",
-        ) from error
-
-    payload = _jwt_payload_dict(payload)
-    purpose = str(payload.get("purpose") or "").strip()
-    if purpose != "portal_session":
-        raise PortalBearerTokenError(
-            403,
-            "auth.portal_session_invalid",
-            "invalid portal session token",
-        )
-    return payload
+    return _decode_portal_session_claims(
+        settings,
+        token,
+        signing_secret=_resolve_portal_link_signing_secret(settings),
+        expired_error_code="auth.portal_session_expired",
+        expired_message="portal session has expired",
+        invalid_error_code="auth.portal_session_invalid",
+        invalid_message="invalid portal session token",
+    )
 
 
 def decode_portal_bearer_token(settings: Settings, token: str) -> str:
@@ -262,25 +396,53 @@ def decode_portal_bearer_token(settings: Settings, token: str) -> str:
 
 
 def _extract_portal_principal_id(payload: dict[str, Any]) -> str:
-    principal_id = str(payload.get("sub") or "").strip()
-    if not principal_id:
+    principal_id = payload.get("sub")
+    if (
+        not isinstance(principal_id, str)
+        or not principal_id.strip()
+        or principal_id != principal_id.strip()
+    ):
         raise PortalBearerTokenError(
-            401,
-            "auth.principal_id_required",
-            "missing portal principal id",
+            403,
+            "auth.portal_token_invalid",
+            "invalid portal bearer token",
         )
     return principal_id
 
 
 def _extract_portal_session_version(payload: dict[str, Any]) -> int:
-    try:
-        return int(payload.get("session_version") or 1)
-    except (TypeError, ValueError) as error:
+    session_version = payload.get("session_version")
+    if (
+        isinstance(session_version, bool)
+        or not isinstance(session_version, int)
+        or session_version < 1
+    ):
         raise PortalBearerTokenError(
             403,
-            "auth.portal_session_invalid",
-            "invalid portal session token",
-        ) from error
+            "auth.portal_token_invalid",
+            "invalid portal bearer token",
+        )
+    return session_version
+
+
+def _extract_portal_site_id(payload: dict[str, Any]) -> str:
+    if "site_id" not in payload:
+        return ""
+    raw_site_id = payload["site_id"]
+    if not isinstance(raw_site_id, str):
+        raise PortalBearerTokenError(
+            403,
+            "auth.portal_token_invalid",
+            "invalid portal bearer token",
+        )
+    site_id = normalize_portal_site_id(raw_site_id)
+    if not site_id or site_id != raw_site_id:
+        raise PortalBearerTokenError(
+            403,
+            "auth.portal_token_invalid",
+            "invalid portal bearer token",
+        )
+    return site_id
 
 
 def validate_portal_principal_session(
@@ -289,13 +451,27 @@ def validate_portal_principal_session(
     principal_id: str,
     session_version: int,
 ) -> None:
+    if (
+        isinstance(session_version, bool)
+        or not isinstance(session_version, int)
+        or session_version < 1
+    ):
+        raise PortalBearerTokenError(
+            403,
+            "auth.portal_token_invalid",
+            "invalid portal bearer token",
+        )
     with get_session(settings.database_url) as session:
         repository = CommercialRepository(session)
         identity = repository.get_principal_identity_by_ref(principal_id=principal_id)
+        current_session_version = getattr(identity, "session_version", None)
         if (
             identity is None
             or identity.status != PRINCIPAL_STATUS_ACTIVE
-            or int(identity.session_version or 1) != int(session_version or 1)
+            or isinstance(current_session_version, bool)
+            or not isinstance(current_session_version, int)
+            or current_session_version < 1
+            or current_session_version != session_version
         ):
             raise PortalBearerTokenError(
                 401,
@@ -376,6 +552,8 @@ async def authorize_public_request(
     require_idempotency: bool,
     required_scope: str | None = None,
     max_body_bytes: int | None = None,
+    body_evidence_loader: RequestBodyEvidenceLoader | None = None,
+    replay_policy: str = PUBLIC_REPLAY_POLICY_METHOD_DEFAULT,
 ) -> RequestAuthContext | JSONResponse:
     services = get_cloud_services(request)
 
@@ -411,7 +589,23 @@ async def authorize_public_request(
             ),
             require_idempotency=require_idempotency,
             required_scope=required_scope,
-            max_body_bytes=max_body_bytes or PUBLIC_RUNTIME_MAX_BODY_BYTES,
+            max_body_bytes=(
+                max_body_bytes if max_body_bytes is not None else PUBLIC_RUNTIME_MAX_BODY_BYTES
+            ),
+            body_evidence_loader=body_evidence_loader,
+            replay_policy=replay_policy,
+            public_pull_rate_limit_window_seconds=(
+                services.settings.public_pull_rate_limit_window_seconds
+            ),
+            public_pull_max_requests_per_window=(
+                services.settings.public_pull_max_requests_per_window
+            ),
+            public_pull_max_requests_per_key_window=(
+                services.settings.public_pull_max_requests_per_key_window
+            ),
+            public_pull_max_requests_per_ip_window=(
+                services.settings.public_pull_max_requests_per_ip_window
+            ),
         )
     except RequestAuthError as error:
         return _build_auth_error_response(
@@ -507,7 +701,7 @@ async def _authorize_static_token_request(
     except RequestAuthError as error:
         return _token_error_response(error)
 
-    if request.method.upper() == "POST" and idempotency_key:
+    if request.method.upper() in {"POST", "PUT"} and idempotency_key:
         now = datetime.now(UTC)
         replay_ttl_seconds = _resolve_replay_receipt_ttl_seconds(
             services.settings.auth_timestamp_tolerance_seconds
@@ -622,4 +816,7 @@ def _authorize_portal_bearer_jwt_request(
             error_code=error.error_code,
             message=error.message,
         )
-    return PortalAuthContext(principal_id=principal_id)
+    return PortalAuthContext(
+        principal_id=principal_id,
+        site_id=_extract_portal_site_id(claims),
+    )

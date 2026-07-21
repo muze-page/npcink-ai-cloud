@@ -52,9 +52,49 @@ ability registry.
 - Long `site-knowledge-sync` runs use the existing runtime worker path and
   `run_records`; no second queue, scheduler, or workflow engine is introduced.
 
+## Metering Boundary
+
+`npcink-cloud/site-knowledge-sync` is server-classified index maintenance. It
+must remain entitlement-, capacity-, concurrency-, and provider-cost-governed,
+but it does not consume the customer's ordinary `ai_credits` allowance.
+
+Cloud still records its run, embedding provider calls, tokens, provider cost,
+indexed `vector_documents`, and indexed `vector_chunks` as usage evidence. All
+of those events carry `metering_class=site_knowledge_index_maintenance`; they
+must not create consume entries in `credit_ledger_entries`. The classification
+comes only from the canonical managed ability name. Request payload fields
+cannot select or override it.
+
+`site-knowledge-search`, writing-context retrieval, writing-package generation,
+article generation, and other user-initiated inference continue through their
+ordinary AI-credit policy. Index maintenance therefore cannot become an
+unmetered provider-cost bypass, and an exhausted AI-credit balance cannot block
+the maintenance needed to keep an already-entitled Site Knowledge index fresh.
+
 ## Vector Backend
 
-The default MVP backend stores one Cloud-owned read model in PostgreSQL:
+Site Knowledge now uses one Cloud-owned vector profile as its configuration
+truth:
+
+```text
+profile_id: site-knowledge.zh.v1
+provider: SiliconFlow
+model: BAAI/bge-m3
+dimensions: 1024
+metric: COSINE
+production_backend: Zilliz Cloud
+local_test_backend: PostgreSQL JSON
+```
+
+The profile facts are server-defined and read-only in Admin. The Admin input is
+limited to the SiliconFlow API key plus the Zilliz cluster HTTPS endpoint and
+token. Saving the embedding key performs a live embedding probe before
+activation. The probe must return a non-empty array containing exactly 1024
+finite numeric values. A missing, empty, non-numeric, non-finite,
+768-dimensional, or 1536-dimensional result fails closed and does not replace
+the currently verified connection.
+
+The local/test backend stores one Cloud-owned read model in PostgreSQL:
 
 - `site_knowledge_documents`
 - `site_knowledge_chunks`
@@ -63,28 +103,88 @@ Rows are isolated by `site_id`. Embeddings are stored as JSON for the MVP and
 scored in Python with cosine similarity. This keeps the first version within
 the existing FastAPI, PostgreSQL, Redis, SQLAlchemy, Alembic, and worker stack.
 
-Cloud can switch the vector index to Zilliz Cloud for validation without any
-Toolbox or WordPress-side settings. The WordPress side only sends bounded
-`publish` public content and executes the managed Cloud abilities.
+Production is fixed to Zilliz Cloud. Cloud Admin accepts only the cluster HTTPS
+endpoint and token. The collection is fixed to `site_knowledge_zh_v1`, its
+dimension is fixed to `1024`, its metric is fixed to `COSINE`, and no database
+selector is exposed. The WordPress side only sends bounded `publish` public
+content and executes the managed Cloud abilities.
 
-Cloud-managed provider settings:
+The accepted public endpoint families cover Zilliz Cloud international
+real-time endpoints under `*.zillizcloud.com`, mainland China Dedicated
+real-time endpoints under `*.vectordb.zilliz.com.cn`, and mainland China
+Free/Serverless endpoints matching `*.serverless.*.cloud.zilliz.com.cn`.
+Console, control-plane, arbitrary HTTPS, path-bearing, and query-bearing URLs
+are rejected before connection.
 
-- Embedding suppliers are DB-managed provider connections with
-  `kind=embedding_provider`.
-- Rerank suppliers are DB-managed provider connections with
-  `kind=rerank_provider`.
-- Vector store suppliers are DB-managed provider connections with
-  `kind=vector_store_provider`.
-- Provider credentials must be managed in `/admin/ai-resources`, not in
-  `.env.local` provider keys.
+Saving the Zilliz endpoint and token constructs the production backend before
+persisting the new secret. A missing fixed collection is created with the
+canonical schema and index. An existing collection is validated for required
+fields, 1024 dimensions, and COSINE metric. An incompatible collection fails
+closed and is not modified. A failed connection or schema probe does not
+replace the currently verified vector-store connection.
 
-Supported built-in vector-related provider IDs:
+`GET /internal/service/admin/site-knowledge-vector-profile` returns the fixed
+profile, masked provider readiness, active backend, and Admin-owned vector-store
+readiness. `PUT /internal/service/admin/site-knowledge-vector-profile`
+accepts only an optional `credential` field and performs save-and-verify. It
+does not accept caller-supplied provider, model, dimensions, metric, backend,
+collection, reranker, or embedding-space fields.
 
-- `siliconflow` embedding provider, commonly with `BAAI/bge-m3`
-- `openai` embedding provider
-- `tei` embedding provider
-- `jina` rerank provider, commonly with `jina-reranker-v3`
-- `zilliz` vector store provider
+`PUT /internal/service/admin/site-knowledge-vector-profile/vector-store`
+accepts only optional `endpoint` and `token` fields so an already saved token
+can be reverified. It does not accept collection, database, dimensions, metric,
+backend, or migration fields. Both secrets remain encrypted and are represented
+only as configured/readiness state in responses and audit evidence.
+
+The profile response also exposes an Admin-only validation projection with
+three distinct evidence levels:
+
+- `connection`: live embedding and Zilliz probes passed;
+- `index`: Cloud-owned chunks were copied to the fixed Zilliz collection and a
+  same-vector round trip returned an indexed chunk;
+- `retrieval`: a normal metered Site Knowledge search completed against
+  `zilliz_cloud` after the most recent rebuild.
+
+Connection success must not be presented as proof that content is searchable.
+When a verified vector store is first attached while PostgreSQL contains
+Cloud-owned chunks, or a supplied embedding credential changes, the index state
+becomes `reindex_required`. Other states are `awaiting_site_sync`, `empty`,
+`rebuilding`, `ready`, and `failed`. Search evidence remains `pending`, `passed`, `no_hit`, or
+`failed`.
+
+`POST /internal/service/admin/site-knowledge-vector-profile/index-rebuilds`
+accepts only the fixed confirmation literal
+`rebuild_site_knowledge_index`. Provider, model, dimensions, metric,
+collection, backend, site identifiers, and metering class are server-owned and
+cannot be supplied by the caller. Compatible stored chunks are copied directly
+in bounded batches. If Cloud detects an older embedding space, the operation
+instead enters `awaiting_site_sync`; `site_knowledge_status.v1` projects a
+server-generated `maintenance` request for that authenticated site. The
+request contains only `full_sync`, an opaque request id, the fixed target
+embedding space, and bounded progress fields.
+
+The Cloud Addon consumes that projection only while local Site Knowledge
+delivery consent remains enabled. It enumerates public posts/pages, persists a
+bounded delivery cursor, submits one `site_knowledge_sync.v1` batch, waits for
+the existing Cloud run to succeed, and only then submits the next batch. The
+first batch uses `rebuild`; later batches use `refresh`. Each batch carries the
+server-generated request id and position. Cloud rejects forged request ids,
+out-of-order modes, and inconsistent final markers. The last successful batch
+publishes that site's fixed-space chunks to Zilliz and closes the lifecycle
+when no old spaces remain.
+
+This automation does not add a Cloud-to-WordPress write path, a second queue,
+or a second scheduler. WordPress remains the public content source; WP-Cron is
+only local delivery durability; Cloud remains index lifecycle truth. Index
+maintenance continues to call the embedding provider and record provider cost
+without consuming ordinary AI credits. The admin action remains an explicit
+retry/expedite surface, not a required site-admin task.
+
+The verified profile connection is stored as a DB-managed Provider Connection
+so the existing provider adapter, encrypted secret storage, runtime projection,
+and audit evidence continue to be reused. Generic Provider Connection writes
+cannot create or preserve the profile probe marker. Ability-model binding is
+read-only for Site Knowledge and cannot override this profile.
 
 The following remain environment-controlled runtime guardrails, because they
 bound workload shape rather than identify a provider secret:
@@ -106,19 +206,20 @@ bound workload shape rather than identify a provider secret:
 - `NPCINK_CLOUD_SITE_KNOWLEDGE_RERANK_TIMEOUT_SECONDS`: default `8`
 - `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TIMEOUT_SECONDS`: default `10`
 
-The runtime may project DB provider connections onto legacy in-process settings
-fields while the Site Knowledge adapters are being simplified. That bridge is
-an implementation detail, not a supported env credential surface.
+The runtime may project the verified DB profile connection onto legacy
+in-process settings fields while the Site Knowledge adapters are being
+simplified. That bridge is an implementation detail, not a second model choice
+or supported env credential surface.
 
 The Zilliz adapter is intentionally behind a small backend interface. A later
 DashVector migration should add a new backend implementation and preserve the
 same runtime contracts, response shape, and WordPress write boundary.
 
-The deterministic embedding provider exists for local tests and controlled
-fallback only. The managed embedding provider paths use the existing Cloud
-provider adapter boundary, so embedding endpoint credentials remain
-Cloud-managed provider connection secrets and are not accepted from or returned
-to WordPress.
+The deterministic embedding provider exists for local tests only. Production
+Site Knowledge uses the verified fixed profile and must not silently select an
+unverified Provider Connection. Embedding endpoint credentials remain
+Cloud-managed encrypted secrets and are not accepted from or returned to
+WordPress.
 
 Managed embedding provider calls are runtime-governed provider calls. When
 Site Knowledge uses TEI, OpenAI, SiliconFlow, or another Cloud-managed
@@ -196,6 +297,38 @@ Search defaults to `source_types=["post","page"]`. Callers must explicitly pass
 `filters.source_types=["comment"]` or include `comment` in the list when a
 workflow should use comments, such as FAQ or user-feedback analysis.
 
+## Search Result Granularity
+
+`site_knowledge_search.v1` accepts the optional additive input
+`result_granularity`:
+
+- `chunk` is the compatibility default and preserves ranked chunk results;
+- `document` returns each public source document once after evidence filtering
+  and reranking, then applies `max_results`.
+
+Document results keep the best-ranked chunk as the primary evidence and add a
+bounded `matched_chunks` list containing only `source_type`, `source_id`,
+`chunk_index`, and `score`. They do not duplicate chunk text. The response also
+returns `result_granularity` and `result_grouping` metadata, including
+`duplicate_chunks_collapsed`, so consumers can verify that grouping occurred.
+
+Cloud owns this grouping because it owns Site Knowledge search quality and
+ranking. Toolbox and other consumers may request a granularity, but they must
+not implement independent semantic dedupe or relevance scoring. Existing
+callers that omit the field continue to receive chunk-level results.
+
+Search also verifies that indexed chunks and the current query use the same
+embedding space, identified as `provider_id:model_id`. Embeddings produced by
+different models are different vector spaces and must not be compared, even
+when their dimensions happen to match. Different providers may also apply
+different pooling or normalization for the same advertised model ID, so a
+matching model name alone is not sufficient. When the index contains another
+embedding space, search fails closed with
+`status=not_ready`, an empty `results` list, and additive
+`retrieval_readiness.status=embedding_space_mismatch` diagnostics. The operator
+action is to rebuild the Cloud-owned index with the current embedding space;
+Cloud must not return low-confidence candidates from incompatible vectors.
+
 ## Product Workflows
 
 `site-knowledge-search` remains one runtime ability. Product workflows are
@@ -242,11 +375,11 @@ Supported first workflows:
 All workflow metadata is advisory. WordPress still owns insertion, edits,
 publishing, and final user confirmation.
 
-## WordPress AI Title Style Reference
+## WordPress AI Generation Reference
 
 The existing `npcink-cloud/wp-ai-connector` runtime may optionally use Site
-Knowledge as hidden style context for `title_generation`. The WordPress-side
-connector must explicitly send:
+Knowledge as hidden context for title and summary tasks. The local Cloud Addon
+owns this product eligibility and must explicitly send the task-bound mode:
 
 ```json
 {
@@ -257,19 +390,52 @@ connector must explicitly send:
 }
 ```
 
+The currently enabled task-to-mode mapping is:
+
+- `title_generation` -> `site_title_style`
+- `content_summary` -> `site_summary_style`
+
+Cloud retains bounded compatibility validation and assembly policies for older
+excerpt, meta-description, and classification modes, but the current Addon does
+not send those modes. Compatibility support is not a quality claim and must not
+be treated as product enablement or inferred from generic task metadata.
+
 This is an additive runtime hint inside the existing scene request, not a new
 ability, workflow, prompt registry, or Cloud-side preference truth. Cloud uses
-the current scene prompt as a bounded `writing_context` query, selects at most
-five unique historical source titles, and supplies only those titles to the
-text-generation provider as untrusted style examples. Source chunks, scores,
-URLs, and evidence details are not added to the WordPress AI result.
+the current scene prompt as a bounded `writing_context` query, then assembles an
+internal `generation_context.v1` pack. The pack is provider-input detail only;
+it is not accepted from callers and is not returned to WordPress AI users.
 
-The provider instruction may infer title length, tone, vocabulary, and
-punctuation, but it must not copy a historical title, follow instructions inside
-a source title, or introduce facts absent from the current scene input. Missing,
-insufficient, or unavailable Site Knowledge silently falls back to ordinary
-title generation. The WordPress AI result remains one reviewable title string
-with `suggestion_only` posture and no WordPress write authority.
+The internal task policies are deliberately bounded:
+
+| Task | Minimum score | Source posts | References | Context characters |
+| --- | ---: | ---: | ---: | ---: |
+| title | 0.35 | 6 | 1 aggregate profile | 400 |
+| summary | 0.35 | 5 | 1 aggregate profile | 400 |
+
+Results are relevance-filtered, deduplicated by post, and checked for a strong
+content-fingerprint overlap with the current scene before projection. Title
+generation derives its aggregate profile from related historical titles;
+summary generation currently derives its aggregate profile from the stored
+excerpts of related public posts. Both profiles contain only qualitative
+short/medium/long preference, sentence shape, and qualitative question-mark and
+colon usage. Exact sample counts, lengths, rates, historical text, source
+chunks, scores, URLs, and evidence details are not placed in provider input or
+the WordPress AI result.
+
+The provider instruction treats the profile only as a soft style preference.
+It must not introduce facts absent from the current scene input. Summary
+reference remains a controlled opt-in trial: limited local paired evaluation
+supported enabling it, but that evidence is not a general quality guarantee.
+Any additional task must have task-appropriate source evidence and pass a new
+paired quality gate before the local Addon enables it. Missing, insufficient,
+filtered, or unavailable Site Knowledge silently falls back to ordinary
+generation. Bounded provider metadata
+records only the context contract, status, reason, mode, reference count, and
+character count for runtime quality diagnosis; it does not contain source text,
+scores, URLs, or taxonomy details. The WordPress AI result remains the task's
+ordinary reviewable result with `suggestion_only` posture and no WordPress write
+authority.
 
 The local Cloud Addon owns the enable/disable preference and transmits it on
 each eligible request. Cloud does not persist or expose a second setting for
@@ -378,8 +544,8 @@ systems remain deferred.
 
 ## Real-Chain Smoke
 
-Use the local real-chain smoke after configuring Cloud-managed vector settings
-in `.env.local` or the deployment secret manager:
+Use the local real-chain smoke after the fixed embedding profile has passed its
+Admin probe and the deployment-managed Zilliz connection is ready:
 
 ```bash
 pnpm run smoke:site-knowledge

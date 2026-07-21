@@ -35,6 +35,8 @@ class RedisRuntimeQueue:
     def consume(self, timeout_seconds: int) -> str | None:
         client = self._get_client()
         try:
+            if timeout_seconds <= 0:
+                return cast(str | None, client.rpop(self.queue_key))
             result = cast(
                 tuple[str, str] | None,
                 client.brpop([self.queue_key], timeout=timeout_seconds),

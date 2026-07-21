@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import base64
-import hashlib
-import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from typing import Any
 from uuid import uuid4
 
 import httpx
 from sqlalchemy.orm import Session
 
-from app.core.models import MediaDerivativeArtifact, RunRecord
+from app.core.models import MediaArtifact, RunRecord
+from app.domain.media_artifacts import ArtifactStore
+from app.domain.media_artifacts.publication import publish_and_track_artifact
 
 AUDIO_ARTIFACT_DEFAULT_TTL_MINUTES = 60
 AUDIO_ARTIFACT_DEFAULT_MAX_BYTES = 24 * 1024 * 1024
@@ -47,6 +48,7 @@ def materialize_audio_generation_candidates(
     session: Session,
     run: RunRecord,
     result_json: dict[str, Any],
+    artifact_store: ArtifactStore,
     config: AudioArtifactMaterializationConfig | None = None,
 ) -> dict[str, Any]:
     if not _is_audio_generation_result(result_json):
@@ -55,25 +57,34 @@ def materialize_audio_generation_candidates(
     materialize_config = config or AudioArtifactMaterializationConfig()
     audios = result_json.get("audios")
     if not isinstance(audios, list) or not audios:
-        return result_json
+        raise AudioArtifactMaterializationError(
+            "provider audio result did not contain an audio candidate"
+        )
+    if len(audios) != 1:
+        raise AudioArtifactMaterializationError(
+            "provider audio result must contain exactly one audio candidate"
+        )
 
     next_audios: list[dict[str, Any]] = []
     materialized_count = 0
     for raw_audio in audios:
         if not isinstance(raw_audio, dict):
-            continue
+            raise AudioArtifactMaterializationError(
+                "provider audio result contained an invalid audio candidate"
+            )
         audio = dict(raw_audio)
         audio_bytes, source_kind, source_url = _audio_bytes_for_candidate(
             audio,
             config=materialize_config,
         )
         if not audio_bytes:
-            next_audios.append(audio)
-            continue
+            raise AudioArtifactMaterializationError(
+                "provider audio candidate did not contain materializable bytes"
+            )
 
         audio_format = _safe_audio_format(audio.get("format"))
         mime_type = _safe_audio_mime(audio.get("mime_type"), audio_format)
-        artifact, download_url = _create_audio_artifact(
+        artifact = _create_audio_artifact(
             session=session,
             run=run,
             audio_bytes=audio_bytes,
@@ -82,47 +93,46 @@ def materialize_audio_generation_candidates(
             ttl_minutes=materialize_config.ttl_minutes,
             source_kind=source_kind,
             source_url_present=bool(source_url),
+            artifact_store=artifact_store,
         )
+        for credential_field in (
+            "url",
+            "audio_url",
+            "download_url",
+            "authenticated_download_url",
+            "subtitle_url",
+            "b64_json",
+            "base64",
+            "data_url",
+        ):
+            audio.pop(credential_field, None)
         audio.update(
             {
-                "url": download_url,
-                "audio_url": download_url,
-                "download_url": download_url,
                 "artifact_id": artifact.artifact_id,
                 "artifact": {
                     "artifact_id": artifact.artifact_id,
                     "artifact_reference": {"artifact_id": artifact.artifact_id},
-                    "download_url": download_url,
-                    "authenticated_download_url": (
-                        f"/v1/runtime/artifacts/{artifact.artifact_id}/download"
-                    ),
-                    "expires_at": artifact.expires_at.isoformat()
-                    if artifact.expires_at
-                    else None,
-                    "mime_type": artifact.mime_type,
+                    "expires_at": artifact.expires_at.isoformat() if artifact.expires_at else None,
+                    "mime_type": artifact.content_type,
                     "format": artifact.format,
-                    "filesize_bytes": artifact.filesize_bytes,
+                    "filesize_bytes": artifact.byte_size,
                     "checksum": artifact.checksum,
                     "source_media_type": "audio",
                 },
-                "b64_json": "",
                 "mime_type": mime_type,
                 "format": audio_format,
-                "size_bytes": artifact.filesize_bytes,
+                "size_bytes": artifact.byte_size,
                 "provider_url_status": "materialized",
             }
         )
         next_audios.append(audio)
         materialized_count += 1
 
-    if not materialized_count:
-        return result_json
-
     next_result = dict(result_json)
     next_result["audios"] = next_audios
     if isinstance(next_result.get("items"), list):
         next_result["items"] = next_audios
-    next_result["provider_response_format"] = "url"
+    next_result["provider_response_format"] = "artifact_reference"
     next_result["audio_materialization"] = {
         "status": "materialized",
         "artifact_count": materialized_count,
@@ -204,41 +214,41 @@ def _create_audio_artifact(
     ttl_minutes: int,
     source_kind: str,
     source_url_present: bool,
-) -> tuple[MediaDerivativeArtifact, str]:
+    artifact_store: ArtifactStore,
+) -> MediaArtifact:
     artifact_id = f"art_{uuid4().hex}"
-    public_download_token = secrets.token_urlsafe(24)
-    checksum = "sha256:" + hashlib.sha256(audio_bytes).hexdigest()
+    stored = publish_and_track_artifact(
+        session,
+        store=artifact_store,
+        stream=BytesIO(audio_bytes),
+        max_bytes=len(audio_bytes),
+        metadata={"media_kind": "audio"},
+    )
     now = datetime.now(UTC)
-    artifact = MediaDerivativeArtifact(
+    artifact = MediaArtifact(
         artifact_id=artifact_id,
         run_id=run.run_id,
         site_id=run.site_id,
-        storage_ref=f"blob://audio_generation/{artifact_id}",
-        blob_data=audio_bytes,
-        mime_type=mime_type,
+        storage_key=stored.storage_key,
+        media_kind="audio",
+        operation="audio_generation",
+        content_type=mime_type,
+        byte_size=stored.byte_size,
+        status="available",
         format=audio_format,
         width=0,
         height=0,
-        filesize_bytes=len(audio_bytes),
-        checksum=checksum,
-        source_media_type="audio",
+        checksum=stored.checksum,
         processing_warnings_json={
             "warnings": [],
             "source_kind": source_kind,
             "provider_url_present": source_url_present,
-            "public_download_token_sha256": hashlib.sha256(
-                public_download_token.encode("utf-8")
-            ).hexdigest(),
         },
         expires_at=now + timedelta(minutes=max(1, int(ttl_minutes))),
     )
     session.add(artifact)
     session.flush()
-    return (
-        artifact,
-        f"/v1/runtime/artifacts/{artifact.artifact_id}/public-download"
-        f"?token={public_download_token}",
-    )
+    return artifact
 
 
 def _safe_audio_format(value: Any) -> str:

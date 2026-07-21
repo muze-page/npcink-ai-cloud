@@ -25,11 +25,21 @@ def test_production_compose_allows_optional_python_package_extras() -> None:
     assert compose_text.count("PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}") == 4
 
 
+def test_development_runtime_images_include_zilliz_sdk() -> None:
+    compose_text = (ROOT / "docker-compose.dev.yml").read_text()
+
+    assert compose_text.count('PACKAGE_EXTRAS: "[dev,zilliz]"') == 4
+
+
 def test_production_image_packages_runtime_performance_scripts() -> None:
     dockerfile_text = (ROOT / "Dockerfile").read_text()
 
     assert "COPY scripts ./scripts" in dockerfile_text
-    assert dockerfile_text.count("COPY scripts ./scripts") == 2
+    assert dockerfile_text.count("COPY scripts ./scripts") == 1
+    assert (
+        "COPY scripts/verify-production-python-lock.py "
+        "./scripts/verify-production-python-lock.py" in dockerfile_text
+    )
 
 
 def test_package_json_exposes_runtime_perf_and_prod_extras_smoke() -> None:
@@ -69,13 +79,13 @@ def test_production_performance_baseline_is_readonly_and_boundary_labeled() -> N
     assert "DELETE " not in source
 
 
-def test_remote_production_performance_baseline_keeps_synthetic_smoke_explicit() -> None:
+def test_remote_production_performance_baseline_is_read_only() -> None:
     remote_source = (ROOT / "deploy" / "remote-performance-baseline.sh").read_text()
     ssh_source = (ROOT / "deploy" / "production-performance-baseline-to-ssh-host.sh").read_text()
 
     assert "production_performance_baseline.py" in remote_source
     assert "--require-indexes" in remote_source
     assert "NPCINK_CLOUD_PRODUCTION_PERF_ANALYZE" in remote_source
-    assert "WITH_SYNTHETIC_SMOKE=0" in ssh_source
-    assert "--with-synthetic-smoke" in ssh_source
-    assert "remote-smoke.sh" in ssh_source
+    assert "--with-synthetic-smoke" not in ssh_source
+    assert "remote-smoke.sh" not in ssh_source
+    assert 'run_remote "bash deploy/remote-performance-baseline.sh"' in ssh_source

@@ -39,6 +39,7 @@ ALLOWED_SEARCH_INTENTS = frozenset(
         "writing_support_plan",
     }
 )
+ALLOWED_RESULT_GRANULARITIES = frozenset({"chunk", "document"})
 ALLOWED_SYNC_MODES = frozenset({"refresh", "rebuild", "delete"})
 PUBLIC_POST_STATUSES = frozenset({"publish"})
 PUBLIC_POST_TYPES = frozenset({"post", "page"})
@@ -110,6 +111,14 @@ def validate_site_knowledge_runtime_contract(
         raise SiteKnowledgeContractViolation(
             "site_knowledge.write_posture_required",
             "site knowledge input must use suggestion_only write_posture",
+        )
+    result_granularity = input_payload.get("result_granularity")
+    if result_granularity is not None and str(result_granularity).strip() not in (
+        ALLOWED_RESULT_GRANULARITIES
+    ):
+        raise SiteKnowledgeContractViolation(
+            "site_knowledge.result_granularity_unsupported",
+            "site knowledge result_granularity must be chunk or document",
         )
     forbidden_path = find_forbidden_write_field(input_payload)
     if forbidden_path:

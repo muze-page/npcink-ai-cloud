@@ -102,7 +102,7 @@ def _identity_target(stage_report: dict[str, object]) -> dict[str, object]:
         "account_id": _text(target.get("account_id")),
         "site_id": _text(target.get("site_id")),
         "site_name": _text(target.get("site_name")),
-        "wordpress_url": _text(target.get("wordpress_url")),
+        "site_url": _text(target.get("site_url")),
         "scopes": _list(target.get("scopes")),
     }
 

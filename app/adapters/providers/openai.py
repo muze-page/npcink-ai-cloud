@@ -1,22 +1,29 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import math
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from app.adapters.providers.base import (
+    IMAGE_GENERATION_PROVIDER_ERROR_MESSAGE,
+    VISION_PROVIDER_ERROR_MESSAGE,
     CatalogInstanceSeed,
     CatalogModelSeed,
     ProviderCatalogSnapshot,
     ProviderExecutionError,
     ProviderExecutionRequest,
     ProviderExecutionResult,
+    ProviderMediaCandidate,
 )
 from app.domain.hosted_model_defaults import GROK_IMAGINE_IMAGE_MODEL_ID
-from app.domain.image_generation.contracts import IMAGE_GENERATION_RESULT_CONTRACT
 
 DEEPSEEK_MODEL_PRICING_PER_MILLION: dict[str, dict[str, float]] = {
     "deepseek-v4-flash": {
@@ -41,6 +48,33 @@ DEEPSEEK_MODEL_PRICING_PER_MILLION: dict[str, dict[str, float]] = {
     },
 }
 MAX_UPSTREAM_ERROR_MESSAGE_CHARS = 4000
+MAX_REQUEST_METADATA_ENTRIES = 16
+MAX_REQUEST_METADATA_KEY_CHARS = 64
+MAX_REQUEST_METADATA_VALUE_CHARS = 512
+MAX_PROVIDER_IMAGE_COUNT = 4
+MAX_PROVIDER_IMAGE_BYTES = 24 * 1024 * 1024
+MAX_PROVIDER_IMAGE_TOTAL_BYTES = 64 * 1024 * 1024
+MAX_PROVIDER_IMAGE_BASE64_CHARS = ((MAX_PROVIDER_IMAGE_BYTES + 2) // 3) * 4
+MAX_PROVIDER_IMAGE_RESPONSE_BYTES = (((MAX_PROVIDER_IMAGE_TOTAL_BYTES + 2) // 3) * 4) + (
+    1024 * 1024
+)
+ALLOWED_PROVIDER_IMAGE_RESPONSE_FORMATS = frozenset({"url", "b64_json"})
+ALLOWED_PROVIDER_IMAGE_USAGE_FIELDS = frozenset(
+    {
+        "cost",
+        "cost_in_usd",
+        "cost_in_usd_ticks",
+        "image_count",
+        "input_tokens",
+        "output_tokens",
+        "prompt_tokens",
+        "total_tokens",
+    }
+)
+SAMPLE_IMAGE_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c02"
+    "0000000b4944415478da6364f80f00010501012718e3660000000049454e44ae426082"
+)
 
 
 def _truncate_upstream_error_message(value: str) -> str:
@@ -69,6 +103,8 @@ class OpenAIProviderAdapter:
         extra_headers: dict[str, str] | None = None,
         model_namespace_prefix: str = "",
         provider_label: str = "",
+        image_output_hosts: Iterable[str] = (),
+        image_response_format: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -87,6 +123,14 @@ class OpenAIProviderAdapter:
         }
         self.model_namespace_prefix = str(model_namespace_prefix or "").strip().strip("/")
         self.provider_label = str(provider_label or "").strip()
+        self.image_output_hosts = self._normalize_image_output_hosts(image_output_hosts)
+        normalized_image_response_format = str(image_response_format or "").strip().lower()
+        if (
+            normalized_image_response_format
+            and normalized_image_response_format not in ALLOWED_PROVIDER_IMAGE_RESPONSE_FORMATS
+        ):
+            raise ValueError("image_response_format must be url or b64_json")
+        self.image_response_format = normalized_image_response_format or None
         if self.provider_label:
             self.display_name = self.provider_label
         self.transport = transport
@@ -192,7 +236,6 @@ class OpenAIProviderAdapter:
                 raw_json={
                     "tier": "quality",
                     "surface": "image_generation",
-                    "response_formats": ["url", "b64_json"],
                 },
                 instances=[
                     CatalogInstanceSeed(
@@ -336,7 +379,7 @@ class OpenAIProviderAdapter:
 
         try:
             with self._build_client(request.timeout_ms) as client:
-                response = self._post_with_metadata_retry(client, endpoint_path, payload)
+                response = self._post_with_compatibility_retry(client, endpoint_path, payload)
                 if (
                     response.status_code == 404
                     and endpoint_path == "/responses"
@@ -344,7 +387,7 @@ class OpenAIProviderAdapter:
                 ):
                     result_request = replace(request, endpoint_variant="chat_completions")
                     endpoint_path, payload = self._build_http_request(result_request)
-                    response = self._post_with_metadata_retry(client, endpoint_path, payload)
+                    response = self._post_with_compatibility_retry(client, endpoint_path, payload)
                 response.raise_for_status()
         except httpx.TimeoutException as error:
             raise ProviderExecutionError(
@@ -353,9 +396,18 @@ class OpenAIProviderAdapter:
             ) from error
         except httpx.HTTPStatusError as error:
             error_code = self._map_http_status_error(error.response.status_code)
+            error_message = (
+                IMAGE_GENERATION_PROVIDER_ERROR_MESSAGE
+                if result_request.endpoint_variant == "image_generations"
+                else (
+                    VISION_PROVIDER_ERROR_MESSAGE
+                    if result_request.execution_kind == "vision"
+                    else self._extract_http_error_message(error.response)
+                )
+            )
             raise ProviderExecutionError(
                 error_code,
-                self._extract_http_error_message(error.response),
+                error_message,
                 retryable=error.response.status_code >= 500 or error.response.status_code == 429,
             ) from error
         except httpx.RequestError as error:
@@ -364,17 +416,33 @@ class OpenAIProviderAdapter:
                 str(error),
             ) from error
 
-        response_json = response.json()
+        try:
+            response_json = response.json()
+        except ValueError as error:
+            if result_request.endpoint_variant == "image_generations":
+                raise ProviderExecutionError(
+                    "provider.output_contract_invalid",
+                    "image generation response must be a JSON object",
+                ) from error
+            raise
+        if result_request.endpoint_variant == "image_generations" and not isinstance(
+            response_json,
+            dict,
+        ):
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                "image generation response must be a JSON object",
+            )
         latency_ms = max(1, int((time.monotonic() - started_at) * 1000))
         return self._build_http_result(result_request, response_json, latency_ms)
 
-    def _post_with_metadata_retry(
+    def _post_with_compatibility_retry(
         self,
         client: httpx.Client,
         endpoint_path: str,
         payload: dict[str, Any],
     ) -> httpx.Response:
-        response = client.post(endpoint_path, json=payload)
+        response = self._post_provider_request(client, endpoint_path, payload)
         if (
             response.status_code == 400
             and "metadata" in payload
@@ -382,8 +450,55 @@ class OpenAIProviderAdapter:
         ):
             retry_payload = dict(payload)
             retry_payload.pop("metadata", None)
-            response = client.post(endpoint_path, json=retry_payload)
+            response = self._post_provider_request(client, endpoint_path, retry_payload)
+            payload = retry_payload
+        if (
+            response.status_code == 400
+            and payload.get("temperature") != 1
+            and self._response_requires_temperature_one(response)
+        ):
+            retry_payload = dict(payload)
+            retry_payload["temperature"] = 1
+            response = self._post_provider_request(client, endpoint_path, retry_payload)
         return response
+
+    def _post_provider_request(
+        self,
+        client: httpx.Client,
+        endpoint_path: str,
+        payload: dict[str, Any],
+    ) -> httpx.Response:
+        if endpoint_path != "/images/generations":
+            return client.post(endpoint_path, json=payload)
+
+        with client.stream("POST", endpoint_path, json=payload) as streamed_response:
+            content_length = streamed_response.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    declared_length = int(content_length)
+                except ValueError:
+                    declared_length = 0
+                if declared_length > MAX_PROVIDER_IMAGE_RESPONSE_BYTES:
+                    raise ProviderExecutionError(
+                        "provider.output_contract_invalid",
+                        "image generation response exceeds the encoded response byte limit",
+                    )
+
+            response_content = bytearray()
+            for chunk in streamed_response.iter_bytes():
+                response_content.extend(chunk)
+                if len(response_content) > MAX_PROVIDER_IMAGE_RESPONSE_BYTES:
+                    raise ProviderExecutionError(
+                        "provider.output_contract_invalid",
+                        "image generation response exceeds the encoded response byte limit",
+                    )
+            return httpx.Response(
+                status_code=streamed_response.status_code,
+                headers=streamed_response.headers,
+                content=bytes(response_content),
+                request=streamed_response.request,
+                extensions=streamed_response.extensions,
+            )
 
     def _can_retry_responses_as_chat_completions(
         self,
@@ -421,6 +536,21 @@ class OpenAIProviderAdapter:
             needle in str(value).lower() and "unsupported" in str(value).lower()
             for value in values
         )
+
+    @staticmethod
+    def _response_requires_temperature_one(response: httpx.Response) -> bool:
+        try:
+            payload = response.json()
+        except ValueError:
+            return False
+        error_payload = payload.get("error") if isinstance(payload, dict) else None
+        message = (
+            error_payload.get("message")
+            if isinstance(error_payload, dict)
+            else error_payload
+        )
+        normalized = str(message or "").strip().lower()
+        return "temperature" in normalized and "only 1 is allowed" in normalized
 
     def _build_client(self, request_timeout_ms: int) -> httpx.Client:
         timeout_seconds = min(
@@ -511,49 +641,39 @@ class OpenAIProviderAdapter:
             )
 
         if request.endpoint_variant == "image_generations":
-            data = response_json.get("data")
-            images: list[dict[str, Any]] = []
-            if isinstance(data, list):
-                for index, item in enumerate(data, start=1):
-                    if not isinstance(item, dict):
-                        continue
-                    image: dict[str, Any] = {
-                        "index": index,
-                        "url": str(item.get("url") or ""),
-                        "b64_json": str(item.get("b64_json") or ""),
-                        "mime_type": str(item.get("mime_type") or "image/png"),
-                        "revised_prompt": str(item.get("revised_prompt") or ""),
-                    }
-                    if item.get("width") is not None:
-                        image["width"] = self._coerce_int(item.get("width"))
-                    if item.get("height") is not None:
-                        image["height"] = self._coerce_int(item.get("height"))
-                    images.append(image)
             usage = response_json.get("usage", {})
             tokens_in = (
                 self._coerce_int(usage.get("prompt_tokens")) if isinstance(usage, dict) else 0
             )
             cost = self._extract_image_generation_cost(usage)
             usage_for_cost = usage if isinstance(usage, dict) else {}
+            resolved_cost = (
+                cost
+                if cost > 0
+                else self._estimate_cost(request, tokens_in, 0, usage=usage_for_cost)
+            )
+            try:
+                media_candidates = self._build_image_media_candidates(response_json)
+            except ProviderExecutionError as error:
+                raise ProviderExecutionError(
+                    error.error_code,
+                    error.message,
+                    retryable=error.retryable,
+                    tokens_in=tokens_in,
+                    cost=resolved_cost,
+                ) from error
             output = {
-                "artifact_type": "image_generation_candidates",
-                "contract_version": IMAGE_GENERATION_RESULT_CONTRACT,
-                "model_id": response_json.get("model", request.model_id),
-                "images": images,
-                "provider_response_format": "b64_json"
-                if any(image.get("b64_json") for image in images)
-                else "url",
-                "direct_wordpress_write": False,
-                "usage": usage if isinstance(usage, dict) else {},
+                "model_id": self._optional_string(response_json.get("model")) or request.model_id,
+                "candidate_count": len(media_candidates),
+                "usage": self._sanitize_image_generation_usage(usage),
             }
             return ProviderExecutionResult(
                 output=output,
                 latency_ms=latency_ms,
                 tokens_in=tokens_in,
                 tokens_out=0,
-                cost=cost
-                if cost > 0
-                else self._estimate_cost(request, tokens_in, 0, usage=usage_for_cost),
+                cost=resolved_cost,
+                media_candidates=media_candidates,
             )
 
         if request.endpoint_variant == "responses":
@@ -615,10 +735,200 @@ class OpenAIProviderAdapter:
             ),
         )
 
+    def _build_image_media_candidates(
+        self,
+        response_json: dict[str, Any],
+    ) -> tuple[ProviderMediaCandidate, ...]:
+        raw_candidates = response_json.get("data")
+        if not isinstance(raw_candidates, list):
+            raw_candidates = response_json.get("images")
+        if not isinstance(raw_candidates, list) or not raw_candidates:
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                "image generation response must contain a non-empty data or images list",
+            )
+        if len(raw_candidates) > MAX_PROVIDER_IMAGE_COUNT:
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                f"image generation response exceeds {MAX_PROVIDER_IMAGE_COUNT} candidates",
+            )
+
+        decoded_total = 0
+        candidates: list[ProviderMediaCandidate] = []
+        for index, raw_candidate in enumerate(raw_candidates, start=1):
+            candidate_payload: dict[str, Any]
+            if isinstance(raw_candidate, dict):
+                candidate_payload = raw_candidate
+            elif isinstance(raw_candidate, str):
+                candidate_payload = {"url": raw_candidate}
+            else:
+                raise ProviderExecutionError(
+                    "provider.output_contract_invalid",
+                    f"image generation candidate {index} must be an object or URL string",
+                )
+
+            encoded_image = candidate_payload.get("b64_json")
+            raw_source_url = candidate_payload.get("url")
+            if encoded_image not in (None, "") and raw_source_url not in (None, ""):
+                raise ProviderExecutionError(
+                    "provider.output_contract_invalid",
+                    f"image generation candidate {index} contains ambiguous media sources",
+                )
+            claimed_mime_type = self._optional_string(
+                candidate_payload.get("mime_type") or candidate_payload.get("content_type")
+            )
+            revised_prompt = self._optional_string(candidate_payload.get("revised_prompt"))
+            claimed_width = self._optional_positive_int(candidate_payload.get("width"))
+            claimed_height = self._optional_positive_int(candidate_payload.get("height"))
+            if encoded_image not in (None, ""):
+                content_bytes = self._decode_provider_image_base64(encoded_image, index=index)
+                decoded_total += len(content_bytes)
+                if decoded_total > MAX_PROVIDER_IMAGE_TOTAL_BYTES:
+                    raise ProviderExecutionError(
+                        "provider.output_contract_invalid",
+                        "image generation response exceeds the aggregate decoded byte limit",
+                    )
+                candidates.append(
+                    ProviderMediaCandidate(
+                        index=index,
+                        content_bytes=content_bytes,
+                        claimed_mime_type=claimed_mime_type,
+                        revised_prompt=revised_prompt,
+                        claimed_width=claimed_width,
+                        claimed_height=claimed_height,
+                    )
+                )
+                continue
+
+            source_url = self._validate_provider_image_url(
+                raw_source_url,
+                index=index,
+            )
+            candidates.append(
+                ProviderMediaCandidate(
+                    index=index,
+                    source_url=source_url,
+                    image_output_hosts=self.image_output_hosts,
+                    claimed_mime_type=claimed_mime_type,
+                    revised_prompt=revised_prompt,
+                    claimed_width=claimed_width,
+                    claimed_height=claimed_height,
+                )
+            )
+
+        return tuple(candidates)
+
+    @staticmethod
+    def _decode_provider_image_base64(value: object, *, index: int) -> bytes:
+        if not isinstance(value, str) or not value:
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                f"image generation candidate {index} b64_json must be a non-empty string",
+            )
+        if len(value) > MAX_PROVIDER_IMAGE_BASE64_CHARS:
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                f"image generation candidate {index} exceeds the decoded byte limit",
+            )
+        try:
+            content_bytes = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                f"image generation candidate {index} contains invalid Base64",
+            ) from error
+        if len(content_bytes) > MAX_PROVIDER_IMAGE_BYTES:
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                f"image generation candidate {index} exceeds the decoded byte limit",
+            )
+        return content_bytes
+
+    @staticmethod
+    def _validate_provider_image_url(value: object, *, index: int) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                f"image generation candidate {index} has no supported media source",
+            )
+        source_url = value.strip()
+        try:
+            parsed = urlsplit(source_url)
+            parsed_port = parsed.port
+        except ValueError as error:
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                f"image generation candidate {index} URL is invalid",
+            ) from error
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+            or (parsed_port is not None and parsed_port != 443)
+        ):
+            raise ProviderExecutionError(
+                "provider.output_contract_invalid",
+                f"image generation candidate {index} URL must be HTTPS",
+            )
+        return source_url
+
+    @staticmethod
+    def _optional_string(value: object) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    @staticmethod
+    def _optional_positive_int(value: object) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            return None
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        try:
+            normalized = int(value)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        return normalized if normalized > 0 else None
+
+    @staticmethod
+    def _sanitize_image_generation_usage(value: object) -> dict[str, int | float]:
+        if not isinstance(value, dict):
+            return {}
+        return {
+            key: item
+            for key, item in value.items()
+            if key in ALLOWED_PROVIDER_IMAGE_USAGE_FIELDS
+            and isinstance(item, (int, float))
+            and not isinstance(item, bool)
+            and (not isinstance(item, float) or math.isfinite(item))
+        }
+
+    @staticmethod
+    def _normalize_image_output_hosts(value: Iterable[str]) -> tuple[str, ...]:
+        normalized_hosts: list[str] = []
+        for raw_host in value:
+            host = str(raw_host or "").strip().rstrip(".").lower()
+            if (
+                not host
+                or any(character.isspace() for character in host)
+                or any(marker in host for marker in ("://", "/", "*", "@", "?", "#", ":"))
+            ):
+                raise ValueError("image_output_hosts must contain exact host names")
+            try:
+                host = host.encode("idna").decode("ascii")
+            except UnicodeError as error:
+                raise ValueError(
+                    "image_output_hosts must contain valid exact host names"
+                ) from error
+            if host not in normalized_hosts:
+                normalized_hosts.append(host)
+        return tuple(normalized_hosts)
+
     def _execute_sample(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
         source_text = self._collect_source_text(request.input_payload) or request.ability_name
         tokens_in = max(1, len(source_text.split()))
         latency_ms = 80 + (request.retry_count * 25)
+        media_candidates: tuple[ProviderMediaCandidate, ...] = ()
 
         if request.execution_kind == "embedding":
             seed = sum(ord(character) for character in source_text)
@@ -633,21 +943,19 @@ class OpenAIProviderAdapter:
             latency_ms += 10
         elif request.execution_kind == "image_generation":
             output = {
-                "artifact_type": "image_generation_candidates",
-                "contract_version": IMAGE_GENERATION_RESULT_CONTRACT,
                 "model_id": request.model_id,
-                "images": [
-                    {
-                        "index": 1,
-                        "url": f"https://example.invalid/magick-ai/{request.run_id}.png",
-                        "b64_json": "",
-                        "mime_type": "image/png",
-                        "revised_prompt": source_text,
-                    }
-                ],
-                "provider_response_format": "url",
-                "direct_wordpress_write": False,
+                "candidate_count": 1,
             }
+            media_candidates = (
+                ProviderMediaCandidate(
+                    index=1,
+                    content_bytes=SAMPLE_IMAGE_PNG,
+                    claimed_mime_type="image/png",
+                    revised_prompt=source_text,
+                    claimed_width=1,
+                    claimed_height=1,
+                ),
+            )
             tokens_out = 0
             latency_ms += 120
         elif request.execution_kind == "vision":
@@ -680,6 +988,7 @@ class OpenAIProviderAdapter:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cost=self._estimate_cost(request, tokens_in, tokens_out),
+            media_candidates=media_candidates,
         )
 
     def _resolve_request_options(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -776,8 +1085,9 @@ class OpenAIProviderAdapter:
             payload["logit_bias"] = options["logit_bias"]
         if isinstance(options.get("stream_options"), dict):
             payload["stream_options"] = options["stream_options"]
-        if isinstance(options.get("metadata"), dict):
-            payload["metadata"] = options["metadata"]
+        metadata = self._normalize_request_metadata(options.get("metadata"))
+        if metadata:
+            payload["metadata"] = metadata
         if isinstance(options.get("extra"), dict):
             for key, value in options["extra"].items():
                 if isinstance(key, str) and key not in payload:
@@ -803,11 +1113,10 @@ class OpenAIProviderAdapter:
         options: dict[str, Any],
     ) -> None:
         if isinstance(options.get("n"), int):
-            payload["n"] = max(1, min(10, int(options["n"])))
+            payload["n"] = max(1, min(MAX_PROVIDER_IMAGE_COUNT, int(options["n"])))
         for key in (
             "aspect_ratio",
             "resolution",
-            "response_format",
             "quality",
             "size",
             "user",
@@ -815,12 +1124,41 @@ class OpenAIProviderAdapter:
             value = options.get(key)
             if isinstance(value, str) and value.strip():
                 payload[key] = value.strip()
-        if isinstance(options.get("metadata"), dict):
-            payload["metadata"] = options["metadata"]
+        if self.image_response_format is not None:
+            payload["response_format"] = self.image_response_format
+        metadata = self._normalize_request_metadata(options.get("metadata"))
+        if metadata:
+            payload["metadata"] = metadata
         if isinstance(options.get("extra"), dict):
             for key, value in options["extra"].items():
                 if isinstance(key, str) and key not in payload:
                     payload[key] = value
+
+    @staticmethod
+    def _normalize_request_metadata(value: object) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            if len(normalized) >= MAX_REQUEST_METADATA_ENTRIES:
+                break
+            if not isinstance(raw_key, str):
+                continue
+            key = raw_key.strip()[:MAX_REQUEST_METADATA_KEY_CHARS]
+            if not key:
+                continue
+            if isinstance(raw_value, bool):
+                item = "true" if raw_value else "false"
+            elif isinstance(raw_value, str):
+                item = raw_value.strip()
+            elif isinstance(raw_value, (int, float)):
+                item = str(raw_value)
+            else:
+                continue
+            if item:
+                normalized[key] = item[:MAX_REQUEST_METADATA_VALUE_CHARS]
+        return normalized
 
     def _resolve_image_generation_prompt(self, options: dict[str, Any]) -> str:
         prompt = options.get("prompt")
@@ -1318,7 +1656,7 @@ class OpenAIProviderAdapter:
     def _extract_image_generation_cost(self, usage: Any) -> float:
         if not isinstance(usage, dict):
             return 0.0
-        for key in ("cost_usd", "cost"):
+        for key in ("cost_in_usd", "cost_usd", "cost"):
             value = self._coerce_float(usage.get(key))
             if value is not None and value > 0:
                 return round(value, 6)
@@ -1597,12 +1935,17 @@ class OpenAIProviderAdapter:
         if isinstance(value, bool):
             return None
         if isinstance(value, (int, float)):
-            return float(value)
+            try:
+                normalized = float(value)
+            except (OverflowError, ValueError):
+                return None
+            return normalized if math.isfinite(normalized) else None
         if isinstance(value, str):
             try:
-                return float(value)
-            except ValueError:
+                normalized = float(value)
+            except (OverflowError, ValueError):
                 return None
+            return normalized if math.isfinite(normalized) else None
         return None
 
     def _collect_source_text(self, payload: dict[str, Any]) -> str:
@@ -1635,9 +1978,11 @@ class OpenAIProviderAdapter:
 
     def _coerce_int(self, value: object | None) -> int:
         if isinstance(value, bool):
-            return int(value)
+            return 0
         if isinstance(value, int):
             return value
         if isinstance(value, float):
+            if not math.isfinite(value):
+                return 0
             return int(value)
         return 0

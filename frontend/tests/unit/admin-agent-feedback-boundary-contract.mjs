@@ -8,7 +8,7 @@ const source = readFileSync(pagePath, 'utf8');
 
 assert.match(
   source,
-  /fetch\(`\/api\/admin\/agent-feedback\?\$\{params\.toString\(\)\}`/,
+  /createApiClient[\s\S]*\.request<unknown>\(`\/api\/admin\/agent-feedback\?\$\{params\.toString\(\)\}`/,
   'agent feedback admin page must load the read-only admin summary endpoint'
 );
 assert.match(

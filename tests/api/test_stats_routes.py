@@ -4,9 +4,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from pytest import MonkeyPatch
 from sqlalchemy import select
 
 from app.api.main import create_app
+from app.api.routes import stats as stats_routes
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import HealthSnapshot, ProviderCallRecord, RunRecord, RuntimeGuardEvent
@@ -15,14 +17,27 @@ from app.domain.catalog.service import CatalogService
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
 from app.domain.usage.rollup import UsageRollupService
+from app.domain.usage.service import UsageService
 from tests.conftest import build_auth_headers, seed_site_auth
+
+MALICIOUS_EXCEPTION_DETAIL = (
+    "Traceback (most recent call last): /srv/private/worker.py database_password=super-secret-token"
+)
+
+
+def _raise_malicious_value_error(*_args: object, **_kwargs: object) -> None:
+    raise ValueError(MALICIOUS_EXCEPTION_DETAIL)
 
 
 def _sqlite_url(tmp_path: Path) -> str:
     return f"sqlite+pysqlite:///{tmp_path / 'stats-api.sqlite3'}"
 
 
-def _build_client(tmp_path: Path) -> tuple[str, TestClient, datetime]:
+def _build_client(
+    tmp_path: Path,
+    *,
+    seeded_now: datetime | None = None,
+) -> tuple[str, TestClient, datetime]:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
@@ -61,7 +76,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, datetime]:
         )
     )
 
-    now = datetime.now(UTC)
+    now = seeded_now or datetime.now(UTC)
     with get_session(database_url) as session:
         run_specs = {
             run_a.run_id: {
@@ -147,8 +162,31 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, datetime]:
     return database_url, TestClient(create_app(CloudServices(settings=settings))), now
 
 
-def test_stats_routes_return_windowed_metrics_and_health(tmp_path: Path) -> None:
-    database_url, client, seeded_now = _build_client(tmp_path)
+def _pin_stats_route_clock(
+    monkeypatch: MonkeyPatch,
+    *,
+    database_url: str,
+    now: datetime,
+) -> None:
+    monkeypatch.setattr(
+        stats_routes,
+        "_get_usage_service",
+        lambda _request: UsageService(database_url, now_factory=lambda: now),
+    )
+    monkeypatch.setattr(
+        stats_routes,
+        "_get_usage_rollup_service",
+        lambda _request: UsageRollupService(database_url, now_factory=lambda: now),
+    )
+
+
+def test_stats_routes_return_windowed_metrics_and_health(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    fixed_now = datetime(2026, 3, 24, 9, 20, tzinfo=UTC)
+    database_url, client, seeded_now = _build_client(tmp_path, seeded_now=fixed_now)
+    _pin_stats_route_clock(monkeypatch, database_url=database_url, now=fixed_now)
 
     probe_end = seeded_now.replace(second=0, microsecond=0)
     probe_start = probe_end - timedelta(minutes=15)
@@ -426,8 +464,11 @@ def test_stats_routes_return_windowed_metrics_and_health(tmp_path: Path) -> None
 
 def test_instance_stats_prefers_latency_probe_delivery_buffer_when_present(
     tmp_path: Path,
+    monkeypatch: MonkeyPatch,
 ) -> None:
-    database_url, client, seeded_now = _build_client(tmp_path)
+    fixed_now = datetime(2026, 3, 24, 9, 20, tzinfo=UTC)
+    database_url, client, seeded_now = _build_client(tmp_path, seeded_now=fixed_now)
+    _pin_stats_route_clock(monkeypatch, database_url=database_url, now=fixed_now)
 
     probe_end = seeded_now.replace(second=0, microsecond=0)
     probe_start = probe_end - timedelta(minutes=15)
@@ -458,6 +499,34 @@ def test_instance_stats_prefers_latency_probe_delivery_buffer_when_present(
     assert payload["health_status"] != ""
     assert payload["windows"]["today"]["start_at"] == probe_start.strftime("%Y-%m-%d %H:%M:%S")
     assert payload["windows"]["today"]["end_at"] == probe_end.strftime("%Y-%m-%d %H:%M:%S")
+
+    dispose_engine(database_url)
+
+
+def test_stats_usage_today_window_excludes_prior_utc_day_calls(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    fixed_now = datetime(2026, 3, 24, 0, 10, tzinfo=UTC)
+    database_url, client, _ = _build_client(tmp_path, seeded_now=fixed_now)
+    _pin_stats_route_clock(monkeypatch, database_url=database_url, now=fixed_now)
+
+    response = client.get(
+        "/v1/usage/summary",
+        headers=build_auth_headers(
+            "GET",
+            "/v1/usage/summary",
+            site_id="site_alpha",
+            trace_id="tracestatsapi0015500000000000000",
+        ),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["windows"]["today"]["runs_total"] == 0
+    assert payload["windows"]["today"]["provider_calls_total"] == 0
+    assert payload["windows"]["rolling_24h"]["runs_total"] == 2
+    assert payload["windows"]["rolling_24h"]["provider_calls_total"] == 3
 
     dispose_engine(database_url)
 
@@ -985,5 +1054,88 @@ def test_router_performance_projection_rejects_invalid_window(tmp_path: Path) ->
 
     assert response.status_code == 400
     assert response.json()["error_code"] == "stats.invalid_projection_window"
+
+    dispose_engine(database_url)
+
+
+def test_stats_validation_errors_do_not_expose_exception_details(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    database_url, client, _ = _build_client(tmp_path)
+    monkeypatch.setattr(
+        UsageRollupService,
+        "get_router_performance_snapshot_batch",
+        _raise_malicious_value_error,
+    )
+    for method_name in (
+        "get_router_recommendation_summary",
+        "get_logs_analytics_summary",
+        "get_logs_analytics_tool_latency",
+        "get_logs_analytics_mcp_zone",
+        "get_logs_analytics_recommendations",
+    ):
+        monkeypatch.setattr(UsageService, method_name, _raise_malicious_value_error)
+
+    projection_query = "start_gmt=2026-03-24%2011:00:00&end_gmt=2026-03-24%2012:00:00"
+    cases = (
+        (
+            "/v1/router/performance-snapshot",
+            projection_query,
+            "stats.invalid_projection_window",
+            "invalid projection window",
+        ),
+        (
+            "/v1/router/recommendation",
+            "range=24h",
+            "stats.invalid_logs_window",
+            "invalid logs analytics window",
+        ),
+        (
+            "/v1/logs/analytics/summary",
+            "range=24h",
+            "stats.invalid_logs_window",
+            "invalid logs analytics window",
+        ),
+        (
+            "/v1/logs/analytics/tool-latency",
+            "range=24h",
+            "stats.invalid_logs_window",
+            "invalid logs analytics window",
+        ),
+        (
+            "/v1/logs/analytics/mcp-zone",
+            "range=24h",
+            "stats.invalid_logs_window",
+            "invalid logs analytics window",
+        ),
+        (
+            "/v1/logs/analytics/recommendations",
+            "range=24h",
+            "stats.invalid_logs_window",
+            "invalid logs analytics window",
+        ),
+    )
+
+    for index, (path, query, error_code, public_message) in enumerate(cases):
+        response = client.get(
+            f"{path}?{query}",
+            headers=build_auth_headers(
+                "GET",
+                path,
+                site_id="site_alpha",
+                trace_id=f"tracestatsredaction{index:02d}000000000000",
+                query=query,
+            ),
+        )
+
+        assert response.status_code == 400
+        payload = response.json()
+        assert payload["error_code"] == error_code
+        assert payload["message"] == public_message
+        assert payload["meta"]["revision"] == "m3"
+        assert "super-secret-token" not in response.text
+        assert "Traceback" not in response.text
+        assert "/srv/private/worker.py" not in response.text
 
     dispose_engine(database_url)

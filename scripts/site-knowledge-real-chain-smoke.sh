@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
@@ -127,7 +128,18 @@ build_signature() {
 		"${idempotency_key}" \
 		"${traceparent}" \
 		"${body_digest}")"
-	printf '%s' "${canonical_request}" | openssl dgst -sha256 -hmac "${SECRET}" -r | awk '{print $1}'
+	printf '%s' "${canonical_request}" | NPCINK_CLOUD_HMAC_SECRET="${SECRET}" python3 -c '
+import hashlib
+import hmac
+import os
+import sys
+
+secret = os.environ.pop("NPCINK_CLOUD_HMAC_SECRET", "")
+if not secret:
+    raise SystemExit("[fail] Runtime signing secret is missing.")
+payload = sys.stdin.buffer.read()
+print(hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest())
+'
 }
 
 HTTP_STATUS=""
@@ -139,7 +151,10 @@ http_request() {
 	local body="$3"
 	shift 3
 
-	local tmp_body="${TMP_DIR}/body.txt"
+	local request_id="${RANDOM:-0}-$$"
+	local tmp_body="${TMP_DIR}/body-${request_id}.txt"
+	local request_headers="${TMP_DIR}/request-${request_id}.headers"
+	local request_body="${TMP_DIR}/request-${request_id}.body"
 	local status
 	local curl_args=(
 		-sS
@@ -148,21 +163,34 @@ http_request() {
 		-w "%{http_code}"
 		-X "${method}"
 		"${url}"
-		-H "Accept: application/json"
+		--header "@${request_headers}"
 	)
 	local header=""
-	for header in "$@"; do
-		if [ -n "${header}" ]; then
-			curl_args+=(-H "${header}")
+	(
+		umask 077
+		printf '%s\n' "Accept: application/json" >"${request_headers}"
+		for header in "$@"; do
+			if [ -n "${header}" ]; then
+				printf '%s\n' "${header}" >>"${request_headers}"
+			fi
+		done
+		if [ -n "${body}" ]; then
+			printf '%s\n' "Content-Type: application/json" >>"${request_headers}"
+			printf '%s' "${body}" >"${request_body}"
 		fi
-	done
+	)
+	chmod 0600 "${request_headers}"
 	if [ -n "${body}" ]; then
-		curl_args+=(-H "Content-Type: application/json" --data "${body}")
+		chmod 0600 "${request_body}"
+		curl_args+=(--data-binary "@${request_body}")
 	fi
 
 	status="$(curl "${curl_args[@]}")" || fail "HTTP request failed: ${method} ${url}"
 	HTTP_STATUS="${status}"
 	HTTP_BODY="$(cat "${tmp_body}")"
+	if ! rm -f -- "${tmp_body}" "${request_headers}" "${request_body}"; then
+		fail "Site Knowledge smoke request-file cleanup failed"
+	fi
 }
 
 signed_request() {
@@ -204,7 +232,7 @@ assert_http_status() {
 	local expected="$1"
 	local message="$2"
 	if [ "${HTTP_STATUS}" != "${expected}" ]; then
-		fail "${message} (expected HTTP ${expected}, got ${HTTP_STATUS}; body=${HTTP_BODY})"
+		fail "${message} (expected HTTP ${expected}, got ${HTTP_STATUS})"
 	fi
 }
 
@@ -218,8 +246,25 @@ npcink_ai_cloud_require_cmd openssl
 npcink_ai_cloud_require_cmd python3
 
 mkdir -p "${EVIDENCE_DIR}"
+umask 077
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "${TMP_DIR}"' EXIT
+cleanup_tmp_dir() {
+	local exit_status="$?"
+	local cleanup_failed=0
+	trap - EXIT
+	set +e
+	rm -rf -- "${TMP_DIR}" || cleanup_failed=1
+	if [ -e "${TMP_DIR}" ] || [ -L "${TMP_DIR}" ]; then
+		cleanup_failed=1
+	fi
+	if [ "${cleanup_failed}" -ne 0 ]; then
+		echo "[fail] Site Knowledge smoke credential-file cleanup did not complete." >&2
+		exit_status=1
+	fi
+	exit "${exit_status}"
+}
+trap cleanup_tmp_dir EXIT
+chmod 0700 "${TMP_DIR}"
 
 if [ -z "${SECRET}" ]; then
 	SECRET="$(python3 - <<'PY'
@@ -292,14 +337,45 @@ ok "Applying migrations"
 docker_compose exec -T api alembic upgrade head >/dev/null
 
 ok "Seeding isolated smoke site"
-docker_compose exec -T api python -m app.dev.seed_runtime \
-	--site-id "${SITE_ID}" \
-	--key-id "${KEY_ID}" \
-	--secret "${SECRET}" \
-	--site-name "Site Knowledge Smoke" \
-	--scopes "runtime:execute,runtime:read,stats:read" \
-	--skip-catalog-refresh \
-	--skip-health-scan >/dev/null
+export NPCINK_CLOUD_SITE_KNOWLEDGE_SEED_SECRET="${SECRET}"
+seed_status=0
+docker_compose exec -T \
+	-e NPCINK_CLOUD_SITE_KNOWLEDGE_SEED_SECRET \
+	api python - \
+	"${SITE_ID}" \
+	"${KEY_ID}" \
+	"Site Knowledge Smoke" \
+	"runtime:execute,runtime:read,stats:read" <<'PY' >/dev/null || seed_status=$?
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+from app.core.config import Settings
+from app.dev.seed_runtime import seed_site_auth
+
+secret = os.environ.pop("NPCINK_CLOUD_SITE_KNOWLEDGE_SEED_SECRET", "")
+if not secret:
+    raise SystemExit("[fail] Site Knowledge runtime seed secret is missing.")
+site_id, key_id, site_name, scopes_raw = sys.argv[1:]
+result = seed_site_auth(
+    settings=Settings(),
+    site_id=site_id,
+    key_id=key_id,
+    secret=secret,
+    site_name=site_name,
+    scopes=[scope for scope in scopes_raw.split(",") if scope],
+)
+result.pop("secret_hash", None)
+print(json.dumps({"auth": result}, ensure_ascii=True, sort_keys=True))
+PY
+if ! unset NPCINK_CLOUD_SITE_KNOWLEDGE_SEED_SECRET; then
+	fail "Site Knowledge runtime seed secret cleanup failed"
+fi
+if [ "${seed_status}" -ne 0 ]; then
+	exit "${seed_status}"
+fi
 
 SYNC_BODY="$(
 	python3 - <<'PY'
@@ -386,7 +462,7 @@ for _attempt in $(seq 1 60); do
 		break
 	fi
 	if [ "${HTTP_STATUS}" != "409" ]; then
-		fail "sync result polling failed (HTTP ${HTTP_STATUS}; body=${HTTP_BODY})"
+		fail "sync result polling failed (HTTP ${HTTP_STATUS})"
 	fi
 	sleep 2
 done

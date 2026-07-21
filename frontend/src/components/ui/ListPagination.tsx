@@ -58,7 +58,7 @@ export function ListPagination({
           disabled={!hasNext || isLoading}
           onClick={() => onOffsetChange(safeOffset + limit)}
         >
-          {t('common.next', {}, 'Next')}
+          {t('common.next_page', {}, 'Next page')}
         </button>
       </div>
     </nav>

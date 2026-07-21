@@ -12,8 +12,8 @@ import {
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveUiErrorMessage } from '@/lib/errors';
-import { readResponsePayload } from '@/lib/safe-response';
 import { formatDate } from '@/lib/utils';
 
 type SupportRequestStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
@@ -72,6 +72,10 @@ type SupportRequestDetailPayload = {
 };
 
 const NEXT_STATUSES: SupportRequestStatus[] = ['open', 'in_progress', 'resolved', 'closed'];
+const supportRequestDetailClient = createApiClient({
+  cache: 'default',
+  idempotencyPrefix: 'admin_support_request_detail',
+});
 
 function statusTone(status: string): string {
   if (status === 'open') return 'warning';
@@ -80,33 +84,43 @@ function statusTone(status: string): string {
   return 'read_only';
 }
 
-async function fetchSupportRequest(requestId: string): Promise<Response> {
-  return fetch(`/api/admin/support-requests/${encodeURIComponent(requestId)}`, {
-    credentials: 'include',
-    cache: 'no-store',
-  });
+async function fetchSupportRequest(requestId: string): Promise<SupportRequestDetailPayload> {
+  return (await supportRequestDetailClient.request<SupportRequestDetailPayload>(
+    `/api/admin/support-requests/${encodeURIComponent(requestId)}`,
+    { cache: 'no-store' }
+  )).data;
 }
 
-async function updateSupportRequest(requestId: string, status: string): Promise<Response> {
-  return fetch(`/api/admin/support-requests/${encodeURIComponent(requestId)}`, {
-    method: 'PATCH',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status, admin_note: '' }),
-  });
+async function updateSupportRequest(
+  requestId: string,
+  status: string
+): Promise<{ request?: SupportRequest }> {
+  return (await supportRequestDetailClient.request<{ request?: SupportRequest }>(
+    `/api/admin/support-requests/${encodeURIComponent(requestId)}`,
+    {
+      method: 'PATCH',
+      body: { status, admin_note: '' },
+    }
+  )).data;
 }
 
 async function createSupportRequestMessage(
   requestId: string,
   body: string,
   visibility: 'public' | 'internal'
-): Promise<Response> {
-  return fetch(`/api/admin/support-requests/${encodeURIComponent(requestId)}/messages`, {
+): Promise<{
+  request?: SupportRequest;
+  message?: SupportRequestMessage;
+  notification?: { delivered?: boolean };
+}> {
+  return (await supportRequestDetailClient.request<{
+    request?: SupportRequest;
+    message?: SupportRequestMessage;
+    notification?: { delivered?: boolean };
+  }>(`/api/admin/support-requests/${encodeURIComponent(requestId)}/messages`, {
     method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ body, visibility }),
-  });
+    body: { body, visibility },
+  })).data;
 }
 
 async function createSupportRequestAttachment(
@@ -117,26 +131,24 @@ async function createSupportRequestAttachment(
     content_base64: string;
     visibility: 'public' | 'internal';
   }
-): Promise<Response> {
-  return fetch(`/api/admin/support-requests/${encodeURIComponent(requestId)}/attachments`, {
+): Promise<{ request?: SupportRequest; attachment?: SupportRequestAttachment }> {
+  return (await supportRequestDetailClient.request<{
+    request?: SupportRequest;
+    attachment?: SupportRequestAttachment;
+  }>(`/api/admin/support-requests/${encodeURIComponent(requestId)}/attachments`, {
     method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+    body: payload,
+  })).data;
 }
 
 async function fetchSupportRequestAttachment(
   requestId: string,
   attachmentId: string
-): Promise<Response> {
-  return fetch(
+): Promise<{ attachment?: SupportRequestAttachment }> {
+  return (await supportRequestDetailClient.request<{ attachment?: SupportRequestAttachment }>(
     `/api/admin/support-requests/${encodeURIComponent(requestId)}/attachments/${encodeURIComponent(attachmentId)}`,
-    {
-      credentials: 'include',
-      cache: 'no-store',
-    }
-  );
+    { cache: 'no-store' }
+  )).data;
 }
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -193,18 +205,17 @@ export default function AdminSupportRequestDetailPage() {
     setIsLoading(true);
     setError('');
     try {
-      const response = await fetchSupportRequest(requestId);
-      const payload = await readResponsePayload<{ data?: SupportRequestDetailPayload; message?: string }>(response);
-      if (!response.ok || !('data' in payload) || !payload.data?.request) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_load')));
+      const data = await fetchSupportRequest(requestId);
+      if (!data.request) {
+        throw new Error(t('error.failed_load'));
       }
-      setSupportRequest(payload.data.request);
-      setMessages(payload.data.messages || []);
-      setAttachments(payload.data.attachments || []);
-      setFeedback(payload.data.feedback || null);
-      setStatusDraft(payload.data.request.status);
+      setSupportRequest(data.request);
+      setMessages(data.messages || []);
+      setAttachments(data.attachments || []);
+      setFeedback(data.feedback || null);
+      setStatusDraft(data.request.status);
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+      setError(resolveUiErrorMessage(err, t('error.failed_load')));
     } finally {
       setIsLoading(false);
     }
@@ -219,15 +230,14 @@ export default function AdminSupportRequestDetailPage() {
     setError('');
     setNotice('');
     try {
-      const response = await updateSupportRequest(requestId, statusDraft);
-      const payload = await readResponsePayload<{ data?: { request?: SupportRequest }; message?: string }>(response);
-      if (!response.ok || !('data' in payload) || !payload.data?.request) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_save')));
+      const data = await updateSupportRequest(requestId, statusDraft);
+      if (!data.request) {
+        throw new Error(t('error.failed_save'));
       }
-      setSupportRequest(payload.data.request);
+      setSupportRequest(data.request);
       setNotice(t('admin.support_requests_updated_notice', {}, 'Ticket updated.'));
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+      setError(resolveUiErrorMessage(err, t('error.failed_save')));
     } finally {
       setPendingAction('');
     }
@@ -240,16 +250,11 @@ export default function AdminSupportRequestDetailPage() {
     setError('');
     setNotice('');
     try {
-      const response = await createSupportRequestMessage(requestId, body, visibility);
-      const payload = await readResponsePayload<{
-        data?: { request?: SupportRequest; message?: SupportRequestMessage; notification?: { delivered?: boolean } };
-        message?: string;
-      }>(response);
-      const responseData = 'data' in payload ? payload.data : undefined;
-      const updatedRequest = responseData?.request;
-      const createdMessage = responseData?.message;
-      if (!response.ok || !updatedRequest || !createdMessage) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_save')));
+      const data = await createSupportRequestMessage(requestId, body, visibility);
+      const updatedRequest = data.request;
+      const createdMessage = data.message;
+      if (!updatedRequest || !createdMessage) {
+        throw new Error(t('error.failed_save'));
       }
       setSupportRequest(updatedRequest);
       setStatusDraft(updatedRequest.status);
@@ -257,7 +262,7 @@ export default function AdminSupportRequestDetailPage() {
       if (visibility === 'public') {
         setPublicReply('');
         setNotice(
-          responseData?.notification?.delivered
+          data.notification?.delivered
             ? t('admin.support_message_public_sent', {}, 'Reply sent and customer notified.')
             : t('admin.support_message_public_saved', {}, 'Reply saved. Email notification was not delivered.')
         );
@@ -266,7 +271,7 @@ export default function AdminSupportRequestDetailPage() {
         setNotice(t('admin.support_message_internal_saved', {}, 'Internal note saved.'));
       }
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+      setError(resolveUiErrorMessage(err, t('error.failed_save')));
     } finally {
       setPendingAction('');
     }
@@ -279,26 +284,21 @@ export default function AdminSupportRequestDetailPage() {
     setNotice('');
     try {
       const contentBase64 = await readFileAsBase64(attachmentFile);
-      const response = await createSupportRequestAttachment(requestId, {
+      const data = await createSupportRequestAttachment(requestId, {
         filename: attachmentFile.name,
         content_type: attachmentFile.type || 'application/octet-stream',
         content_base64: contentBase64,
         visibility: attachmentVisibility,
       });
-      const payload = await readResponsePayload<{
-        data?: { request?: SupportRequest; attachment?: SupportRequestAttachment };
-        message?: string;
-      }>(response);
-      const responseData = 'data' in payload ? payload.data : undefined;
-      if (!response.ok || !responseData?.request || !responseData.attachment) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_save')));
+      if (!data.request || !data.attachment) {
+        throw new Error(t('error.failed_save'));
       }
-      setSupportRequest(responseData.request);
-      setAttachments((current) => [...current, responseData.attachment as SupportRequestAttachment]);
+      setSupportRequest(data.request);
+      setAttachments((current) => [...current, data.attachment as SupportRequestAttachment]);
       setAttachmentFile(null);
       setNotice(t('admin.support_attachment_created', {}, 'Attachment uploaded.'));
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+      setError(resolveUiErrorMessage(err, t('error.failed_save')));
     } finally {
       setPendingAction('');
     }
@@ -307,18 +307,13 @@ export default function AdminSupportRequestDetailPage() {
   const handleAttachmentDownload = async (attachment: SupportRequestAttachment) => {
     setError('');
     try {
-      const response = await fetchSupportRequestAttachment(requestId, attachment.attachment_id);
-      const payload = await readResponsePayload<{
-        data?: { attachment?: SupportRequestAttachment };
-        message?: string;
-      }>(response);
-      const responseData = 'data' in payload ? payload.data : undefined;
-      if (!response.ok || !responseData?.attachment) {
-        throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_load')));
+      const data = await fetchSupportRequestAttachment(requestId, attachment.attachment_id);
+      if (!data.attachment) {
+        throw new Error(t('error.failed_load'));
       }
-      downloadAttachmentFile(responseData.attachment);
+      downloadAttachmentFile(data.attachment);
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+      setError(resolveUiErrorMessage(err, t('error.failed_load')));
     }
   };
 

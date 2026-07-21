@@ -4,9 +4,11 @@ import assert from 'node:assert/strict';
 
 const bootstrapRoutePath = resolve(process.cwd(), 'src/app/admin/auth/bootstrap/route.ts');
 const loginPagePath = resolve(process.cwd(), 'src/app/admin/login/page.tsx');
+const i18nPath = resolve(process.cwd(), 'src/lib/i18n.ts');
 
 const bootstrapRouteSource = readFileSync(bootstrapRoutePath, 'utf8');
 const loginPageSource = readFileSync(loginPagePath, 'utf8');
+const i18nSource = readFileSync(i18nPath, 'utf8');
 
 assert.match(
   bootstrapRouteSource,
@@ -40,12 +42,17 @@ assert.match(
 
 assert.match(
   loginPageSource,
-  /NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN/,
-  'admin login invalid-token copy must point operators at the current token name'
+  /t\('admin\.login_error_invalid'\)/,
+  'admin login invalid-token copy must use the localized operator guidance'
+);
+assert.match(
+  i18nSource,
+  /'admin\.login_error_invalid': 'The admin bootstrap token is not valid\.[^']+'[\s\S]*'admin\.login_error_invalid': '后台启动令牌无效，[^']+'/,
+  'admin login invalid-token guidance must exist in English and Simplified Chinese'
 );
 assert.match(
   loginPageSource,
-  /resolveAdminLoginRedirect[\s\S]*fetch\('\/admin\/session'[\s\S]*response\.ok[\s\S]*router\.replace\(redirectTo\)/,
+  /createApiClient[\s\S]*resolveAdminLoginRedirect[\s\S]*\.request\('\/admin\/session'\)[\s\S]*router\.replace\(redirectTo\)/,
   'admin login must validate the server session before redirecting to a safe admin destination'
 );
 assert.match(
@@ -56,8 +63,8 @@ assert.match(
 
 assert.match(
   loginPageSource,
-  /Error code:/,
-  'admin login page must keep the machine error code visible for support'
+  /t\('admin\.login_error_code'\)/,
+  'admin login page must keep the localized machine error code visible for support'
 );
 
 assert.match(

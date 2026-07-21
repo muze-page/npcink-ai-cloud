@@ -228,7 +228,7 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 body=normalized_description,
                 metadata_json={"source": "initial_description"},
             )
-            payload = self._serialize_support_request(request)
+            payload = self._serialize_portal_support_request(request)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
@@ -287,9 +287,7 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 status=SUPPORT_REQUEST_STATUS_OPEN,
             )
         return {
-            "account_id": normalized_account_id,
-            "principal_id": normalized_principal_id,
-            "items": [self._serialize_support_request(item) for item in items],
+            "items": [self._serialize_portal_support_request(item) for item in items],
             "pagination": {
                 "limit": safe_limit,
                 "offset": safe_offset,
@@ -305,13 +303,19 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
         self,
         *,
         principal_id: str,
+        account_id: str,
         request_id: str,
     ) -> dict[str, object]:
         normalized_principal_id = str(principal_id or "").strip()
+        normalized_account_id = str(account_id or "").strip()
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             request = repository.get_support_request(str(request_id or "").strip())
-            if request is None or request.principal_id != normalized_principal_id:
+            if (
+                request is None
+                or request.principal_id != normalized_principal_id
+                or request.account_id != normalized_account_id
+            ):
                 raise CommercialNotFoundError(
                     "service.support_request_not_found",
                     "support request was not found",
@@ -331,15 +335,16 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
             )
             feedback = repository.get_support_request_feedback(str(request.request_id or ""))
             return {
-                "request": self._serialize_support_request(request),
+                "request": self._serialize_portal_support_request(request),
                 "messages": [
-                    self._serialize_support_request_message(message) for message in messages
+                    self._serialize_portal_support_request_message(message)
+                    for message in messages
                 ],
                 "attachments": [
-                    self._serialize_support_request_attachment(attachment)
+                    self._serialize_portal_support_request_attachment(attachment)
                     for attachment in attachments
                 ],
-                "feedback": self._serialize_support_request_feedback(feedback)
+                "feedback": self._serialize_portal_support_request_feedback(feedback)
                 if feedback is not None
                 else None,
             }
@@ -472,8 +477,8 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 metadata_json={"source": "portal_reply"},
             )
             payload: dict[str, object] = {
-                "request": self._serialize_support_request(request),
-                "message": self._serialize_support_request_message(message),
+                "request": self._serialize_portal_support_request(request),
+                "message": self._serialize_portal_support_request_message(message),
             }
             self._record_service_audit_in_session(
                 repository=repository,
@@ -591,6 +596,18 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 principal_id=normalized_principal_id,
                 account_id=str(request.account_id or ""),
             )
+            if normalized_message_id:
+                message = repository.get_support_request_message(normalized_message_id)
+                if (
+                    message is None
+                    or message.request_id != request.request_id
+                    or message.account_id != request.account_id
+                    or message.visibility != SUPPORT_REQUEST_MESSAGE_VISIBILITY_PUBLIC
+                ):
+                    raise CommercialNotFoundError(
+                        "service.support_request_message_not_found",
+                        "support request message was not found",
+                    )
             if (
                 repository.count_support_request_attachments(
                     request_id=str(request.request_id or "")
@@ -615,8 +632,8 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 metadata_json={"source": "portal_upload"},
             )
             payload: dict[str, object] = {
-                "request": self._serialize_support_request(request),
-                "attachment": self._serialize_support_request_attachment(attachment),
+                "request": self._serialize_portal_support_request(request),
+                "attachment": self._serialize_portal_support_request_attachment(attachment),
             }
             self._record_service_audit_in_session(
                 repository=repository,
@@ -743,7 +760,7 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 account_id=str(request.account_id or ""),
             )
             return {
-                "attachment": self._serialize_support_request_attachment(
+                "attachment": self._serialize_portal_support_request_attachment(
                     attachment,
                     include_content=True,
                 )
@@ -824,8 +841,8 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 metadata_json={"source": "portal_close_evaluation"},
             )
             payload: dict[str, object] = {
-                "request": self._serialize_support_request(request),
-                "feedback": self._serialize_support_request_feedback(feedback),
+                "request": self._serialize_portal_support_request(request),
+                "feedback": self._serialize_portal_support_request_feedback(feedback),
             }
             self._record_service_audit_in_session(
                 repository=repository,
@@ -977,6 +994,26 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
             "closed_at": self._serialize_datetime(request.closed_at),
         }
 
+    def _serialize_portal_support_request(
+        self,
+        request: SupportRequest,
+    ) -> dict[str, object]:
+        return {
+            "request_id": str(request.request_id or ""),
+            "site_id": str(request.site_id or ""),
+            "topic": str(request.topic or ""),
+            "title": str(request.title or ""),
+            "description": str(request.description or ""),
+            "status": str(request.status or ""),
+            "priority": str(request.priority or ""),
+            "source_path": str(request.source_path or ""),
+            "context": request.context_json if isinstance(request.context_json, dict) else {},
+            "created_at": self._serialize_datetime(request.created_at),
+            "updated_at": self._serialize_datetime(request.updated_at),
+            "resolved_at": self._serialize_datetime(request.resolved_at),
+            "closed_at": self._serialize_datetime(request.closed_at),
+        }
+
     def _serialize_support_request_message(
         self,
         message: SupportRequestMessage,
@@ -992,6 +1029,18 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
             "visibility": str(message.visibility or ""),
             "body": str(message.body or ""),
             "metadata": message.metadata_json if isinstance(message.metadata_json, dict) else {},
+            "created_at": self._serialize_datetime(message.created_at),
+        }
+
+    def _serialize_portal_support_request_message(
+        self,
+        message: SupportRequestMessage,
+    ) -> dict[str, object]:
+        return {
+            "message_id": str(message.message_id or ""),
+            "request_id": str(message.request_id or ""),
+            "author_kind": str(message.author_kind or ""),
+            "body": str(message.body or ""),
             "created_at": self._serialize_datetime(message.created_at),
         }
 
@@ -1025,6 +1074,28 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
             ).decode("ascii")
         return payload
 
+    def _serialize_portal_support_request_attachment(
+        self,
+        attachment: SupportRequestAttachment,
+        *,
+        include_content: bool = False,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "attachment_id": str(attachment.attachment_id or ""),
+            "request_id": str(attachment.request_id or ""),
+            "message_id": str(attachment.message_id or ""),
+            "uploader_kind": str(attachment.uploader_kind or ""),
+            "filename": str(attachment.filename or ""),
+            "content_type": str(attachment.content_type or ""),
+            "byte_size": int(attachment.byte_size or 0),
+            "created_at": self._serialize_datetime(attachment.created_at),
+        }
+        if include_content:
+            payload["content_base64"] = base64.b64encode(
+                bytes(attachment.content_bytes or b"")
+            ).decode("ascii")
+        return payload
+
     def _serialize_support_request_feedback(
         self,
         feedback: SupportRequestFeedback,
@@ -1040,6 +1111,20 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
             "rating": int(feedback.rating or 0),
             "comment": str(feedback.comment or ""),
             "metadata": feedback.metadata_json if isinstance(feedback.metadata_json, dict) else {},
+            "created_at": self._serialize_datetime(feedback.created_at),
+            "updated_at": self._serialize_datetime(feedback.updated_at),
+        }
+
+    def _serialize_portal_support_request_feedback(
+        self,
+        feedback: SupportRequestFeedback,
+    ) -> dict[str, object]:
+        return {
+            "feedback_id": str(feedback.feedback_id or ""),
+            "request_id": str(feedback.request_id or ""),
+            "resolved": bool(feedback.resolved),
+            "rating": int(feedback.rating or 0),
+            "comment": str(feedback.comment or ""),
             "created_at": self._serialize_datetime(feedback.created_at),
             "updated_at": self._serialize_datetime(feedback.updated_at),
         }

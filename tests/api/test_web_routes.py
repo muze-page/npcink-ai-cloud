@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
+import jwt
+import pytest
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from app.adapters.notifications.base import PortalEmailSender
+from app.adapters.repositories.commercial_repository import CommercialRepository
+from app.api.admin_ops import ResolvedAdminSession
+from app.api.auth import PortalBearerTokenError
 from app.api.main import create_app
+from app.api.portal_session import set_portal_session_cookies
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import Site
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
+from app.domain.commercial.service import CommercialService
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
     TEST_INTERNAL_AUTH_TOKEN,
@@ -19,6 +30,9 @@ from tests.conftest import (
 )
 
 TEST_ADMIN_BOOTSTRAP_TOKEN = "npcink-cloud-admin-bootstrap-test-32"
+TEST_ADMIN_SESSION_ISSUER = "npcink-ai-cloud"
+TEST_ADMIN_SESSION_AUDIENCE = "npcink-ai-cloud-admin"
+TEST_ADMIN_SESSION_PURPOSE = "admin_session"
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -119,7 +133,7 @@ class FakePortalEmailSender(PortalEmailSender):
         expires_in_seconds: int,
         project_name: str,
         site_name: str = "",
-        wordpress_url: str = "",
+        site_url: str = "",
         locale: str = "zh-CN",
     ) -> None:
         self.messages.append(
@@ -131,7 +145,7 @@ class FakePortalEmailSender(PortalEmailSender):
                 "expires_in_seconds": expires_in_seconds,
                 "project_name": project_name,
                 "site_name": site_name,
-                "wordpress_url": wordpress_url,
+                "site_url": site_url,
                 "locale": locale,
             }
         )
@@ -200,6 +214,76 @@ def _login_platform_admin(
     assert "npcink_admin_session_token" in set_cookie_header
     assert "Max-Age=0" in set_cookie_header
     return client
+
+
+def _admin_session_token(
+    *,
+    remove_claims: tuple[str, ...] = (),
+    claim_updates: dict[str, object] | None = None,
+    legacy_shape: bool = False,
+) -> str:
+    now = datetime.now(UTC)
+    payload: dict[str, object] = {
+        "sub": "platform:founder",
+        "auth_mode": "admin_bootstrap_token",
+        "grant_id": "",
+        "is_persisted": False,
+        "session_version": 1,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(hours=1)).timestamp()),
+    }
+    if legacy_shape:
+        payload["role"] = "platform_admin"
+    else:
+        payload.update(
+            {
+                "iss": TEST_ADMIN_SESSION_ISSUER,
+                "aud": TEST_ADMIN_SESSION_AUDIENCE,
+                "purpose": TEST_ADMIN_SESSION_PURPOSE,
+            }
+        )
+    for claim_name in remove_claims:
+        payload.pop(claim_name, None)
+    payload.update(claim_updates or {})
+    return jwt.encode(payload, TEST_ADMIN_SESSION_SECRET, algorithm="HS256")
+
+
+def _portal_session_token(
+    *,
+    principal_id: str = "principal:portal-probe@example.com",
+    claim_updates: dict[str, object] | None = None,
+) -> str:
+    now = datetime.now(UTC)
+    payload: dict[str, object] = {
+        "iss": "npcink-ai-cloud",
+        "aud": "npcink-ai-cloud-portal",
+        "sub": principal_id,
+        "purpose": "portal_session",
+        "session_version": 1,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(hours=1)).timestamp()),
+    }
+    payload.update(claim_updates or {})
+    return jwt.encode(payload, TEST_PORTAL_JWT_SECRET, algorithm="HS256")
+
+
+def _request_for_client(client: TestClient, *, cookie_header: str = "") -> Request:
+    headers = [(b"cookie", cookie_header.encode())] if cookie_header else []
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/portal/v1/session",
+            "raw_path": b"/portal/v1/session",
+            "query_string": b"",
+            "headers": headers,
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "app": client.app,
+        }
+    )
 
 
 def _seed_account(
@@ -279,7 +363,384 @@ def test_web_admin_bootstrap_issues_cookie_session(tmp_path: Path) -> None:
     assert session_response.json()["data"]["identity_type"] == "platform_admin"
     assert session_response.json()["data"]["role"] == "platform_admin"
     assert session_response.json()["data"]["auth_mode"] == "admin_bootstrap_token"
+    token = client.cookies.get("npcink_admin_session_token")
+    assert token
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert claims["iss"] == TEST_ADMIN_SESSION_ISSUER
+    assert claims["aud"] == TEST_ADMIN_SESSION_AUDIENCE
+    assert claims["purpose"] == TEST_ADMIN_SESSION_PURPOSE
+    assert claims["sub"] == "platform:founder"
+    assert claims["auth_mode"] == "admin_bootstrap_token"
+    assert claims["grant_id"] == ""
+    assert claims["is_persisted"] is False
+    assert claims["session_version"] == 1
+    assert isinstance(claims["iat"], int)
+    assert isinstance(claims["exp"], int)
+    assert "role" not in claims
 
+    dispose_engine(database_url)
+
+
+def test_web_admin_rejects_sub_only_legacy_session(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    client.cookies.set(
+        "npcink_admin_session_token",
+        jwt.encode(
+            {"sub": "platform:founder"},
+            TEST_ADMIN_SESSION_SECRET,
+            algorithm="HS256",
+        ),
+    )
+
+    response = client.get("/admin/session")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.admin_session_invalid"
+    dispose_engine(database_url)
+
+
+@pytest.mark.parametrize(
+    "claim_name",
+    [
+        "iss",
+        "aud",
+        "sub",
+        "purpose",
+        "auth_mode",
+        "grant_id",
+        "is_persisted",
+        "session_version",
+        "iat",
+        "exp",
+    ],
+)
+def test_web_admin_rejects_session_missing_required_claim(
+    tmp_path: Path,
+    claim_name: str,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    client.cookies.set(
+        "npcink_admin_session_token",
+        _admin_session_token(remove_claims=(claim_name,)),
+    )
+
+    response = client.get("/admin/session")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.admin_session_invalid"
+    dispose_engine(database_url)
+
+
+@pytest.mark.parametrize(
+    ("claim_name", "claim_value"),
+    [
+        ("iss", "npcink-ai-cloud-other"),
+        ("aud", "npcink-ai-cloud-other"),
+        ("purpose", "other_session"),
+        ("auth_mode", "dev_internal_autologin"),
+        ("auth_mode", "other_auth_mode"),
+        ("sub", ""),
+        ("grant_id", "unexpected-for-synthetic"),
+        ("is_persisted", "false"),
+        ("session_version", True),
+        ("session_version", 0),
+        ("session_version", -1),
+        ("session_version", "1"),
+        ("session_version", []),
+        ("session_version", {}),
+        ("iat", True),
+        ("iat", "1"),
+        ("iat", 1.5),
+        ("iat", []),
+        ("iat", {}),
+        ("exp", True),
+        ("exp", "1"),
+        ("exp", 1.5),
+        ("exp", []),
+        ("exp", {}),
+        ("nbf", True),
+        ("nbf", "1"),
+        ("nbf", 1.5),
+        ("nbf", []),
+        ("nbf", {}),
+    ],
+)
+def test_web_admin_rejects_invalid_session_claim(
+    tmp_path: Path,
+    claim_name: str,
+    claim_value: object,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    client.cookies.set(
+        "npcink_admin_session_token",
+        _admin_session_token(claim_updates={claim_name: claim_value}),
+    )
+
+    response = client.get("/admin/session")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.admin_session_invalid"
+    dispose_engine(database_url)
+
+
+def test_web_admin_rejects_retired_dev_internal_autologin_session(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    client.cookies.set(
+        "npcink_admin_session_token",
+        _admin_session_token(
+            legacy_shape=True,
+            claim_updates={"auth_mode": "dev_internal_autologin"},
+        ),
+    )
+
+    response = client.get("/admin/session")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.admin_session_invalid"
+    dispose_engine(database_url)
+
+
+def test_web_admin_persisted_identity_metadata_cannot_bypass_session_revocation(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    service = CommercialService(database_url)
+    synthetic = service.resolve_platform_admin_grant(
+        principal_id="platform:founder",
+        allow_bootstrap=True,
+    )
+    assert synthetic["is_persisted"] is False
+    assert synthetic["session_version"] == 1
+
+    principal_id = "platform:persisted-bootstrap-metadata"
+    persisted = service.upsert_platform_admin_grant(
+        principal_id=principal_id,
+        metadata_json={"bootstrap": True},
+    )
+    assert persisted["is_persisted"] is True
+    _login_platform_admin(client, principal_id=principal_id)
+    assert client.get("/admin/session").status_code == 200
+
+    with get_session(database_url) as session:
+        repository = CommercialRepository(session)
+        repository.increment_principal_session_version(principal_id=principal_id)
+        session.commit()
+
+    response = client.get("/admin/session")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.admin_session_revoked"
+    dispose_engine(database_url)
+
+
+def test_web_admin_deleted_bootstrap_grant_cannot_downgrade_to_synthetic(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    service = CommercialService(database_url)
+    persisted = service.upsert_platform_admin_grant(principal_id="platform:founder")
+    _login_platform_admin(client, principal_id="platform:founder")
+    token = client.cookies.get("npcink_admin_session_token")
+    assert token
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert claims["grant_id"] == persisted["grant_id"]
+    assert claims["is_persisted"] is True
+
+    service.delete_platform_admin_grant(principal_id="platform:founder")
+    response = client.get("/admin/session")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.admin_session_revoked"
+
+    recreated = service.upsert_platform_admin_grant(principal_id="platform:founder")
+    assert recreated["grant_id"] != persisted["grant_id"]
+    response = client.get("/admin/session")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.admin_session_revoked"
+    dispose_engine(database_url)
+
+
+def test_resolved_admin_session_trusts_explicit_persistence_not_metadata() -> None:
+    resolved = ResolvedAdminSession.from_identity(
+        {
+            "grant_id": "pad_persisted",
+            "principal_id": "platform:persisted",
+            "role": "platform_admin",
+            "session_version": 7,
+            "is_persisted": True,
+            "metadata": {"bootstrap": True},
+        },
+        auth_mode="admin_bootstrap_token",
+    )
+
+    assert resolved.revocable is True
+    assert resolved.session_version == 7
+
+
+@pytest.mark.parametrize("session_version", [None, 0, True, "1"])
+def test_resolved_admin_session_rejects_invalid_version_without_fallback(
+    session_version: object,
+) -> None:
+    with pytest.raises(PortalBearerTokenError) as exc_info:
+        ResolvedAdminSession.from_identity(
+            {
+                "grant_id": "pad_persisted",
+                "principal_id": "platform:persisted",
+                "role": "platform_admin",
+                "session_version": session_version,
+                "is_persisted": True,
+            },
+            auth_mode="admin_bootstrap_token",
+        )
+
+    assert exc_info.value.error_code == "auth.admin_session_invalid"
+
+
+def test_web_admin_does_not_synthetically_bootstrap_unconfigured_internal_root(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    client.cookies.set(
+        "npcink_admin_session_token",
+        _admin_session_token(claim_updates={"sub": "platform:internal_root"}),
+    )
+
+    response = client.get("/admin/session")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.admin_session_revoked"
+    dispose_engine(database_url)
+
+
+@pytest.mark.parametrize(
+    ("transport", "claim_name", "claim_value", "error_code"),
+    [
+        ("bearer", "iat", [], "auth.portal_token_invalid"),
+        ("bearer", "exp", {}, "auth.portal_token_invalid"),
+        ("bearer", "nbf", [], "auth.portal_token_invalid"),
+        ("cookie", "iat", [], "auth.portal_session_invalid"),
+        ("cookie", "exp", {}, "auth.portal_session_invalid"),
+        ("cookie", "nbf", [], "auth.portal_session_invalid"),
+    ],
+)
+def test_web_portal_rejects_malicious_temporal_claims_without_500(
+    tmp_path: Path,
+    transport: str,
+    claim_name: str,
+    claim_value: object,
+    error_code: str,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    token = _portal_session_token(claim_updates={claim_name: claim_value})
+    if transport == "bearer":
+        response = client.get(
+            "/portal/v1/session",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    else:
+        client.cookies.set("npcink_portal_session_token", token)
+        response = client.get("/portal/v1/session")
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == error_code
+    dispose_engine(database_url)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error_code"),
+    [
+        ({"principal_id": "principal:missing"}, "auth.portal_session_revoked"),
+        (
+            {"principal_id": "principal:missing", "session_version": 0},
+            "auth.portal_session_invalid",
+        ),
+        (
+            {"principal_id": "principal:missing", "site_id": "site/invalid"},
+            "auth.portal_session_invalid",
+        ),
+    ],
+)
+def test_portal_cookie_signing_fails_closed_without_identity_or_valid_claims(
+    tmp_path: Path,
+    kwargs: dict[str, object],
+    error_code: str,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    request = _request_for_client(client)
+    principal_id = kwargs.get("principal_id")
+    site_id = kwargs.get("site_id", "")
+    session_version = kwargs.get("session_version")
+    assert isinstance(principal_id, str)
+    assert isinstance(site_id, str)
+    assert session_version is None or isinstance(session_version, int)
+
+    with pytest.raises(PortalBearerTokenError) as exc_info:
+        set_portal_session_cookies(
+            request,
+            JSONResponse({}),
+            principal_id=principal_id,
+            site_id=site_id,
+            session_version=session_version,
+        )
+
+    assert exc_info.value.error_code == error_code
+    dispose_engine(database_url)
+
+
+def test_portal_cookie_signing_failure_does_not_emit_session_cookie(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    principal_id = "principal:signing-failure"
+    CommercialService(database_url).upsert_platform_admin_grant(principal_id=principal_id)
+    response = JSONResponse({})
+
+    def fail_signing(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("signing failed")
+
+    monkeypatch.setattr(
+        "app.api.portal_session.build_portal_session_token",
+        fail_signing,
+    )
+    with pytest.raises(RuntimeError, match="signing failed"):
+        set_portal_session_cookies(
+            _request_for_client(client),
+            response,
+            principal_id=principal_id,
+        )
+
+    assert response.headers.getlist("set-cookie") == []
+    dispose_engine(database_url)
+
+
+def test_web_portal_session_evidence_comes_only_from_signed_claims(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    principal_id = "principal:signed-session-evidence"
+    CommercialService(database_url).upsert_platform_admin_grant(principal_id=principal_id)
+    issued_at = int((datetime.now(UTC) - timedelta(minutes=5)).timestamp())
+    expires_at = int((datetime.now(UTC) + timedelta(hours=1)).timestamp())
+    token = _portal_session_token(
+        principal_id=principal_id,
+        claim_updates={"iat": issued_at, "exp": expires_at},
+    )
+    client.cookies.set("npcink_portal_session_token", token)
+    client.cookies.set("npcink_portal_session_issued_at", "2099-01-01T00:00:00Z")
+    client.cookies.set("npcink_portal_session_expires_at", "2000-01-01T00:00:00Z")
+    client.cookies.set("npcink_portal_site_id", "site_unsigned_fallback")
+
+    response = client.get("/portal/v1/session")
+
+    assert response.status_code == 200, response.text
+    session = response.json()["data"]["session"]
+    assert session["issued_at"] == (
+        datetime.fromtimestamp(issued_at, tz=UTC).isoformat().replace("+00:00", "Z")
+    )
+    assert session["expires_at"] == (
+        datetime.fromtimestamp(expires_at, tz=UTC).isoformat().replace("+00:00", "Z")
+    )
+    assert "site_id" not in response.json()["data"]
     dispose_engine(database_url)
 
 
@@ -348,7 +809,8 @@ def test_web_admin_and_portal_sessions_do_not_substitute_for_each_other(tmp_path
         },
     )
     assert verify_response.status_code == 200, verify_response.text
-    assert verify_response.json()["data"]["identity_type"] == "user"
+    assert verify_response.json()["data"]["email"] == "identity-boundary@example.com"
+    assert "identity_type" not in verify_response.json()["data"]
     assert portal_client.get("/admin/session").status_code == 401
 
     admin_client = TestClient(portal_client.app)
@@ -523,7 +985,7 @@ def test_web_portal_preview_surface_is_removed(tmp_path: Path) -> None:
     dispose_engine(database_url)
 
 
-def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
+def test_web_portal_email_code_and_addon_connection_with_jwt(tmp_path: Path) -> None:
     fake_sender = FakePortalEmailSender()
     database_url, client = _build_client(
         tmp_path,
@@ -535,25 +997,26 @@ def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
         portal_email_sender=fake_sender,
     )
 
-    _seed_account(
-        client,
-        account_id="acct_web",
-    )
-    client.post(
-        "/internal/service/sites",
+    registration_request = client.post(
+        "/portal/v1/register/code/request",
         json={
-            "site_id": "site_web",
-            "account_id": "acct_web",
-            "name": "Web Site",
-            "status": "provisioning",
+            "email": "web@example.com",
+            "site_name": "Web Site",
+            "site_url": "https://web.example.test",
         },
-        headers=build_internal_headers(idempotency_key="web-site-001"),
     )
-    client.post(
-        "/internal/service/sites/site_web/activate",
-        headers=build_internal_headers(idempotency_key="web-site-activate-001"),
+    assert registration_request.status_code == 200, registration_request.text
+    registration_response = client.post(
+        "/portal/v1/register/verify",
+        json={"email": "web@example.com", "code": str(fake_sender.messages[0]["code"])},
     )
-    _grant_account_member_access(client, site_id="site_web", email="web@example.com")
+    assert registration_response.status_code == 200, registration_response.text
+    registration_data = registration_response.json()["data"]
+    site_id = str(registration_data["selected_context"]["site"]["site_id"])
+    addon_accounts_response = client.get("/portal/v1/addon-connection-accounts")
+    assert addon_accounts_response.status_code == 200
+    account_id = str(addon_accounts_response.json()["data"]["items"][0]["account_id"])
+    assert client.post("/portal/v1/logout").status_code == 200
 
     login_request_response = client.post(
         "/portal/v1/auth/code/request",
@@ -562,21 +1025,42 @@ def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
     assert login_request_response.status_code == 200
     assert login_request_response.json()["data"]["delivery"] == "email"
     assert login_request_response.json()["data"]["code"] == ""
-    assert len(fake_sender.messages) == 1
+    assert len(fake_sender.messages) == 2
 
     login_verify_response = client.post(
         "/portal/v1/auth/code/verify",
-        json={"email": "web@example.com", "code": str(fake_sender.messages[0]["code"])},
+        json={"email": "web@example.com", "code": str(fake_sender.messages[-1]["code"])},
     )
     assert login_verify_response.status_code == 200
-    assert login_verify_response.json()["data"]["principal_id"].startswith("prn_")
+    assert login_verify_response.json()["data"]["email"] == "web@example.com"
+    assert login_verify_response.json()["data"]["selected_context"] is None
 
-    issue_response = client.post(
-        "/portal/v1/sites/site_web/api-keys",
-        json={"label": "Web Key"},
-        headers={"origin": "http://testserver", "referer": "http://testserver/"},
+    addon_state = "web-addon-state"
+    connection_response = client.post(
+        "/portal/v1/addon-connections",
+        headers={"Idempotency-Key": "web-addon-connection"},
+        json={
+            "account_id": account_id,
+            "site_url": "https://web.example.test",
+            "site_name": "Web Site",
+            "return_url": (
+                "https://web.example.test/wp-admin/admin-post.php"
+                f"?action=npcink_cloud_addon_complete_auth&state={addon_state}"
+            ),
+            "state": addon_state,
+        },
     )
-    assert issue_response.status_code == 200
-    assert issue_response.json()["data"]["cloud_api_key"].startswith("mak1_")
+    assert connection_response.status_code == 200, connection_response.text
+    connection_data = connection_response.json()["data"]
+    assert connection_data["site_id"] == site_id
+    assert "cloud_api_key" not in connection_data
+    redirect_query = parse_qs(urlsplit(str(connection_data["redirect_url"])).query)
+
+    exchange_response = client.post(
+        "/portal/v1/addon-connections/exchange",
+        json={"code": redirect_query["code"][0], "state": addon_state},
+    )
+    assert exchange_response.status_code == 200, exchange_response.text
+    assert exchange_response.json()["data"]["cloud_api_key"].startswith("mak1_")
 
     dispose_engine(database_url)

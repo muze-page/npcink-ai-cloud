@@ -68,6 +68,21 @@ type BackofficeEmptyStateProps = {
   diagnosticCode?: string;
 };
 
+type BackofficeDiagnosticNoticeProps = {
+  message: string;
+  staleDescription?: string;
+  retryLabel?: string;
+  onRetry?: () => void;
+  className?: string;
+};
+
+type BackofficeDisclosureProps = {
+  summary: string;
+  children: React.ReactNode;
+  className?: string;
+  contentClassName?: string;
+};
+
 export function BackofficePageStack({ children, className, ...props }: BackofficeFrameProps) {
   return (
     <div className={cn('space-y-6', className)} {...props}>
@@ -231,7 +246,7 @@ export function BackofficeSectionPanel({ children, className, variant = 'default
     <div
       className={cn(
         variant === 'portal'
-          ? 'rounded-[1.1rem] border border-slate-200/80 bg-white/78 p-4 shadow-none dark:border-slate-800 dark:bg-slate-950/45 md:p-5'
+          ? 'rounded-[18px] border border-slate-200/80 bg-white p-4 shadow-none dark:border-slate-800 dark:bg-slate-950 md:p-5'
           : 'surface-panel rounded-[1.35rem] p-5 md:p-6',
         className
       )}
@@ -258,7 +273,7 @@ export function BackofficeMetricStrip({ items, columnsClassName, variant = 'defa
             key={item.label}
             className={cn(
               variant === 'portal'
-                ? 'rounded-xl border border-slate-200/75 bg-white/65 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/30'
+                ? 'rounded-xl border border-slate-200/75 bg-white px-4 py-3 shadow-none dark:border-slate-800 dark:bg-slate-950'
                 : 'rounded-[1.1rem] border border-slate-200/80 bg-white/80 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/45'
             )}
           >
@@ -311,6 +326,50 @@ export function BackofficeSummaryStrip({ items, className }: BackofficeSummarySt
   );
 }
 
+export function BackofficeDiagnosticNotice({
+  message,
+  staleDescription,
+  retryLabel,
+  onRetry,
+  className,
+}: BackofficeDiagnosticNoticeProps) {
+  return (
+    <div
+      role="alert"
+      className={cn(
+        'rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200',
+        className
+      )}
+    >
+      <div className="font-semibold">{message}</div>
+      {staleDescription ? <div className="mt-1 text-xs">{staleDescription}</div> : null}
+      {!staleDescription && onRetry ? (
+        <button type="button" className="btn btn-secondary btn-sm mt-3" onClick={onRetry}>
+          {retryLabel}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+export function BackofficeDisclosure({
+  summary,
+  children,
+  className,
+  contentClassName,
+}: BackofficeDisclosureProps) {
+  return (
+    <details className={cn('rounded-[1.35rem] border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950', className)}>
+      <summary className="cursor-pointer select-none px-5 py-4 text-sm font-semibold text-slate-900 dark:text-white md:px-6">
+        {summary}
+      </summary>
+      <div className={cn('border-t border-slate-200 p-5 dark:border-slate-800 md:p-6', contentClassName)}>
+        {children}
+      </div>
+    </details>
+  );
+}
+
 export function BackofficeStackCard({
   children,
   className,
@@ -321,7 +380,7 @@ export function BackofficeStackCard({
     <div
       className={cn(
         variant === 'portal'
-          ? 'rounded-xl border border-slate-200/75 bg-slate-50/60 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/30'
+          ? 'rounded-xl border border-slate-200/75 bg-white px-4 py-3.5 shadow-none dark:border-slate-800 dark:bg-slate-950'
           : 'rounded-[1.1rem] border border-slate-200/80 bg-slate-50/75 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/45',
         className
       )}

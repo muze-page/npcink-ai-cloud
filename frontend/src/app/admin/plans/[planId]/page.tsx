@@ -28,11 +28,12 @@ import {
   localizePositioning,
   localizeTierLabel,
 } from '@/lib/admin-plan-copy';
+import { createApiClient } from '@/lib/api-client';
 import { translateStatusLabel } from '@/lib/status-display';
 import { ADMIN_CURRENCY } from '@/lib/currency';
-import { readResponsePayload } from '@/lib/safe-response';
 import { formatCurrency, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
+import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
 
 type PlanRecord = {
   plan_id: string;
@@ -114,6 +115,13 @@ type PlanDetailPayload = {
   plan: PlanRecord;
   versions: PlanVersionRecord[];
   latest_version?: PlanVersionRecord | null;
+  sales_offer?: {
+    offer_id: string;
+    amount: number;
+    currency: string;
+    status: string;
+    plan_version_id: string;
+  } | null;
   tier_summary: TierSummary;
   package_fit_cues: PackageFitCue[];
   subscriptions: PlanSubscriptionRecord[];
@@ -128,6 +136,7 @@ type PlanVersionFormState = {
   site_limit: string;
   max_vector_documents: string;
   max_cost_per_period: string;
+  sales_price_cny: string;
   max_active_runs: string;
   max_batch_items: string;
   grace_period_days: string;
@@ -137,6 +146,8 @@ type PlanVersionFormState = {
   concurrency_override_json: string;
   policy_override_json: string;
 };
+
+const planDetailClient = createApiClient({ idempotencyPrefix: 'admin_plan_detail' });
 
 function prettyJson(value: unknown): string {
   return JSON.stringify(value ?? {}, null, 2);
@@ -191,7 +202,7 @@ function numericValue(value: unknown): number {
 }
 
 function formatBudgetCurrency(value: unknown): string {
-  return formatCurrency(numericValue(value), ADMIN_CURRENCY);
+  return formatCurrency(numericValue(value), 'USD');
 }
 
 function buildInitialForm(detail: PlanDetailPayload | null): PlanVersionFormState {
@@ -221,6 +232,7 @@ function buildInitialForm(detail: PlanDetailPayload | null): PlanVersionFormStat
     site_limit: numberField(metadata.site_limit ?? tierSummary?.site_limit ?? 0),
     max_vector_documents: numberField(metadata.max_vector_documents ?? tierSummary?.max_vector_documents ?? 0),
     max_cost_per_period: numberField(budgets.max_cost_per_period),
+    sales_price_cny: numberField(detail?.sales_offer?.amount),
     max_active_runs: numberField(concurrency.max_active_runs),
     max_batch_items: numberField(metadata.max_batch_items ?? tierSummary?.max_batch_items ?? 0),
     grace_period_days: numberField(policySubscription.grace_period_days),
@@ -296,6 +308,13 @@ function PlanDetailContent() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [advancedInfoTab, setAdvancedInfoTab] = useState<'diagnostics' | 'history'>('diagnostics');
   const [form, setForm] = useState<PlanVersionFormState>(() => buildInitialForm(null));
+  const editorDialogRef = useDialogKeyboard<HTMLElement>({
+    open: isEditorOpen,
+    onClose: () => {
+      if (!isSaving) setIsEditorOpen(false);
+    },
+    closeDisabled: isSaving,
+  });
 
   const loadDetail = useCallback(async (options: { showLoading?: boolean } = {}) => {
     const showLoading = options.showLoading ?? true;
@@ -304,21 +323,12 @@ function PlanDetailContent() {
     }
     setError(null);
     try {
-      const response = await fetch(`/api/admin/plans/${encodeURIComponent(planId)}`, {
-        credentials: 'include',
-      });
-      const payload = await readResponsePayload<{ data?: PlanDetailPayload; message?: string }>(response);
-      if (!response.ok) {
-        throw new Error(
-          resolveUiErrorMessage(
-            'message' in payload ? payload.message : null,
-            t('error.failed_load')
-          )
-        );
-      }
-      setDetail(('data' in payload ? payload.data : null) as PlanDetailPayload);
+      const payload = (await planDetailClient.request<PlanDetailPayload>(
+        `/api/admin/plans/${encodeURIComponent(planId)}`
+      )).data;
+      setDetail(payload);
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+      setError(resolveUiErrorMessage(err, t('error.failed_load')));
     } finally {
       if (showLoading) {
         setIsLoading(false);
@@ -397,17 +407,13 @@ function PlanDetailContent() {
           baseMetadata,
           parseJsonObject(form.metadata_override_json, 'Metadata override')
         ),
+        sales_price_cny: Number(form.sales_price_cny || 0),
       };
-      const response = await fetch(`/api/admin/plans/${encodeURIComponent(planId)}/versions`, {
+      const data = (await planDetailClient.request<{ receipt?: AdminMutationReceiptPayload | null }>(
+        `/api/admin/plans/${encodeURIComponent(planId)}/versions`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await readResponsePayload<{ data?: { receipt?: AdminMutationReceiptPayload | null }; message?: string }>(response);
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage('message' in data ? data.message : null, t('error.failed_save', {}, 'Failed to save.')));
-      }
+        body: payload,
+      })).data;
       setNotice(
         t(
           'admin.coverage_package_release_saved_notice',
@@ -415,12 +421,12 @@ function PlanDetailContent() {
           'Package changes saved and published. Existing subscriptions on this package use the latest values.'
         )
       );
-      setLastReceipt((('data' in data ? data.data?.receipt : null) ?? null) as AdminMutationReceiptPayload | null);
+      setLastReceipt(data.receipt ?? null);
       await loadDetail({ showLoading: false });
       setIsEditorOpen(false);
     } catch (err) {
       setError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save', {}, 'Failed to save.'))
+        resolveUiErrorMessage(err, t('error.failed_save', {}, 'Failed to save.'))
       );
     } finally {
       setIsSaving(false);
@@ -626,6 +632,11 @@ function PlanDetailContent() {
               detail: t('admin.vector_documents_limit_detail', {}, 'Account-level article capacity for Site Knowledge indexing.'),
             },
             {
+              label: t('admin.sales_price_cny', {}, 'Sales price'),
+              value: formatCurrency(numericValue(detail.sales_offer?.amount), ADMIN_CURRENCY),
+              detail: t('admin.sales_price_cny_detail', {}, 'Customer-facing 30-day price used for new Alipay orders.'),
+            },
+            {
               label: t('admin.period_cost_budget', {}, 'Package fee'),
               value: formatBudgetCurrency(latestBudgets.max_cost_per_period),
               detail: t('admin.period_cost_budget_detail', {}, 'Saved package fee for this billing period.'),
@@ -821,10 +832,12 @@ function PlanDetailContent() {
             aria-label={t('common.close')}
           />
           <aside
+            ref={editorDialogRef}
             className="absolute right-0 top-0 flex h-full w-full max-w-3xl flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950"
             role="dialog"
             aria-modal="true"
             aria-labelledby="package-editor-title"
+            tabIndex={-1}
           >
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-4 dark:border-slate-800 sm:px-6">
               <div className="min-w-0">
@@ -903,13 +916,23 @@ function PlanDetailContent() {
                     {t(
                       'admin.plan_package_fields_desc',
                       {},
-                      'These are the fields operators normally need. Currency is fixed to CNY for the platform admin.'
+                      'Customer sales price uses CNY; the internal provider-cost budget uses USD.'
                     )}
                   </p>
                   <div className="mt-4 grid gap-4 md:grid-cols-2">
                     <label className="text-sm">
-                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.cost')}</span>
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.sales_price_cny', {}, 'Sales price (CNY)')}</span>
+                      <input value={form.sales_price_cny} onChange={(e) => setForm((c) => ({ ...c, sales_price_cny: e.target.value }))} className="input w-full" type="number" min="0" step="0.01" />
+                      <span className="mt-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {t('admin.sales_price_cny_detail', {}, 'Customer-facing 30-day price used for new Alipay orders.')}
+                      </span>
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.model_cost_budget_usd', {}, 'Model cost budget (USD / period)')}</span>
                       <input value={form.max_cost_per_period} onChange={(e) => setForm((c) => ({ ...c, max_cost_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="0.01" />
+                      <span className="mt-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {t('admin.model_cost_budget_usd_detail', {}, 'Internal provider-cost monitoring threshold. It does not change the customer payment amount.')}
+                      </span>
                     </label>
                     <label className="text-sm">
                       <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.included_points', {}, 'Package points')}</span>

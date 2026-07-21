@@ -56,7 +56,7 @@ jobs:
                   static_terms_only="false"
                 fi
                 case "${changed_file}" in
-                  .github/workflows/ci.yml|.github/workflows/deploy-production.yml|docker-compose*.yml|Dockerfile|deploy/*.sh)
+                  .github/workflows/ci.yml|.github/workflows/deploy-production.yml|docker-compose*.yml|Dockerfile*|*/Dockerfile*|deploy/*.sh)
                     deploy_required="true"
                     ;;
                   .github/*|.github/workflows/*|docs/*|docs/**/*|tests/*|tests/**/*|deploy/RELEASE_CHECKLIST.md)
@@ -93,6 +93,49 @@ jobs:
         id: scope
         run: bash scripts/check-pr-backend-gate.sh --classify-only
 
+  python-dependency-audit:
+    name: Python dependency audit
+    needs: [classify]
+    if: needs.classify.outputs.static_terms_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install uv==0.11.29
+
+      - name: Audit locked production Python dependencies
+        run: bash scripts/check-python-dependency-audit.sh
+
+  production-python-image-smoke:
+    name: Python 3.14 Alpine production image smoke
+    needs: [classify, backend-scope]
+    if: github.event_name == 'pull_request' && needs.classify.outputs.static_terms_only != 'true' && needs['backend-scope'].outputs.requires_full_backend == '1'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python for pinned uvx
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Install pinned uv
+        run: python -m pip install uv==0.11.29
+
+      - name: Build and verify Python 3.14 Alpine production images
+        run: bash scripts/production-python-extras-smoke.sh
+
   backend-targeted:
     needs: [classify, backend-scope]
     if: needs.classify.outputs.static_terms_only != 'true' && github.event_name == 'pull_request' && needs['backend-scope'].outputs.requires_full_backend != '1'
@@ -114,9 +157,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "pnpm"
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install uv
         run: python -m pip install --upgrade uv
@@ -148,9 +191,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "pnpm"
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install uv
         run: python -m pip install --upgrade uv
@@ -192,9 +235,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "pnpm"
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install uv
         run: python -m pip install --upgrade uv
@@ -252,29 +295,97 @@ jobs:
             artifacts/pytest-files-shard-${{ matrix.shard }}.txt
           if-no-files-found: ignore
 
+  backend-postgres-cutover:
+    name: PostgreSQL 16 encryption cutover regression
+    needs: [classify, backend-scope]
+    if: needs.classify.outputs.static_terms_only != 'true' && needs['backend-scope'].outputs.requires_full_backend == '1'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned uv
+        run: python -m pip install uv==0.11.29
+
+      - name: Bootstrap backend test environment
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e '.[dev]'
+
+      - name: Verify 0058-to-0068 cutover on PostgreSQL 16
+        env:
+          NPCINK_CLOUD_P1_E06_POSTGRES_ADMIN_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres
+        run: >-
+          .venv/bin/python -m pytest -q
+          tests/integration/test_runtime_data_encryption_0058_to_0068.py
+
   backend:
     name: backend
-    needs: [classify, backend-scope, backend-targeted, backend-static, backend-pytest]
+    needs: [classify, backend-scope, python-dependency-audit, production-python-image-smoke, backend-targeted, backend-static, backend-pytest, backend-postgres-cutover]
     if: always() && needs.classify.outputs.static_terms_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Verify backend gate result
         env:
           BACKEND_SCOPE_RESULT: ${{ needs['backend-scope'].result }}
+          PYTHON_DEPENDENCY_AUDIT_RESULT: ${{ needs['python-dependency-audit'].result }}
+          PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT: ${{ needs['production-python-image-smoke'].result }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           BACKEND_TARGETED_RESULT: ${{ needs['backend-targeted'].result }}
           BACKEND_STATIC_RESULT: ${{ needs['backend-static'].result }}
           BACKEND_PYTEST_RESULT: ${{ needs['backend-pytest'].result }}
+          BACKEND_POSTGRES_CUTOVER_RESULT: ${{ needs['backend-postgres-cutover'].result }}
           REQUIRES_FULL_BACKEND: ${{ needs['backend-scope'].outputs.requires_full_backend }}
         run: |
           set -euo pipefail
           echo "scope=${BACKEND_SCOPE_RESULT}"
+          echo "python_dependency_audit=${PYTHON_DEPENDENCY_AUDIT_RESULT}"
+          echo "production_python_image_smoke=${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}"
           echo "targeted=${BACKEND_TARGETED_RESULT}"
           echo "static=${BACKEND_STATIC_RESULT}"
           echo "pytest=${BACKEND_PYTEST_RESULT}"
+          echo "postgres_cutover=${BACKEND_POSTGRES_CUTOVER_RESULT}"
           echo "requires_full_backend=${REQUIRES_FULL_BACKEND}"
 
           if [ "${BACKEND_SCOPE_RESULT}" != "success" ]; then
             echo "backend scope classification did not pass" >&2
+            exit 1
+          fi
+
+          if [ "${PYTHON_DEPENDENCY_AUDIT_RESULT}" != "success" ]; then
+            echo "python dependency audit did not pass" >&2
+            exit 1
+          fi
+
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ "${REQUIRES_FULL_BACKEND}" = "1" ]; then
+            if [ "${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}" != "success" ]; then
+              echo "Python 3.14 Alpine production image smoke did not pass" >&2
+              exit 1
+            fi
+          elif [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            if [ "${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}" != "skipped" ]; then
+              echo "Python 3.14 Alpine production image smoke should be skipped for a targeted PR" >&2
+              exit 1
+            fi
+          elif [ "${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}" != "skipped" ] && [ "${PRODUCTION_PYTHON_IMAGE_SMOKE_RESULT}" != "success" ]; then
+            echo "Python 3.14 Alpine production image smoke ended unexpectedly" >&2
             exit 1
           fi
 
@@ -287,7 +398,15 @@ jobs:
               echo "backend pytest shards did not pass" >&2
               exit 1
             fi
+            if [ "${BACKEND_POSTGRES_CUTOVER_RESULT}" != "success" ]; then
+              echo "PostgreSQL 16 encryption cutover regression did not pass" >&2
+              exit 1
+            fi
           else
+            if [ "${BACKEND_POSTGRES_CUTOVER_RESULT}" != "skipped" ]; then
+              echo "PostgreSQL 16 encryption cutover regression should be skipped for a targeted gate" >&2
+              exit 1
+            fi
             if [ "${BACKEND_TARGETED_RESULT}" != "success" ]; then
               echo "targeted backend gate did not pass" >&2
               exit 1
@@ -298,9 +417,6 @@ jobs:
     needs: [classify]
     if: needs.classify.outputs.static_terms_only != 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -311,102 +427,21 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "pnpm"
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --filter frontend...
 
       - name: Lint
-        run: pnpm run lint
+        run: pnpm --dir frontend run lint
 
       - name: Type Check
-        run: pnpm run type-check
+        run: pnpm --dir frontend run type-check
 
       - name: Frontend Contracts
-        run: pnpm run test:contracts
-
-  deploy-production:
-    name: Deploy to cloud.npc.ink
-    needs: [classify, backend, frontend, static-terms]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/production' && needs.classify.outputs.deploy_required == 'true' && ((needs.classify.outputs.static_terms_only == 'true' && needs['static-terms'].result == 'success') || (needs.classify.outputs.static_terms_only != 'true' && needs.backend.result == 'success' && needs.frontend.result == 'success'))
-    runs-on: ubuntu-latest
-    environment: production
-    concurrency:
-      group: production-deploy
-      cancel-in-progress: false
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup pnpm
-        if: needs.classify.outputs.static_terms_only != 'true'
-        uses: pnpm/action-setup@v6
-
-      - name: Setup Node
-        if: needs.classify.outputs.static_terms_only != 'true'
-        uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: "pnpm"
-          cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Setup Docker Buildx
-        if: needs.classify.outputs.static_terms_only != 'true'
-        uses: docker/setup-buildx-action@v4
-
-      - name: Install SSH key
-        env:
-          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
-          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
-        run: |
-          set -euo pipefail
-          test -n "${PROD_SSH_KEY}"
-          test -n "${PROD_SSH_HOST}"
-          mkdir -p ~/.ssh
-          printf '%s\n' "${PROD_SSH_KEY}" > ~/.ssh/npcink_prod_deploy_key
-          chmod 600 ~/.ssh/npcink_prod_deploy_key
-          ssh-keyscan -p "${PROD_SSH_PORT}" -H "${PROD_SSH_HOST}" >> ~/.ssh/known_hosts
-
-      - name: Deploy
-        if: needs.classify.outputs.static_terms_only != 'true'
-        env:
-          NPCINK_CLOUD_DEPLOY_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          NPCINK_CLOUD_DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER || 'deploy' }}
-          NPCINK_CLOUD_DEPLOY_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
-          NPCINK_CLOUD_DEPLOY_IDENTITY_FILE: /home/runner/.ssh/npcink_prod_deploy_key
-          NPCINK_CLOUD_DEPLOY_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
-          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
-          NPCINK_CLOUD_REMOTE_COMPOSE_FILE: docker-compose.runtime.yml
-          NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: ${{ vars.PROD_INCLUDE_EXTERNAL_IMAGES || '0' }}
-          NPCINK_CLOUD_REFRESH_PROVIDERS: "1"
-          NPCINK_CLOUD_WITH_OPERATIONAL_READY: "1"
-        run: |
-          set -euo pipefail
-          bash deploy/deploy-to-ssh-host.sh \
-            --skip-seed \
-            --skip-smoke \
-            --refresh-providers \
-            --with-operational-ready \
-            --remote-compose-file docker-compose.runtime.yml
-
-      - name: Deploy static terms
-        if: needs.classify.outputs.static_terms_only == 'true'
-        env:
-          NPCINK_CLOUD_DEPLOY_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          NPCINK_CLOUD_DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER || 'deploy' }}
-          NPCINK_CLOUD_DEPLOY_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
-          NPCINK_CLOUD_DEPLOY_IDENTITY_FILE: /home/runner/.ssh/npcink_prod_deploy_key
-          NPCINK_CLOUD_DEPLOY_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
-          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
-        run: |
-          set -euo pipefail
-          bash deploy/deploy-static-terms-to-ssh-host.sh
+        run: pnpm --dir frontend run test:contracts
 
   static-terms:
     needs: [classify]
@@ -426,56 +461,6 @@ jobs:
           test -f site/terms/styles.css
           ! find site/terms -name '.DS_Store' -print -quit | grep -q .
 
-  post-production-smoke:
-    name: Post-production smoke
-    needs: [classify, deploy-production]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/production' && needs.classify.outputs.deploy_required == 'true' && needs.classify.outputs.static_terms_only != 'true' && needs['deploy-production'].result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Small-customer preflight
-        env:
-          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
-        run: |
-          bash deploy/small-customer-trial-preflight.sh \
-            --base-url "${NPCINK_CLOUD_BASE_URL}" \
-            --require-alipay-enabled
-
-      - name: Optional formal release smoke
-        env:
-          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
-          NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${{ secrets.NPCINK_CLOUD_INTERNAL_AUTH_TOKEN }}
-          NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${{ secrets.NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN }}
-          NPCINK_CLOUD_RELEASE_MEMBER_EMAIL: ${{ secrets.NPCINK_CLOUD_RELEASE_MEMBER_EMAIL }}
-          NPCINK_CLOUD_PORTAL_LOGIN_CODE: ${{ secrets.NPCINK_CLOUD_PORTAL_LOGIN_CODE }}
-          NPCINK_CLOUD_RELEASE_SITE_ID: ${{ secrets.NPCINK_CLOUD_RELEASE_SITE_ID }}
-          NPCINK_CLOUD_RELEASE_KEY_ID: ${{ secrets.NPCINK_CLOUD_RELEASE_KEY_ID }}
-          NPCINK_CLOUD_RELEASE_KEY_SECRET: ${{ secrets.NPCINK_CLOUD_RELEASE_KEY_SECRET }}
-        run: |
-          missing=0
-          for key in \
-            NPCINK_CLOUD_INTERNAL_AUTH_TOKEN \
-            NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN \
-            NPCINK_CLOUD_RELEASE_MEMBER_EMAIL \
-            NPCINK_CLOUD_PORTAL_LOGIN_CODE \
-            NPCINK_CLOUD_RELEASE_SITE_ID \
-            NPCINK_CLOUD_RELEASE_KEY_ID \
-            NPCINK_CLOUD_RELEASE_KEY_SECRET
-          do
-            if [ -z "${!key:-}" ]; then
-              missing=1
-            fi
-          done
-          if [ "${missing}" = "1" ]; then
-            echo "## Formal Release Smoke" >> "${GITHUB_STEP_SUMMARY}"
-            echo "" >> "${GITHUB_STEP_SUMMARY}"
-            echo "Skipped because one or more formal release smoke secrets are not configured." >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
-          bash deploy/release-smoke.sh --base-url "${NPCINK_CLOUD_BASE_URL}"
-
   ci-observability:
     name: CI observability
     needs:
@@ -483,9 +468,7 @@ jobs:
       - classify
       - backend
       - frontend
-      - deploy-production
       - static-terms
-      - post-production-smoke
     if: always()
     runs-on: ubuntu-latest
     permissions:

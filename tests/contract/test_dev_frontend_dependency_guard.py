@@ -12,8 +12,8 @@ def test_dev_frontend_dependencies_are_container_owned() -> None:
     compose_text = (_repo_root() / "docker-compose.dev.yml").read_text()
 
     assert "./node_modules/.pnpm:/node_modules/.pnpm" not in compose_text
-    assert "cloud-frontend-node-modules-dev:/app/node_modules" in compose_text
-    assert "cloud-frontend-next-cache-dev:/app/.next" in compose_text
+    assert "cloud-frontend-node-modules-dev:/app/frontend/node_modules" in compose_text
+    assert "cloud-frontend-next-cache-dev:/app/frontend/.next" in compose_text
     assert "cloud-frontend-node-modules-dev:" in compose_text
     assert "cloud-frontend-next-cache-dev:" in compose_text
 

@@ -14,9 +14,15 @@ const proxySource = readFileSync(proxyPath, 'utf8');
 
 assert.match(
   pageSource,
-  /fetch\(`\/api\/admin\/portal-users\?\$\{buildQuery\(filters, offset\)\}`/,
+  /createApiClient[\s\S]*`\/api\/admin\/portal-users\?\$\{requestKey\}`/,
   'portal users page must load users through the admin proxy'
 );
+
+assert.match(pageSource, /id="portal-user-inspector"/, 'portal users page must use a persistent user inspector');
+assert.match(pageSource, /data-ui="portal-user-directory-item"/, 'portal users must render as a responsive directory list');
+assert.doesNotMatch(pageSource, /<table|overflow-x-auto/, 'portal users must not depend on a wide horizontal table');
+assert.match(pageSource, /activeRequestKeyRef[\s\S]*requestSequenceRef[\s\S]*hasLoadedRef/, 'portal user reads must dedupe and reject stale responses');
+assert.match(pageSource, /searchParams\.get\('focus'\)/, 'the inspected user must persist in the URL');
 
 assert.match(
   pageSource,
@@ -74,6 +80,18 @@ assert.match(
 
 assert.match(
   pageSource,
+  /<BackofficeIdentifier value=\{selectedUser\.principal_id\} full \/>/,
+  'portal users inspector must display the full principal ID'
+);
+
+assert.match(
+  pageSource,
+  /navigator\.clipboard\.writeText\(principalId\)/,
+  'portal users inspector must let operators copy the principal ID'
+);
+
+assert.match(
+  pageSource,
   /QQ/,
   'portal users page must display QQ binding state'
 );
@@ -91,6 +109,12 @@ assert.doesNotMatch(
 );
 
 assert.match(
+  layoutSource,
+  /pathname\.startsWith\('\/admin\/portal-users'\)[\s\S]*admin\.nav_portal_users/,
+  'portal users must still have an accurate secondary-route breadcrumb label'
+);
+
+assert.match(
   accountsSource,
   /href="\/admin\/portal-users"[\s\S]*admin\.accounts\.open_portal_users_action/,
   'accounts page must expose portal users as a secondary entry'
@@ -98,14 +122,14 @@ assert.match(
 
 assert.match(
   proxySource,
-  /\^portal-users\\\/\[\^\/\]\+\\\/disable\$/,
-  'admin proxy must route portal user disable writes to the admin backend namespace'
+  /methods: \['POST'\],[\s\S]*?pattern: \/\^portal-users\\\/\(\?:batch-disable\|\[\^\/\]\+\\\/disable\)\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_accounts'/,
+  'admin proxy must explicitly allowlist portal user disable writes with account-management authority'
 );
 
 assert.match(
   proxySource,
-  /normalized === 'portal-users\/batch-disable'/,
-  'admin proxy must route portal user batch disable writes to the admin backend namespace'
+  /pattern: \/\^portal-users\\\/\(\?:batch-disable\|\[\^\/\]\+\\\/disable\)\$\//,
+  'admin proxy must keep batch disable inside the same bounded portal-user write policy'
 );
 
 assert.doesNotMatch(

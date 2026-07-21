@@ -13,7 +13,13 @@ async function fulfillJson(route: Route, data: unknown, headers: Record<string, 
     status: 200,
     contentType: 'application/json',
     headers,
-    body: JSON.stringify({ status: 'ok', data, revision: 'm6' }),
+    body: JSON.stringify({
+      status: 'ok',
+      error_code: '',
+      message: 'ok',
+      data,
+      meta: { trace_id: 'portal-login-e2e', revision: 'm6' },
+    }),
   });
 }
 
@@ -25,48 +31,17 @@ async function fulfillError(route: Route, status: number, errorCode: string) {
       status: 'error',
       error_code: errorCode,
       message: errorCode,
-      revision: 'm6',
+      data: {},
+      meta: { trace_id: 'portal-login-e2e', revision: 'm6' },
     }),
   });
 }
 
 function buildEmptyPortalSession() {
   return {
-    principal_id: 'prn_portal_login_e2e',
     email: LOGIN_EMAIL,
-    site_id: '',
-    account_id: 'acct_portal_login_e2e',
-    identity_type: 'user',
-    role: 'user',
-    allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit'],
     sites: [],
-    accounts: [
-      {
-        account_id: 'acct_portal_login_e2e',
-        name: 'Portal Login E2E',
-        status: 'active',
-        site_admin_ref: 'user:portal-login-e2e@example.com',
-        role: 'user',
-        identity_type: 'user',
-        allowed_actions: ['view_sites', 'view_usage', 'view_billing', 'view_audit'],
-        site_count: 0,
-        sites: [],
-      },
-    ],
-    current_subscription: {
-      status: 'active',
-      subscription_id: 'sub_portal_login_e2e',
-      plan_id: 'free',
-      plan_version_id: 'free_v1',
-      package_alias: 'Free',
-      current_period_start: '2026-07-01T00:00:00Z',
-      current_period_end: '2026-08-01T00:00:00Z',
-    },
-    entitlements: {
-      requests_limit: 300,
-      tokens_limit: 100000,
-      features: ['runtime'],
-    },
+    selected_context: null,
     auth_mode: 'jwt',
     session: {
       state: 'active',
@@ -157,7 +132,6 @@ async function installLoginFlowMocks(
 
     if (pathname === '/auth/identity-providers') {
       await fulfillJson(route, {
-        principal_id: 'prn_portal_login_e2e',
         providers: [
           {
             provider: 'qq',
@@ -166,6 +140,19 @@ async function installLoginFlowMocks(
             bound: false,
             binding: null,
             bind_start_path: '/portal/v1/auth/qq/start',
+          },
+        ],
+      });
+      return;
+    }
+
+    if (pathname === '/addon-connection-accounts') {
+      await fulfillJson(route, {
+        items: [
+          {
+            account_id: 'acct_portal_login_e2e',
+            name: 'Portal Login E2E',
+            site_count: 0,
           },
         ],
       });
@@ -248,7 +235,7 @@ test('addon binding survives login and returns the complete payload to WordPress
   const calls = await installLoginFlowMocks(page);
   const returnUrl =
     'https://demo.example.com/wp-admin/admin-post.php?action=npcink_cloud_addon_complete_auth&state=addon-state-001';
-  const bindingPath = `/portal/sites?${new URLSearchParams({
+  const bindingPath = `/portal?${new URLSearchParams({
     connect: 'wordpress-addon',
     site_url: 'https://demo.example.com',
     site_name: 'Demo Site',
@@ -266,11 +253,20 @@ test('addon binding survives login and returns the complete payload to WordPress
 
   await expect(page).toHaveURL(`${BASE_URL}${bindingPath}`);
   await expect(page.getByRole('heading', { name: /Finish WordPress connection|完成站点绑定/i }).first()).toBeVisible();
-  await page.getByRole('button', { name: /Finish connection|完成绑定/i }).click();
+  const accountSelect = page.getByLabel(/Customer account|客户账号/i);
+  const submitButton = page.getByRole('button', { name: /Finish connection|完成绑定/i });
+  await expect(accountSelect).toHaveValue('');
+  await expect(accountSelect.locator('option')).toHaveCount(2);
+  await expect(submitButton).toBeDisabled();
+  expect(calls.addonConnectionPayload()).toBeNull();
+
+  await accountSelect.selectOption('acct_portal_login_e2e');
+  await expect(submitButton).toBeEnabled();
+  await submitButton.click();
   await expect(page).toHaveURL(/\/wordpress-addon-return\?code=exchange-code&state=addon-state-001/);
   expect(calls.addonConnectionPayload()).toEqual({
     account_id: 'acct_portal_login_e2e',
-    wordpress_url: 'https://demo.example.com',
+    site_url: 'https://demo.example.com',
     site_name: 'Demo Site',
     return_url: returnUrl,
     state: 'addon-state-001',

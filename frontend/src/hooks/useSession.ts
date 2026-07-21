@@ -20,74 +20,6 @@ export interface UseSessionReturn extends SessionState {
 
 const SessionContext = createContext<UseSessionReturn | undefined>(undefined);
 
-type RawSessionSite = {
-  site?: {
-    site_id?: string;
-    account_id?: string;
-    name?: string;
-    site_name?: string;
-    status?: string;
-    created_at?: string;
-    provisioned_at?: string;
-    plan_name?: string;
-    wordpress_url?: string;
-    metadata?: Record<string, unknown>;
-  };
-};
-
-type RawPortalSession = Omit<PortalSession, 'sites'> & {
-  site?: RawSessionSite['site'];
-  sites?: Array<RawSessionSite | Site>;
-};
-
-function normalizeSite(raw?: RawSessionSite['site'] | Site | null): Site {
-  if (!raw) {
-    return {
-      site_id: '',
-      site_name: '',
-      account_id: '',
-      status: 'inactive',
-      created_at: '',
-    };
-  }
-
-  const site = raw as Record<string, unknown>;
-  const metadata =
-    site.metadata && typeof site.metadata === 'object'
-      ? (site.metadata as Record<string, unknown>)
-      : undefined;
-  return {
-    site_id: String(site.site_id || ''),
-    site_name: String(site.site_name || site.name || site.site_id || ''),
-    account_id: String(site.account_id || ''),
-    status: (site.status as Site['status']) || 'inactive',
-    created_at: String(site.created_at || site.provisioned_at || ''),
-    plan_name: String(site.plan_name || ''),
-    wordpress_url: String(site.wordpress_url || metadata?.wordpress_url || ''),
-    metadata,
-  };
-}
-
-function normalizePortalSession(raw: RawPortalSession): PortalSession {
-  const nestedSites = Array.isArray(raw.sites)
-    ? raw.sites
-        .map((entry) => {
-          const candidate = entry as RawSessionSite & Site;
-          return normalizeSite(candidate.site || candidate);
-        })
-        .filter((site) => Boolean(site.site_id))
-    : [];
-  const currentSite = raw.site ? normalizeSite(raw.site) : null;
-  const sites = currentSite && !nestedSites.some((site) => site.site_id === currentSite.site_id)
-    ? [currentSite, ...nestedSites]
-    : nestedSites;
-
-  return {
-    ...raw,
-    sites,
-  };
-}
-
 /**
  * Session 管理 Hook
  * 处理 Portal 认证、Session 刷新、站点选择等
@@ -107,7 +39,7 @@ function useSessionController(): UseSessionReturn {
     try {
       const response = await portalClient.getSession();
       setState({
-        session: normalizePortalSession(response.data as RawPortalSession),
+        session: response.data,
         isLoading: false,
         isAuthenticated: true,
         error: null,
@@ -177,7 +109,7 @@ function useSessionController(): UseSessionReturn {
       const response = await portalClient.selectSite(siteId);
       setState((prev) => ({
         ...prev,
-        session: normalizePortalSession(response.data as RawPortalSession),
+        session: response.data,
       }));
     } catch (error) {
       throw error instanceof Error ? error : new Error('Failed to select site');
@@ -225,12 +157,7 @@ export function useSession(): UseSessionReturn {
  */
 export function useSelectedSite(): Site | null {
   const { session } = useSession();
-  if (!session) return null;
-  
-  const selectedSiteId = session.site_id;
-  if (!selectedSiteId) return session.sites[0] || null;
-  
-  return session.sites.find((s) => s.site_id === selectedSiteId) || null;
+  return session?.selected_context?.site || null;
 }
 
 /**

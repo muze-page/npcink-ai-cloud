@@ -16,4 +16,15 @@ assert.doesNotMatch(
   'ThemeToggle must not bind mounted state to the disabled attribute because it causes hydration mismatches after dev refresh'
 );
 
+assert.match(
+  source,
+  /aria-label=\{t\('theme\.toggle'/,
+  'ThemeToggle must keep one stable accessible name across server and client renders'
+);
+assert.doesNotMatch(
+  source,
+  /displayIsDark|\{displayIsDark \?/,
+  'ThemeToggle must not branch its rendered icon or label on client-only theme state'
+);
+
 console.log('theme_toggle_hydration_contract: ok');

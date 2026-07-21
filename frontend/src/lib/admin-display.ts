@@ -36,7 +36,6 @@ const ADMIN_ALLOWED_ACTION_LABELS: Record<string, string> = {
   view_billing: 'admin.allowed_action_view_billing',
   view_audit: 'admin.allowed_action_view_audit',
   provision_sites: 'admin.allowed_action_provision_sites',
-  manage_site_keys: 'admin.allowed_action_manage_site_keys',
   remove_sites: 'admin.allowed_action_remove_sites',
 };
 

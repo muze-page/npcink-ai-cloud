@@ -26,13 +26,14 @@ Removed surfaces:
 
 ## Kept After Consumer Audit
 
-### Audio generation and audio assets
+### Audio generation kept; audio assets superseded
 
-Keep. `npcink-workflow-toolbox` submits bounded article audio candidate
-requests, and `npcink-cloud-addon` owns the corresponding
-`audio_generation_request.v1` transport seam. The Cloud audio asset endpoints
-materialize and serve the resulting runtime artifacts. This is an active
-Hosted Runtime path, not an unused admin feature.
+The original audit kept both surfaces. P3-B4B2 supersedes its audio-asset
+conclusion: `npcink-workflow-toolbox` and `npcink-cloud-addon` still use the
+bounded `audio_generation_request.v1` hosted-runtime path, but Cloud no longer
+provides permanent audio-asset promote/playback endpoints. Generated audio is a
+short-lived `MediaArtifact` delivered through the unified signed pull; local
+CMS review, import, playback ownership, and canonical audit remain local.
 
 ### Site Knowledge comments
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import re
 from functools import lru_cache
 from urllib.parse import urlsplit
 
@@ -8,8 +11,31 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
 
+_ENCRYPTION_KEY_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_CANONICAL_32_BYTE_ROOT_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}=")
+
+
+def _validate_encryption_root(field_name: str, raw_value: str | None) -> None:
+    value = str(raw_value or "")
+    if value != value.strip() or _CANONICAL_32_BYTE_ROOT_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            f"{field_name} must be canonical URL-safe Base64 encoding of exactly 32 bytes"
+        )
+    try:
+        decoded = base64.b64decode(value.encode("ascii"), altchars=b"-_", validate=True)
+    except (UnicodeEncodeError, binascii.Error, ValueError) as error:
+        raise ValueError(
+            f"{field_name} must be canonical URL-safe Base64 encoding of exactly 32 bytes"
+        ) from error
+    if len(decoded) != 32 or base64.urlsafe_b64encode(decoded).decode("ascii") != value:
+        raise ValueError(
+            f"{field_name} must be canonical URL-safe Base64 encoding of exactly 32 bytes"
+        )
+
 
 class Settings(BaseSettings):
+    artifact_store_root: str = Field(default="/tmp/npcink-ai-cloud-artifacts")
+    artifact_store_chunk_bytes: int = Field(default=64 * 1024, ge=4096, le=1024 * 1024)
     model_config = SettingsConfigDict(
         env_prefix="NPCINK_CLOUD_",
         env_file=(".env", ".env.local"),
@@ -45,12 +71,25 @@ class Settings(BaseSettings):
     latency_probe_interval_seconds: int = Field(default=900)
     alert_provider_degradation_interval_seconds: int = Field(default=900)
     provider_health_scan_interval_seconds: int = Field(default=900)
-    media_derivative_max_body_bytes: int = Field(default=51 * 1024 * 1024)
+    media_upload_max_body_bytes: int = Field(
+        default=51 * 1024 * 1024,
+        ge=1,
+        le=51 * 1024 * 1024,
+    )
     media_derivative_batch_default_chunk_size: int = Field(default=10)
     media_derivative_batch_max_chunk_size: int = Field(default=20)
     media_derivative_site_queued_limit: int = Field(default=100)
     media_derivative_site_running_limit: int = Field(default=2)
     artifact_cleanup_interval_seconds: int = Field(default=3600)
+    artifact_reconciliation_interval_seconds: int = Field(default=3600, ge=60)
+    artifact_reconciliation_safety_window_seconds: int = Field(default=86400, ge=3600)
+    artifact_reconciliation_page_size: int = Field(default=200, ge=1, le=500)
+    artifact_reconciliation_lease_seconds: int = Field(default=300, ge=300, le=3600)
+    artifact_orphan_cleanup_enabled: bool = Field(default=False)
+    artifact_orphan_cleanup_batch_size: int = Field(default=25, ge=1, le=100)
+    artifact_orphan_claim_lease_seconds: int = Field(default=300, ge=30, le=3600)
+    artifact_orphan_retry_base_seconds: int = Field(default=30, ge=1, le=3600)
+    artifact_orphan_retry_max_seconds: int = Field(default=3600, ge=1, le=86400)
     router_performance_worker_window_hours: int = Field(default=1)
     router_performance_worker_site_limit: int = Field(default=100)
     router_diagnostics_worker_recent_minutes: int = Field(default=60)
@@ -68,6 +107,10 @@ class Settings(BaseSettings):
     public_post_max_requests_per_window: int = Field(default=120)
     public_post_max_requests_per_key_window: int = Field(default=90)
     public_post_max_requests_per_ip_window: int = Field(default=150)
+    public_pull_rate_limit_window_seconds: int = Field(default=60)
+    public_pull_max_requests_per_window: int = Field(default=120)
+    public_pull_max_requests_per_key_window: int = Field(default=90)
+    public_pull_max_requests_per_ip_window: int = Field(default=150)
     public_guard_cooldown_window_seconds: int = Field(default=1800)
     public_guard_max_reject_events_per_site_window: int = Field(default=20)
     public_guard_max_reject_events_per_key_window: int = Field(default=16)
@@ -82,6 +125,9 @@ class Settings(BaseSettings):
     admin_bootstrap_token: str | None = Field(default=None)
     admin_session_secret: str | None = Field(default=None)
     service_settings_secret: str | None = Field(default=None)
+    service_settings_encryption_key_id: str | None = Field(default=None)
+    runtime_data_encryption_secret: str | None = Field(default=None)
+    runtime_data_encryption_key_id: str | None = Field(default=None)
     debug_local_origin_allowlist: str = Field(default="")
     browser_origin_allowlist: str = Field(default="")
     trusted_host_allowlist: str = Field(default="")
@@ -96,24 +142,37 @@ class Settings(BaseSettings):
         validation_alias="NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE",
     )
     portal_jwt_secret: str | None = Field(default=None)
-    portal_jwt_algorithm: str = Field(default="HS256")
-    portal_jwt_issuer: str | None = Field(default=None)
-    portal_jwt_audience: str | None = Field(default=None)
+    portal_jwt_issuer: str | None = Field(default="npcink-ai-cloud")
+    portal_jwt_audience: str | None = Field(default="npcink-ai-cloud-portal")
     portal_session_ttl_seconds: int = Field(default=8 * 60 * 60)
     portal_remember_me_session_ttl_seconds: int = Field(default=7 * 24 * 60 * 60)
     portal_login_code_ttl_seconds: int = Field(default=10 * 60)
     portal_login_code_max_attempts: int = Field(default=5)
     portal_oauth_state_ttl_seconds: int = Field(default=10 * 60)
+    portal_idempotency_ttl_seconds: int = Field(
+        default=24 * 60 * 60,
+        ge=5 * 60,
+        le=30 * 24 * 60 * 60,
+    )
+    portal_idempotency_processing_lease_seconds: int = Field(
+        default=5 * 60,
+        ge=30,
+        le=60 * 60,
+    )
+    portal_idempotency_max_response_bytes: int = Field(
+        default=256 * 1024,
+        ge=1024,
+        le=1024 * 1024,
+    )
     otel_service_name: str = Field(default="npcink-ai-cloud")
     otel_exporter_otlp_endpoint: str | None = Field(default=None)
-    otel_trace_sink_otlp_endpoint: str | None = Field(default=None)
     otel_trace_query_url: str | None = Field(default=None)
     deployment_region: str = Field(default="unspecified")
     audit_retention_days_default: int = Field(default=90)
     openai_base_url: str = Field(default="https://api.openai.com/v1")
     openai_api_key: str | None = Field(default=None)
     openai_organization: str | None = Field(default=None)
-    openai_timeout_seconds: float = Field(default=30.0)
+    openai_timeout_seconds: float = Field(default=60.0)
     openai_sample_catalog_profile: str = Field(default="")
     openai_provider_label: str = Field(default="")
     minimax_provider_enabled: bool = Field(default=False)
@@ -126,9 +185,6 @@ class Settings(BaseSettings):
     audio_generation_artifact_ttl_minutes: int = Field(default=60)
     audio_generation_artifact_max_bytes: int = Field(default=24 * 1024 * 1024)
     audio_generation_artifact_download_timeout_seconds: float = Field(default=20.0)
-    audio_asset_playback_url_ttl_seconds: int = Field(default=15 * 60)
-    audio_asset_playback_url_max_ttl_seconds: int = Field(default=60 * 60)
-    audio_asset_playback_token_secret: str | None = Field(default=None)
     litellm_provider_enabled: bool = Field(default=False)
     litellm_base_url: str | None = Field(default=None)
     litellm_api_key: str | None = Field(default=None)
@@ -269,6 +325,31 @@ class Settings(BaseSettings):
             return host
         return host
 
+    @staticmethod
+    def _validate_optional_http_url(field_name: str, value: object) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if any(character.isspace() or ord(character) < 32 for character in raw):
+            raise ValueError(f"{field_name} must not include whitespace or control characters")
+        try:
+            parsed = urlsplit(raw)
+            hostname = str(parsed.hostname or "").strip()
+            _port = parsed.port
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be a valid HTTP(S) URL") from exc
+        if parsed.scheme.lower() not in {"http", "https"}:
+            raise ValueError(f"{field_name} must use http or https")
+        if not parsed.netloc or not hostname or any(character.isspace() for character in hostname):
+            raise ValueError(f"{field_name} must include a valid host")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(f"{field_name} must not include userinfo")
+        if parsed.query:
+            raise ValueError(f"{field_name} must not include a query")
+        if parsed.fragment:
+            raise ValueError(f"{field_name} must not include a fragment")
+        return raw
+
     def production_like_environment(self) -> bool:
         return str(self.environment or "").strip().lower() in {"production", "prod", "staging"}
 
@@ -281,8 +362,7 @@ class Settings(BaseSettings):
 
     def trusted_hosts(self) -> set[str]:
         hosts = {
-            self._normalize_host(item)
-            for item in str(self.trusted_host_allowlist or "").split(",")
+            self._normalize_host(item) for item in str(self.trusted_host_allowlist or "").split(",")
         }
         hosts = {host for host in hosts if host}
         environment = str(self.environment or "").strip().lower()
@@ -308,12 +388,21 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> Settings:
+        self.otel_exporter_otlp_endpoint = self._validate_optional_http_url(
+            "otel_exporter_otlp_endpoint",
+            self.otel_exporter_otlp_endpoint,
+        )
+        self.otel_trace_query_url = self._validate_optional_http_url(
+            "otel_trace_query_url",
+            self.otel_trace_query_url,
+        )
         production_like = self.production_like_environment()
         secret_fields = {
             "internal_auth_token": self.internal_auth_token,
             "admin_bootstrap_token": self.admin_bootstrap_token,
             "admin_session_secret": self.admin_session_secret,
             "service_settings_secret": self.service_settings_secret,
+            "runtime_data_encryption_secret": self.runtime_data_encryption_secret,
             "portal_jwt_secret": self.portal_jwt_secret,
         }
         for field_name, raw_value in secret_fields.items():
@@ -333,6 +422,41 @@ class Settings(BaseSettings):
         if production_like and not str(self.service_settings_secret or "").strip():
             raise ValueError(
                 "service_settings_secret is required outside development/test environments"
+            )
+        service_settings_key_id = str(self.service_settings_encryption_key_id or "")
+        if service_settings_key_id and (
+            service_settings_key_id != service_settings_key_id.strip()
+            or _ENCRYPTION_KEY_ID_PATTERN.fullmatch(service_settings_key_id) is None
+        ):
+            raise ValueError(
+                "service_settings_encryption_key_id must contain only letters, numbers, '_' or '-'"
+            )
+        if production_like and not service_settings_key_id:
+            raise ValueError(
+                "service_settings_encryption_key_id is required outside "
+                "development/test environments"
+            )
+        if production_like and not str(self.runtime_data_encryption_secret or "").strip():
+            raise ValueError(
+                "runtime_data_encryption_secret is required outside development/test environments"
+            )
+        runtime_data_key_id = str(self.runtime_data_encryption_key_id or "")
+        if runtime_data_key_id and (
+            runtime_data_key_id != runtime_data_key_id.strip()
+            or _ENCRYPTION_KEY_ID_PATTERN.fullmatch(runtime_data_key_id) is None
+        ):
+            raise ValueError(
+                "runtime_data_encryption_key_id must contain only letters, numbers, '_' or '-'"
+            )
+        if production_like and not runtime_data_key_id:
+            raise ValueError(
+                "runtime_data_encryption_key_id is required outside development/test environments"
+            )
+        if production_like:
+            _validate_encryption_root("service_settings_secret", self.service_settings_secret)
+            _validate_encryption_root(
+                "runtime_data_encryption_secret",
+                self.runtime_data_encryption_secret,
             )
         if production_like and not str(self.internal_auth_token or "").strip():
             raise ValueError(
@@ -354,6 +478,35 @@ class Settings(BaseSettings):
             )
         if production_like and not str(self.portal_jwt_secret or "").strip():
             raise ValueError("portal_jwt_secret is required outside development/test environments")
+        if production_like and not str(self.portal_jwt_issuer or "").strip():
+            raise ValueError("portal_jwt_issuer must not be blank")
+        if production_like and not str(self.portal_jwt_audience or "").strip():
+            raise ValueError("portal_jwt_audience must not be blank")
+        if production_like:
+            configured_secret_domains = {
+                field_name: str(raw_value or "").strip()
+                for field_name, raw_value in secret_fields.items()
+                if str(raw_value or "").strip()
+            }
+            duplicate_domains = sorted(
+                (
+                    first_name,
+                    second_name,
+                )
+                for first_index, (first_name, first_value) in enumerate(
+                    configured_secret_domains.items()
+                )
+                for second_name, second_value in list(configured_secret_domains.items())[
+                    first_index + 1 :
+                ]
+                if first_value == second_value
+            )
+            if duplicate_domains:
+                first_name, second_name = duplicate_domains[0]
+                raise ValueError(
+                    f"{first_name} must differ from {second_name} outside "
+                    "development/test environments"
+                )
         if production_like and not self.explicit_browser_origins():
             raise ValueError(
                 "browser_origin_allowlist is required outside development/test environments"
@@ -364,6 +517,11 @@ class Settings(BaseSettings):
             )
         if self.portal_oauth_state_ttl_seconds < 60:
             raise ValueError("portal_oauth_state_ttl_seconds must be at least 60")
+        if self.portal_idempotency_ttl_seconds <= self.portal_idempotency_processing_lease_seconds:
+            raise ValueError(
+                "portal_idempotency_ttl_seconds must exceed "
+                "portal_idempotency_processing_lease_seconds"
+            )
         if self.ops_cadence_poll_seconds < 5:
             raise ValueError("ops_cadence_poll_seconds must be at least 5")
         if self.runtime_callback_worker_poll_seconds < 1:
@@ -378,6 +536,11 @@ class Settings(BaseSettings):
             raise ValueError("plugin_observability_cleanup_interval_seconds must be at least 60")
         if self.artifact_cleanup_interval_seconds < 60:
             raise ValueError("artifact_cleanup_interval_seconds must be at least 60")
+        if self.artifact_orphan_retry_max_seconds < self.artifact_orphan_retry_base_seconds:
+            raise ValueError(
+                "artifact_orphan_retry_max_seconds must not be less than "
+                "artifact_orphan_retry_base_seconds"
+            )
         if self.media_derivative_batch_default_chunk_size < 1:
             raise ValueError("media_derivative_batch_default_chunk_size must be at least 1")
         if not 1 <= self.media_derivative_batch_max_chunk_size <= 100:

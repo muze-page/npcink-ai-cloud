@@ -12,6 +12,9 @@ candidates separate while letting the local product surface expose an
 - Cloud image source runtime returns stock/reference candidates and handoff
   metadata only.
 - Cloud image generation runtime may generate image candidates.
+- Generated candidates return only `image_generation_result.v1` temporary
+  artifact references and verified media facts. Provider URL, Base64, storage
+  key, and provider wire format are not handoff fields.
 - WordPress media import, featured image assignment, insertion, and publication
   stay in local Core/plugin approval and write flows.
 - The handoff must not include provider secrets, WordPress credentials, final
@@ -57,6 +60,12 @@ Phase 2 handoff includes `prompt_prefill_plan`:
 The local UI should use this plan to build an editable prompt draft. It should
 not call `npcink-cloud/generate-image` until the user confirms the prompt.
 The Cloud image-source result must not include the raw prompt draft.
+
+After generation, the local connector uses the same-site signed artifact pull,
+verifies size and SHA-256, acknowledges the completed delivery, presents the
+image for review, and only then enters the local media-import governance path.
+The transfer follows [Cloud Media Delivery Boundary v1](cloud-media-delivery-boundary-v1.md)
+and does not imply local import or write approval.
 
 ## Phase 3: Batch
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hmac
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
 
 from fastapi import Request
 
@@ -16,6 +15,7 @@ from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
 
 @dataclass(frozen=True)
 class ResolvedAdminSession:
+    grant_id: str
     principal_id: str
     role: str
     auth_mode: str
@@ -28,26 +28,45 @@ class ResolvedAdminSession:
         identity: Mapping[str, object],
         *,
         auth_mode: str,
-        fallback_principal_id: str = "",
-        fallback_role: str = PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
     ) -> ResolvedAdminSession:
-        identity_metadata = identity.get("metadata")
-        revocable = (
-            not bool(identity_metadata.get("bootstrap"))
-            if isinstance(identity_metadata, dict)
-            else True
-        )
-        session_version_value: Any = identity.get("session_version") or 1
+        grant_id = identity.get("grant_id")
+        principal_id = identity.get("principal_id")
+        role = identity.get("role")
+        is_persisted = identity.get("is_persisted")
+        session_version = identity.get("session_version")
+        if (
+            not isinstance(grant_id, str)
+            or grant_id != grant_id.strip()
+            or not isinstance(principal_id, str)
+            or not principal_id
+            or principal_id != principal_id.strip()
+            or not isinstance(role, str)
+            or not role
+            or role != role.strip()
+            or not isinstance(is_persisted, bool)
+            or (is_persisted and not grant_id)
+            or (not is_persisted and bool(grant_id))
+            or isinstance(session_version, bool)
+            or not isinstance(session_version, int)
+            or session_version < 1
+        ):
+            raise PortalBearerTokenError(
+                401,
+                "auth.admin_session_invalid",
+                "admin session is invalid",
+            )
         return cls(
-            principal_id=str(identity.get("principal_id") or fallback_principal_id),
-            role=str(identity.get("role") or fallback_role),
+            grant_id=grant_id,
+            principal_id=principal_id,
+            role=role,
             auth_mode=auth_mode,
-            revocable=revocable,
-            session_version=int(session_version_value),
+            revocable=is_persisted,
+            session_version=session_version,
         )
 
     def as_payload(self) -> dict[str, object]:
         return {
+            "grant_id": self.grant_id,
             "principal_id": self.principal_id,
             "role": self.role,
             "auth_mode": self.auth_mode,

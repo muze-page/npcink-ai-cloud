@@ -460,6 +460,7 @@ class CommercialServiceAuditMixin:
                 totals["events"] += count
                 totals[outcome] = totals.get(outcome, 0) + count
             return {
+                "generated_at": self._serialize_datetime(self.now_factory()),
                 "totals": totals,
                 "items": items,
                 "groups": items,

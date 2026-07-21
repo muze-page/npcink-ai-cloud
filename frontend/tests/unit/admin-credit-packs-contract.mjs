@@ -6,7 +6,6 @@ import { frontendRoot } from './_paths.mjs';
 const root = frontendRoot;
 const pageSource = readFileSync(resolve(root, 'src/app/admin/credit-packs/page.tsx'), 'utf8');
 const proxySource = readFileSync(resolve(root, 'src/app/api/admin/[...path]/route.ts'), 'utf8');
-const billingSource = readFileSync(resolve(root, 'src/app/portal/billing/page.tsx'), 'utf8');
 
 assert.match(
   pageSource,
@@ -20,8 +19,8 @@ assert.match(
 );
 assert.match(
   pageSource,
-  /grid gap-4 md:grid-cols-2 2xl:grid-cols-4[\s\S]*BackofficeStackCard/,
-  'Admin credit pack page must render managed packs as a long responsive card list with four columns on wide screens'
+  /data-ui="credit-pack-directory-item"[\s\S]*id="credit-pack-inspector"[\s\S]*<Modal/,
+  'Admin credit pack page must render a read-first directory, contextual inspector, and one-pack editor'
 );
 assert.doesNotMatch(
   pageSource,
@@ -50,16 +49,6 @@ assert.doesNotMatch(
 );
 assert.match(
   proxySource,
-  /normalized === 'credit-packs'[\s\S]*\/internal\/service\/admin\/credit-packs/,
-  'Admin proxy must route credit pack writes to the admin-prefixed service endpoint'
-);
-assert.match(
-  billingSource,
-  /portal\.usage\.credit_packs_desc[\s\S]*portal\.usage\.credit_packs_period_badge/,
-  'Portal billing must show the purchased credit validity window at section level'
-);
-assert.match(
-  billingSource,
-  /portal\.package\.plus_title/,
-  'Portal billing must expose the Plus package tier'
+  /methods: \['PATCH'\],[\s\S]*?pattern: \/\^credit-packs\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_catalog'/,
+  'Admin proxy must explicitly allowlist credit pack writes in the admin namespace with catalog authority'
 );

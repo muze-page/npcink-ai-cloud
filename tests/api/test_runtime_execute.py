@@ -9,19 +9,22 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.orm import Session
 
 from app.adapters.callbacks.base import RuntimeCallbackDispatcher
 from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
 from app.adapters.providers.anthropic import AnthropicProviderAdapter
 from app.adapters.providers.base import (
+    IMAGE_GENERATION_PROVIDER_ERROR_MESSAGE,
     ProviderAdapter,
     ProviderExecutionError,
     ProviderExecutionRequest,
     ProviderExecutionResult,
+    ProviderMediaCandidate,
 )
 from app.adapters.providers.minimax import MiniMaxProviderAdapter
-from app.adapters.providers.openai import OpenAIProviderAdapter
+from app.adapters.providers.openai import SAMPLE_IMAGE_PNG, OpenAIProviderAdapter
 from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.api.main import create_app
 from app.core import security as security_module
@@ -30,9 +33,9 @@ from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     SITE_API_KEY_STATUS_REVOKED,
     AccountSubscription,
-    AudioAsset,
-    MediaDerivativeArtifact,
+    MediaArtifact,
     PlanVersion,
+    ProviderCallRecord,
     RunRecord,
     RuntimeGuardEvent,
     Site,
@@ -55,6 +58,14 @@ from app.domain.hosted_model_defaults import (
     GROK_IMAGINE_IMAGE_MODEL_ID,
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
+)
+from app.domain.media_artifacts.publication import (
+    tracked_artifact_storage_keys,
+    uncertain_artifact_storage_keys,
+)
+from app.domain.media_artifacts.store import (
+    ArtifactStoreError,
+    _LocalVolumePublicationSession,
 )
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
@@ -105,6 +116,7 @@ def _build_client(
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
+        artifact_store_root=str(tmp_path / "artifacts"),
         **(settings_overrides or {}),
     )
     return database_url, TestClient(
@@ -745,7 +757,6 @@ def test_execute_route_defaults_image_generation_to_grok_imagine(
             "prompt": "A clean product photo of a red running shoe",
             "aspect_ratio": "16:9",
             "resolution": "high",
-            "response_format": "url",
         },
         "policy": {"allow_fallback": False},
     }
@@ -771,9 +782,374 @@ def test_execute_route_defaults_image_generation_to_grok_imagine(
     assert data["model_id"] == GROK_IMAGINE_IMAGE_MODEL_ID
     assert data["execution_context"]["ability_family"] == "vision"
     assert data["execution_context"]["data_classification"] == "internal"
-    assert data["result"]["artifact_type"] == "image_generation_candidates"
-    assert data["result"]["direct_wordpress_write"] is False
-    assert data["result"]["images"][0]["mime_type"] == "image/png"
+    result = data["result"]
+    assert result["artifact_type"] == "image_generation_artifacts"
+    assert result["contract_version"] == "image_generation_result.v1"
+    assert result["operation"] == "image.generate.v1"
+    assert result["suggestion_only"] is True
+    assert result["requires_local_review"] is True
+    assert len(result["artifacts"]) == 1
+    artifact_result = result["artifacts"][0]
+    assert artifact_result["artifact_reference"] == {"artifact_id": artifact_result["artifact_id"]}
+    assert "download_url" not in artifact_result
+    assert artifact_result["status"] == "available"
+    assert artifact_result["media_kind"] == "image"
+    assert artifact_result["operation"] == "image.generate.v1"
+    assert artifact_result["content_type"] == "image/png"
+    assert artifact_result["format"] == "png"
+    assert artifact_result["width"] == 1
+    assert artifact_result["height"] == 1
+    assert artifact_result["filesize_bytes"] > 0
+    assert artifact_result["checksum"].startswith("sha256:")
+    serialized_result = json.dumps(result, sort_keys=True)
+    assert "https://" not in serialized_result
+    assert "b64_json" not in serialized_result
+    assert "provider_response_format" not in serialized_result
+    assert "storage_key" not in serialized_result
+
+    with get_session(database_url) as session:
+        persisted_run = session.get(RunRecord, data["run_id"])
+        assert persisted_run is not None
+        persisted_result = json.dumps(persisted_run.result_json, sort_keys=True)
+        assert "https://" not in persisted_result
+        assert "b64_json" not in persisted_result
+        assert "provider_response_format" not in persisted_result
+        assert "storage_key" not in persisted_result
+        artifact = session.execute(select(MediaArtifact)).scalar_one()
+        assert artifact.artifact_id == artifact_result["artifact_id"]
+        assert artifact.run_id == data["run_id"]
+        assert artifact.site_id == "site_alpha"
+        assert artifact.media_kind == "image"
+        assert artifact.operation == "image.generate.v1"
+        assert artifact.status == "available"
+        assert artifact.content_type == "image/png"
+        assert artifact.format == "png"
+        assert artifact.width == 1
+        assert artifact.height == 1
+        assert artifact.byte_size == artifact_result["filesize_bytes"]
+        assert artifact.checksum == artifact_result["checksum"]
+
+    dispose_engine(database_url)
+
+
+def test_inline_image_cleanup_failure_is_quarantined_before_failed_run_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InvalidSecondImageProvider(OpenAIProviderAdapter):
+        def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+            return ProviderExecutionResult(
+                output={"model_id": request.model_id, "candidate_count": 2},
+                latency_ms=200,
+                tokens_in=8,
+                tokens_out=0,
+                cost=0.0,
+                media_candidates=(
+                    ProviderMediaCandidate(
+                        index=1,
+                        content_bytes=SAMPLE_IMAGE_PNG,
+                        claimed_mime_type="image/png",
+                        claimed_width=1,
+                        claimed_height=1,
+                    ),
+                    ProviderMediaCandidate(
+                        index=2,
+                        content_bytes=b"not-an-image",
+                        claimed_mime_type="image/png",
+                    ),
+                ),
+            )
+
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"openai": InvalidSecondImageProvider()},
+    )
+    delete_calls: list[str] = []
+
+    def fail_delete(
+        self: _LocalVolumePublicationSession,
+        storage_key: str,
+    ) -> None:
+        del self
+        delete_calls.append(storage_key)
+        raise ArtifactStoreError("injected delete failure")
+
+    # Failed-batch cleanup must use the fixed-root publication session rather
+    # than resolving the store root again through LocalVolumeArtifactStore.delete.
+    monkeypatch.setattr(_LocalVolumePublicationSession, "delete_published", fail_delete)
+    committed_publication_states: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+
+    def capture_publication_state(session: Session) -> None:
+        quarantine = uncertain_artifact_storage_keys(session)
+        if quarantine:
+            committed_publication_states.append(
+                (tracked_artifact_storage_keys(session), quarantine)
+            )
+
+    event.listen(Session, "after_commit", capture_publication_state)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-image",
+        "contract_version": "image_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "input": {
+            "contract_version": "image_generation_request.v1",
+            "prompt": "A clean product photo of a blue running shoe",
+            "aspect_ratio": "1:1",
+            "resolution": "high",
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    try:
+        response = client.post(
+            "/v1/runtime/execute",
+            content=body,
+            headers=merge_json_headers(
+                build_auth_headers(
+                    "POST",
+                    "/v1/runtime/execute",
+                    site_id="site_alpha",
+                    idempotency_key="idem-image-cleanup-quarantine-001",
+                    nonce="nonce-image-cleanup-quarantine-001",
+                    trace_id="traceimagecleanupquarantine001",
+                    body=body,
+                )
+            ),
+        )
+    finally:
+        event.remove(Session, "after_commit", capture_publication_state)
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert response.json()["status"] == "error"
+    assert data["status"] == "failed"
+    assert data["error_code"] == "image_generation.artifact_cleanup_uncertain"
+    assert len(delete_calls) == 1
+    storage_key = delete_calls[0]
+    assert committed_publication_states == [((), (storage_key,))]
+
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, data["run_id"])
+        assert run is not None
+        assert run.status == "failed"
+        assert run.error_code == "image_generation.artifact_cleanup_uncertain"
+        assert list(
+            session.scalars(select(MediaArtifact).where(MediaArtifact.run_id == run.run_id))
+        ) == []
+    stored_paths = [
+        path for path in (tmp_path / "artifacts").rglob("obj_*") if path.is_file()
+    ]
+    assert len(stored_paths) == 1
+    assert stored_paths[0].name == storage_key
+
+    dispose_engine(database_url)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_error_code"),
+    [
+        (400, "provider.invalid_request"),
+        (500, "provider.upstream_error"),
+    ],
+)
+def test_image_generation_provider_errors_never_publish_upstream_bodies(
+    tmp_path: Path,
+    allow_example_callback_dns: None,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    expected_error_code: str,
+) -> None:
+    leaked_url = "https://images.provider.test/generated.png?sig=upstream-secret"
+    leaked_base64 = "c2Vuc2l0aXZlLWltYWdlLWJ5dGVz"
+    leaked_prompt = "UPSTREAM-PRIVATE-PROMPT-ECHO"
+    provider = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                status_code,
+                json={
+                    "error": {
+                        "message": (
+                            f"{leaked_prompt} {leaked_url} b64_json={leaked_base64}"
+                        )
+                    }
+                },
+            )
+        ),
+    )
+    sample_catalog = OpenAIProviderAdapter().fetch_catalog()
+    monkeypatch.setattr(provider, "fetch_catalog", lambda: sample_catalog)
+
+    callback_requests: list[dict[str, object]] = []
+
+    def callback_handler(request: httpx.Request) -> httpx.Response:
+        callback_requests.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(204)
+
+    callback_dispatcher = HttpRuntimeCallbackDispatcher(
+        transport=httpx.MockTransport(callback_handler),
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"openai": provider},
+        callback_dispatcher=callback_dispatcher,
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_metadata=_runtime_callback_metadata(
+            "https://example.com/runtime",
+            callback_id=f"image-generation-error-{status_code}",
+        ),
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-image",
+        "canonical_run_id": f"wp_image_error_{status_code}",
+        "contract_version": "image_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+        },
+        "input": {
+            "contract_version": "image_generation_request.v1",
+            "prompt": "A private product concept",
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    idempotency_key = f"idem-image-provider-error-{status_code}"
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key=idempotency_key,
+                nonce=f"nonce-image-provider-error-{status_code}",
+                trace_id=f"imageprovidererror{status_code:03d}00000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "failed"
+    assert data["error_code"] == expected_error_code
+    assert data["error_message"] == IMAGE_GENERATION_PROVIDER_ERROR_MESSAGE
+    run_id = str(data["run_id"])
+
+    with get_session(database_url) as session:
+        persisted_run = session.get(RunRecord, run_id)
+        assert persisted_run is not None
+        assert persisted_run.error_code == expected_error_code
+        assert (
+            persisted_run.error_message == IMAGE_GENERATION_PROVIDER_ERROR_MESSAGE
+        )
+
+    run_response = client.get(
+        f"/v1/runs/{run_id}",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}",
+            site_id="site_alpha",
+            trace_id=f"imageerrorrun{status_code:03d}0000000000000",
+        ),
+    )
+    result_response = client.get(
+        f"/v1/runs/{run_id}/result",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}/result",
+            site_id="site_alpha",
+            trace_id=f"imageerrorresult{status_code:03d}000000000",
+        ),
+    )
+
+    worker = RuntimeService(
+        database_url,
+        settings=_runtime_service_settings(database_url),
+        callback_dispatcher=callback_dispatcher,
+        callback_max_attempts=1,
+        callback_retry_backoff_seconds=0,
+    )
+    dispatched = worker.dispatch_pending_callbacks(max_callbacks=1)
+    assert dispatched[0]["callback_status"] == "delivered"
+    assert len(callback_requests) == 1
+
+    externally_visible = json.dumps(
+        {
+            "execute": response.json(),
+            "run": run_response.json(),
+            "result": result_response.json(),
+            "callback": callback_requests[0],
+        },
+        sort_keys=True,
+    )
+    for secret in (leaked_url, leaked_base64, leaked_prompt, "b64_json"):
+        assert secret not in externally_visible
+
+    dispose_engine(database_url)
+
+
+@pytest.mark.parametrize("route", ["/v1/runtime/resolve", "/v1/runtime/execute"])
+def test_image_generation_rejects_no_store_before_routing(
+    tmp_path: Path,
+    route: str,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-image",
+        "contract_version": "image_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "storage_mode": "no_store",
+        "input": {
+            "contract_version": "image_generation_request.v1",
+            "prompt": "A clean product photo of a red running shoe",
+            "n": 1,
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    route_suffix = route.rsplit("/", maxsplit=1)[-1]
+    trace_id = (
+        "1234567890abcdef1234567890abcd05"
+        if route_suffix == "resolve"
+        else "1234567890abcdef1234567890abcd06"
+    )
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            route,
+            site_id="site_alpha",
+            idempotency_key=f"idem-image-generation-no-store-{route_suffix}",
+            nonce=f"nonce-image-generation-no-store-{route_suffix}",
+            trace_id=trace_id,
+            body=body,
+        )
+    )
+
+    response = client.post(route, content=body, headers=headers)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error_code"] == "image_generation.artifact_storage_required"
+    with get_session(database_url) as session:
+        assert session.execute(select(RunRecord)).scalars().all() == []
+        assert session.execute(select(MediaArtifact)).scalars().all() == []
 
     dispose_engine(database_url)
 
@@ -889,9 +1265,6 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
     database_url, client = _build_client(
         tmp_path,
         providers={"minimax": provider},
-        settings_overrides={
-            "audio_asset_playback_token_secret": "test-audio-playback-secret-00000000"
-        },
     )
     seed_provider_model_allowlist(
         database_url,
@@ -943,128 +1316,71 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
     assert data["result"]["artifact_type"] == "audio_generation_candidates"
     assert data["result"]["direct_wordpress_write"] is False
     assert data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
-    audio_url = data["result"]["audios"][0]["url"]
-    assert audio_url.startswith("/v1/runtime/artifacts/")
-    assert "/public-download?token=" in audio_url
-    assert data["result"]["audios"][0]["artifact"]["source_media_type"] == "audio"
-    assert data["result"]["audios"][0]["artifact"]["download_url"] == audio_url
-    assert data["result"]["audios"][0]["artifact"]["authenticated_download_url"].endswith(
-        "/download"
+    audio_result = data["result"]["audios"][0]
+    assert data["result"]["provider_response_format"] == "artifact_reference"
+    assert audio_result["artifact"]["source_media_type"] == "audio"
+    assert {
+        "url",
+        "audio_url",
+        "download_url",
+        "authenticated_download_url",
+        "b64_json",
+    }.isdisjoint(audio_result)
+    assert {"download_url", "authenticated_download_url"}.isdisjoint(
+        audio_result["artifact"]
     )
     assert data["result"]["audio_materialization"]["status"] == "materialized"
+    assert data["provider_call_count"] == 1
 
     with get_session(database_url) as session:
-        artifact = session.query(MediaDerivativeArtifact).filter_by(site_id="site_alpha").one()
-        assert artifact.source_media_type == "audio"
-        assert artifact.blob_data
-        assert artifact.mime_type == "audio/mpeg"
+        artifact = session.query(MediaArtifact).filter_by(site_id="site_alpha").one()
+        assert artifact.media_kind == "audio"
+        assert artifact.byte_size > 0
+        assert artifact.content_type == "audio/mpeg"
         artifact_id = artifact.artifact_id
+        run = session.scalar(select(RunRecord).where(RunRecord.run_id == data["run_id"]))
+        assert run is not None
+        assert run.status == "succeeded"
+        assert run.selected_provider_id == "minimax"
+        assert run.selected_model_id == AUDIO_NARRATION_MODEL_ID
+        provider_calls = list(
+            session.scalars(
+                select(ProviderCallRecord).where(
+                    ProviderCallRecord.run_id == data["run_id"]
+                )
+            )
+        )
+        assert len(provider_calls) == 1
+        assert provider_calls[0].provider_id == "minimax"
+        assert provider_calls[0].model_id == AUDIO_NARRATION_MODEL_ID
+        meter_events = list(
+            session.scalars(
+                select(UsageMeterEvent).where(UsageMeterEvent.run_id == data["run_id"])
+            )
+        )
+        assert [event.meter_key for event in meter_events] == [
+            "runs",
+            "provider_calls",
+            "tokens_in",
+            "tokens_total",
+        ]
+        assert all(event.ability_family == "audio" for event in meter_events)
+        assert all(event.execution_kind == "audio_generation" for event in meter_events)
 
     download_headers = build_auth_headers(
         "GET",
-        f"/v1/runtime/artifacts/{artifact_id}/download",
+        f"/v1/runtime/media/artifacts/{artifact_id}/download",
         site_id="site_alpha",
+        nonce="audio-generation-pull-001",
     )
     download_response = client.get(
-        f"/v1/runtime/artifacts/{artifact_id}/download",
+        f"/v1/runtime/media/artifacts/{artifact_id}/download",
         headers=download_headers,
     )
     assert download_response.status_code == 200
     assert download_response.headers["content-type"].startswith("audio/mpeg")
     assert int(download_response.headers["content-length"]) == len(download_response.content)
     assert download_response.content.startswith(b"ID3")
-
-    public_download_response = client.get(audio_url)
-    assert public_download_response.status_code == 200
-    assert public_download_response.headers["content-type"].startswith("audio/mpeg")
-    assert int(public_download_response.headers["content-length"]) == len(
-        public_download_response.content
-    )
-    assert public_download_response.content.startswith(b"ID3")
-
-    invalid_public_download_response = client.get(
-        f"/v1/runtime/artifacts/{artifact_id}/public-download?token=bad"
-    )
-    assert invalid_public_download_response.status_code == 403
-
-    promote_payload = {
-        "artifact_id": artifact_id,
-        "source_content_hash": "sha256:" + ("a" * 64),
-        "metadata": {"post_id": 42, "post_type": "post", "title": "Audio article"},
-        "playback_ttl_seconds": 120,
-    }
-    promote_body = json.dumps(promote_payload).encode("utf-8")
-    promote_headers = merge_json_headers(
-        build_auth_headers(
-            "POST",
-            "/v1/runtime/audio-assets",
-            site_id="site_alpha",
-            idempotency_key="idem-audio-asset-promote-001",
-            nonce="nonce-audio-asset-promote-001",
-            trace_id="1234567890abcdef1234567890abcd17",
-            body=promote_body,
-        )
-    )
-    promote_response = client.post(
-        "/v1/runtime/audio-assets",
-        content=promote_body,
-        headers=promote_headers,
-    )
-    assert promote_response.status_code == 200, promote_response.text
-    promoted = promote_response.json()["data"]
-    assert promoted["playback_mode"] == "cloud_hosted"
-    assert promoted["direct_wordpress_write"] is False
-    assert promoted["source_artifact_id"] == artifact_id
-    assert promoted["source_content_hash"] == "sha256:" + ("a" * 64)
-    assert promoted["playback_url"].startswith(
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback?"
-    )
-
-    playback_response = client.get(promoted["playback_url"])
-    assert playback_response.status_code == 200
-    assert playback_response.headers["content-type"].startswith("audio/mpeg")
-    assert playback_response.content.startswith(b"ID3")
-
-    invalid_playback_response = client.get(
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback?expires=1&token=bad"
-    )
-    assert invalid_playback_response.status_code == 410
-
-    playback_url_headers = build_auth_headers(
-        "GET",
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url",
-        site_id="site_alpha",
-        query="ttl_seconds=180",
-    )
-    playback_url_response = client.get(
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url?ttl_seconds=180",
-        headers=playback_url_headers,
-    )
-    assert playback_url_response.status_code == 200, playback_url_response.text
-    playback_url_data = playback_url_response.json()["data"]
-    assert playback_url_data["asset_id"] == promoted["asset_id"]
-    assert playback_url_data["playback_url_ttl_seconds"] == 180
-
-    beta_playback_url_headers = build_auth_headers(
-        "GET",
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url",
-        site_id="site_beta",
-        key_id="key_beta",
-        query="ttl_seconds=180",
-    )
-    beta_playback_url_response = client.get(
-        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url?ttl_seconds=180",
-        headers=beta_playback_url_headers,
-    )
-    assert beta_playback_url_response.status_code == 404
-
-    with get_session(database_url) as session:
-        asset = session.query(AudioAsset).filter_by(site_id="site_alpha").one()
-        assert asset.asset_id == promoted["asset_id"]
-        assert asset.source_artifact_id == artifact_id
-        assert asset.source_run_id
-        assert asset.blob_data.startswith(b"ID3")
-        assert asset.metadata_json["playback_mode"] == "cloud_hosted"
 
     dispose_engine(database_url)
 
@@ -1153,7 +1469,7 @@ def test_execute_route_fails_audio_generation_when_provider_url_cannot_materiali
     assert data["error_code"] == "audio_generation.artifact_materialization_failed"
     assert "HTTP 403" in data["error_message"]
     with get_session(database_url) as session:
-        assert session.query(MediaDerivativeArtifact).count() == 0
+        assert session.query(MediaArtifact).count() == 0
 
     dispose_engine(database_url)
 

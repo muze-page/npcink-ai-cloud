@@ -11,11 +11,41 @@ export const LONG_PLAN_VERSION_ID = 'pro_v1';
 export const FREE_PLAN_ID = 'free';
 export const FREE_PLAN_VERSION_ID = 'free_v1';
 
+export function buildAdminApiEnvelope(data: unknown) {
+  return {
+    status: 'ok',
+    error_code: '',
+    message: 'ok',
+    data,
+    meta: {
+      trace_id: 'trace-e2e-admin',
+      revision: 'e2e-admin-v1',
+    },
+  };
+}
+
+export function buildAdminApiErrorEnvelope(
+  message: string,
+  errorCode = 'admin.e2e_request_failed',
+  data: unknown = {}
+) {
+  return {
+    status: 'error',
+    error_code: errorCode,
+    message,
+    data,
+    meta: {
+      trace_id: 'trace-e2e-admin-error',
+      revision: 'e2e-admin-v1',
+    },
+  };
+}
+
 async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ status: 'ok', data }),
+    body: JSON.stringify(buildAdminApiEnvelope(data)),
   });
 }
 
@@ -162,6 +192,37 @@ export async function installAdminMocks(page: Page) {
         plan_id: primaryAccountSubscription.plan_id,
         plan_version_id: primaryAccountSubscription.plan_version_id,
         status: primaryAccountSubscription.status,
+        receipt: {
+          event_kind: 'account.subscription.change',
+          scope_kind: 'account',
+          scope_id: LONG_ACCOUNT_ID,
+          outcome: 'succeeded',
+          effective_summary: `Customer package changed to ${nextPackageAlias}.`,
+        },
+      });
+      return;
+    }
+
+    if (
+      pathname === `/api/admin/accounts/${LONG_ACCOUNT_ID}/credit-ledger/adjustments` &&
+      route.request().method() === 'POST'
+    ) {
+      const payload = route.request().postDataJSON() as Record<string, unknown>;
+      await fulfillJson(route, {
+        account_id: LONG_ACCOUNT_ID,
+        entry: {
+          event_type: String(payload.event_type || 'grant'),
+          credit_delta: Number(payload.credit_delta || 0),
+          reason: String(payload.reason || ''),
+          note: String(payload.note || ''),
+        },
+        receipt: {
+          event_kind: 'account.credit.adjustment',
+          scope_kind: 'account',
+          scope_id: LONG_ACCOUNT_ID,
+          outcome: 'succeeded',
+          effective_summary: `Credit adjustment ${Number(payload.credit_delta || 0)} recorded.`,
+        },
       });
       return;
     }

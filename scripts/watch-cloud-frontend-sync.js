@@ -6,7 +6,6 @@ const path = require( 'node:path' );
 const { spawn } = require( 'node:child_process' );
 
 const cloudRoot = path.resolve( __dirname, '..' );
-const repoRoot = path.resolve( cloudRoot, '..' );
 const frontendRoot = path.join( cloudRoot, 'frontend' );
 const frontendUrl = 'http://127.0.0.1:8010';
 const composeArgs = [ 'compose', '-f', 'docker-compose.dev.yml' ];
@@ -24,10 +23,12 @@ const recreateFiles = new Set( [
 	'frontend/tsconfig.json',
 ] );
 const rebuildFiles = new Set( [
-	'frontend/.dockerignore',
+	'.dockerignore',
+	'package.json',
+	'pnpm-lock.yaml',
+	'pnpm-workspace.yaml',
 	'frontend/Dockerfile.dev',
 	'frontend/package.json',
-	'frontend/pnpm-lock.yaml',
 ] );
 
 function parseArgs( argv ) {
@@ -219,12 +220,14 @@ function createWatchTargets() {
 	const directFiles = [
 		path.join( cloudRoot, '.env' ),
 		path.join( cloudRoot, 'docker-compose.dev.yml' ),
+		path.join( cloudRoot, 'package.json' ),
+		path.join( cloudRoot, 'pnpm-lock.yaml' ),
+		path.join( cloudRoot, 'pnpm-workspace.yaml' ),
 		path.join( frontendRoot, '.env' ),
-		path.join( frontendRoot, '.dockerignore' ),
+		path.join( cloudRoot, '.dockerignore' ),
 		path.join( frontendRoot, 'Dockerfile.dev' ),
 		path.join( frontendRoot, 'next.config.mjs' ),
 		path.join( frontendRoot, 'package.json' ),
-		path.join( frontendRoot, 'pnpm-lock.yaml' ),
 		path.join( frontendRoot, 'postcss.config.mjs' ),
 		path.join( frontendRoot, 'tailwind.config.ts' ),
 		path.join( frontendRoot, 'tsconfig.json' ),

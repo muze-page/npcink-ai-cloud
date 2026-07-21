@@ -94,6 +94,20 @@ Preferred entrypoint from the repository root:
 pnpm run dev
 ```
 
+The repository root owns the only dependency lock. `frontend/pnpm-lock.yaml`
+must not exist. Bootstrap pnpm through the root `packageManager` declaration and
+install the frontend workspace from the repository root:
+
+```bash
+corepack enable
+corepack install
+pnpm install --frozen-lockfile --filter frontend...
+```
+
+Local Docker and CI use the same root lock and frozen workspace install. When
+`frontend/package.json` changes, refresh only the root `pnpm-lock.yaml` from
+the repository root.
+
 Local development URL:
 
 - `http://127.0.0.1:8010`

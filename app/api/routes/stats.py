@@ -307,13 +307,13 @@ async def get_router_performance_snapshot_projection(
                 start_at=start_at,
                 end_at=end_at,
             )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="stats.invalid_projection_window",
-                message=str(error),
+                message="invalid projection window",
                 data={"start_gmt": start_gmt, "end_gmt": end_gmt},
                 revision="m3",
             ),
@@ -345,13 +345,13 @@ async def get_router_recommendation_summary(
             site_id=auth.site_id,
             filters=filters,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="stats.invalid_logs_window",
-                message=str(error),
+                message="invalid logs analytics window",
                 data=filters,
                 revision="m3",
             ),
@@ -385,13 +385,13 @@ async def get_logs_analytics_summary(
             site_id=auth.site_id,
             filters=filters,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="stats.invalid_logs_window",
-                message=str(error),
+                message="invalid logs analytics window",
                 data=filters,
                 revision="m3",
             ),
@@ -423,13 +423,13 @@ async def get_logs_analytics_tool_latency(
             site_id=auth.site_id,
             filters=filters,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="stats.invalid_logs_window",
-                message=str(error),
+                message="invalid logs analytics window",
                 data=filters,
                 revision="m3",
             ),
@@ -461,13 +461,13 @@ async def get_logs_analytics_mcp_zone(
             site_id=auth.site_id,
             filters=filters,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="stats.invalid_logs_window",
-                message=str(error),
+                message="invalid logs analytics window",
                 data=filters,
                 revision="m3",
             ),
@@ -499,13 +499,13 @@ async def get_logs_analytics_recommendations(
             site_id=auth.site_id,
             filters=filters,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="stats.invalid_logs_window",
-                message=str(error),
+                message="invalid logs analytics window",
                 data=filters,
                 revision="m3",
             ),

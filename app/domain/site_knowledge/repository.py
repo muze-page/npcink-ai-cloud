@@ -172,6 +172,18 @@ class SiteKnowledgeRepository:
             or 0
         )
 
+    def list_embedding_models(self, site_id: str) -> list[str]:
+        return [
+            str(model)
+            for model in self.session.scalars(
+                select(SiteKnowledgeChunk.embedding_model)
+                .where(SiteKnowledgeChunk.site_id == site_id)
+                .distinct()
+                .order_by(SiteKnowledgeChunk.embedding_model.asc())
+            )
+            if str(model or "").strip()
+        ]
+
     def document_exists(self, *, site_id: str, source_type: str, source_id: int) -> bool:
         count = self.session.scalar(
             select(func.count())
@@ -209,6 +221,39 @@ class SiteKnowledgeRepository:
             for metadata in documents
             if isinstance(metadata, dict) and metadata.get("truncated") is True
         )
+
+    def reference_metadata_for_post_ids(
+        self,
+        *,
+        site_id: str,
+        post_ids: list[int],
+    ) -> dict[int, dict[str, Any]]:
+        normalized_ids = list(dict.fromkeys(post_id for post_id in post_ids if post_id > 0))
+        if not normalized_ids:
+            return {}
+        rows = self.session.execute(
+            select(
+                SiteKnowledgeDocument.post_id,
+                SiteKnowledgeDocument.title,
+                SiteKnowledgeDocument.metadata_json,
+            ).where(
+                SiteKnowledgeDocument.site_id == site_id,
+                SiteKnowledgeDocument.post_id.in_(normalized_ids),
+                SiteKnowledgeDocument.post_status == "publish",
+            )
+        ).all()
+        metadata_by_post_id = {
+            int(post_id): {
+                "title": str(title or ""),
+                **(metadata if isinstance(metadata, dict) else {}),
+            }
+            for post_id, title, metadata in rows
+        }
+        return {
+            post_id: metadata_by_post_id[post_id]
+            for post_id in normalized_ids
+            if post_id in metadata_by_post_id
+        }
 
     def last_sync_at(self, site_id: str) -> datetime | None:
         return self.session.scalar(

@@ -279,3 +279,24 @@ triggering secret scanner noise.
 - Do not make the WordPress Addon own payment details; keep it summary/link-only.
 - Do not create a second AI credit billing registry outside
   `app/domain/commercial/credits.py`.
+
+## 2026-07-11 Consistency Follow-up
+
+The Portal and commercial runtime were tightened after real Alipay validation:
+
+- Alipay browser returns now reconcile the exact persisted order instead of
+  treating query parameters as success evidence.
+- Naive Alipay business timestamps are normalized from Asia/Shanghai to UTC.
+- Paid credit packs create idempotent remaining-balance grants; runtime quota
+  spends package allowance first and paid grants by earliest expiry.
+- Portal shows package remaining, paid-credit remaining, and total available.
+- Package administration labels and persists customer sales price in CNY and
+  internal model cost budget in USD as separate values with separate purposes.
+- Publishing a paid package version synchronizes its standard customer offer,
+  so subsequent Portal checkout prices follow the admin value while existing
+  orders retain their snapshots.
+- Desktop Portal navigation shares the header row; tablet and mobile keep
+  responsive alternatives.
+
+The detailed decision and rollback notes live in
+`docs/decisions/001-payment-backed-credit-grants-and-package-pricing.md`.

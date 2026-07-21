@@ -10,6 +10,12 @@ const clientSource = readFileSync(clientPath, 'utf8');
 const navbarSource = readFileSync(navbarPath, 'utf8');
 const accountSource = readFileSync(accountPagePath, 'utf8');
 
+assert.doesNotMatch(
+  clientSource,
+  /export type ProductIdentityType\b/,
+  'the unused ProductIdentityType compatibility alias must stay removed'
+);
+
 assert.match(
   clientSource,
   /getIdentityProviders\(\)/,
@@ -54,14 +60,14 @@ assert.match(
 
 assert.match(
   accountSource,
-  /resolvePortalContactEmail/,
-  'account center must resolve a customer-readable contact instead of showing principal IDs as the account'
+  /function normalizePortalContact[\s\S]*const contactEmail = normalizePortalContact\(session\?\.email\)/,
+  'account center must derive its customer-readable contact only from the explicit session email'
 );
 
-assert.match(
+assert.doesNotMatch(
   accountSource,
-  /session\.email/,
-  'account center must prefer the explicit session email before falling back to legacy contact refs'
+  /resolvePortalContactEmail|session\?\.(?:principal_id|account_id|site_admin_ref)|session\.(?:principal_id|account_id|site_admin_ref)/,
+  'account center must not restore principal, account, or legacy contact fallbacks'
 );
 
 assert.match(
@@ -74,6 +80,11 @@ assert.match(
   accountSource,
   /portalClient\.requestEmailChangeCode[\s\S]*portalClient\.verifyEmailChangeCode/,
   'account center must support self-service verified email changes'
+);
+assert.match(
+  accountSource,
+  /<Modal[\s\S]*data-portal-account="email-change-dialog"/,
+  'account center must keep verified email changes in a focused dialog'
 );
 
 assert.doesNotMatch(

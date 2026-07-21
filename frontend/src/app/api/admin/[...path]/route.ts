@@ -7,23 +7,267 @@ import {
   getExternalRequestOrigin,
   getExternalRequestHost,
   getExternalRequestProto,
+  requireAdminCapability,
   requireAdminSessionData,
+  type AdminCapability,
 } from '../_shared';
 import { getInternalAuthToken } from '@/lib/env';
 
 /**
  * Admin API catch-all proxy.
  *
- * Replaces 43 individual route.ts files with a single catch-all handler.
- * Maps /api/admin/* → /internal/service/admin/* for reads.
- * Writes stay on the service router and only add the admin namespace for
- * backend routes that actually declare it.
+ * Only declared method/path pairs may receive the internal service token.
+ * Adding an internal endpoint does not expose it through this browser proxy.
  */
 
-const COPIED_REQUEST_HEADERS = [
-  'accept-language',
-  'x-npcink-debug-portal-link',
-] as const;
+type AdminMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+type AdminRouteRule = {
+  methods: readonly AdminMethod[];
+  pattern: RegExp;
+  namespace: 'admin' | 'service';
+  requiredCapability?: AdminCapability;
+};
+
+type AdminRouteResolution = {
+  backendPath: string;
+  requiredCapability?: AdminCapability;
+};
+
+const ADMIN_ROUTE_RULES: readonly AdminRouteRule[] = [
+  // Operator and diagnostic reads.
+  {
+    methods: ['GET'],
+    pattern: /^(?:overview|plugin-observability|media-observability|vector-observability|agent-feedback|runtime-telemetry|agent-workflow-metadata)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_review_diagnostics',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^audit-events(?:\/summary)?$/,
+    namespace: 'service',
+    requiredCapability: 'can_review_diagnostics',
+  },
+
+  // Customer and support reads.
+  {
+    methods: ['GET'],
+    pattern: /^(?:accounts|portal-users|sites|support-requests)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^accounts\/[^/]+$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^accounts\/[^/]+\/quota-summary$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^portal-users\/[^/]+\/audit$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^sites\/[^/]+$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^support-requests\/[^/]+(?:\/attachments\/[^/]+)?$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+
+  // Commercial and catalog reads.
+  {
+    methods: ['GET'],
+    pattern: /^(?:coverage-work-queue|subscriptions)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_billing',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^accounts\/[^/]+\/(?:credit-ledger|subscription)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_billing',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^subscriptions\/[^/]+$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_billing',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^(?:plans|credit-packs)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^plans\/[^/]+$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+
+  // Cloud runtime configuration reads.
+  {
+    methods: ['GET'],
+    pattern: /^(?:ai-resources|provider-connections|model-references|site-knowledge-vector-profile|runtime-profiles)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^provider-connections\/[^/]+$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['GET'],
+    pattern: /^service-settings$/,
+    namespace: 'admin',
+    // The existing session model has no service-settings capability.
+    // The platform_admin identity/role gate remains the explicit authority.
+  },
+
+  // Customer, commercial, and catalog writes.
+  {
+    methods: ['POST'],
+    pattern: /^accounts$/,
+    namespace: 'service',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^sites\/[^/]+\/activate$/,
+    namespace: 'service',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^accounts\/[^/]+\/(?:suspend|restore|agency-quotes|agency-trial)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^portal-users\/(?:batch-disable|[^/]+\/disable)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['PATCH'],
+    pattern: /^support-requests\/[^/]+$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^support-requests\/[^/]+\/(?:messages|attachments)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_accounts',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^accounts\/[^/]+\/subscription(?:\/(?:suspend|cancel))?$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_billing',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^accounts\/[^/]+\/credit-ledger\/adjustments$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_billing',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^subscriptions\/[^/]+\/billing-snapshots\/rebuild$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_billing',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^subscriptions\/[^/]+\/topup$/,
+    namespace: 'service',
+    requiredCapability: 'can_manage_billing',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^plans(?:\/[^/]+\/versions)?$/,
+    namespace: 'service',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['PATCH'],
+    pattern: /^credit-packs$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+
+  // Cloud runtime configuration and bounded diagnostic writes.
+  {
+    methods: ['POST'],
+    pattern: /^plugin-observability\/attention-state$/,
+    namespace: 'admin',
+    requiredCapability: 'can_review_diagnostics',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^(?:provider-connections|provider-connections\/preview-catalog|model-references\/sync)$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^provider-connections\/[^/]+\/test$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['PATCH', 'DELETE'],
+    pattern: /^provider-connections\/[^/]+$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['PUT'],
+    pattern: /^site-knowledge-vector-profile(?:\/vector-store)?$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['PUT'],
+    pattern: /^runtime-profiles$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^site-knowledge-vector-profile\/index-rebuilds$/,
+    namespace: 'admin',
+    requiredCapability: 'can_manage_catalog',
+  },
+  {
+    methods: ['PATCH'],
+    pattern: /^service-settings\/(?:portal-public|qq-login|email|alipay-payment)$/,
+    namespace: 'admin',
+  },
+  {
+    methods: ['POST'],
+    pattern: /^service-settings\/(?:qq-login\/test|email\/test|email\/preview|alipay-payment\/test)$/,
+    namespace: 'admin',
+  },
+];
 
 const ADMIN_IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -43,126 +287,30 @@ function resolveAdminIdempotencyKey(request: NextRequest): string {
   return createAdminIdempotencyKey();
 }
 
-function buildAdminBackendPath(pathSegments: string[], method: string): string {
+function resolveAdminRoute(
+  pathSegments: string[],
+  method: string
+): AdminRouteResolution | null {
   const normalized = pathSegments
     .map((segment) => segment.trim())
     .filter(Boolean)
     .map((segment) => encodeURIComponent(segment))
     .join('/');
 
-  const upperMethod = method.toUpperCase();
-
-  // GET routes always go through /internal/service/admin/
-  if (upperMethod === 'GET') {
-    return normalized ? `/internal/service/admin/${normalized}` : '/internal/service/admin';
+  const upperMethod = method.toUpperCase() as AdminMethod;
+  const rule = ADMIN_ROUTE_RULES.find(
+    (candidate) =>
+      candidate.methods.includes(upperMethod) && candidate.pattern.test(normalized)
+  );
+  if (!rule) {
+    return null;
   }
-
-  // Account creation is a service write, not an admin-prefixed write.
-  if (upperMethod === 'POST' && normalized === 'accounts') {
-    return '/internal/service/accounts';
-  }
-
-  if (/^accounts\/[^/]+\/(?:suspend|restore)$/.test(normalized)) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (upperMethod === 'POST' && normalized === 'portal-users/batch-disable') {
-    return '/internal/service/admin/portal-users/batch-disable';
-  }
-  if (upperMethod === 'POST' && /^portal-users\/[^/]+\/disable$/.test(normalized)) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (/^accounts\/[^/]+\/subscription(?:\/(?:suspend|cancel))?$/.test(normalized)) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (/^accounts\/[^/]+\/(?:agency-quotes|agency-trial)$/.test(normalized)) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (/^subscriptions\/[^/]+\/billing-snapshots\/rebuild$/.test(normalized)) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (/^subscriptions\/[^/]+\/topup$/.test(normalized)) {
-    return `/internal/service/${normalized}`;
-  }
-  if (
-    upperMethod === 'POST' &&
-    normalized === 'plugin-observability/attention-state'
-  ) {
-    return '/internal/service/admin/plugin-observability/attention-state';
-  }
-  if (
-    upperMethod === 'POST' &&
-    normalized === 'audio-jobs'
-  ) {
-    return '/internal/service/admin/audio-jobs';
-  }
-  if (
-    upperMethod === 'POST' &&
-    normalized === 'provider-connections'
-  ) {
-    return '/internal/service/admin/provider-connections';
-  }
-  if (
-    (upperMethod === 'PATCH' || upperMethod === 'POST') &&
-    /^service-settings(?:\/.+)?$/.test(normalized)
-  ) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (
-    upperMethod === 'PATCH' &&
-    normalized === 'credit-packs'
-  ) {
-    return '/internal/service/admin/credit-packs';
-  }
-  if (
-    upperMethod === 'PATCH' &&
-    /^support-requests\/[^/]+$/.test(normalized)
-  ) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (
-    upperMethod === 'POST' &&
-    /^support-requests\/[^/]+\/messages$/.test(normalized)
-  ) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (
-    upperMethod === 'POST' &&
-    /^support-requests\/[^/]+\/attachments$/.test(normalized)
-  ) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (
-    upperMethod === 'POST' &&
-    normalized === 'provider-connections/preview-catalog'
-  ) {
-    return '/internal/service/admin/provider-connections/preview-catalog';
-  }
-  if (
-    upperMethod === 'POST' &&
-    normalized === 'model-references/sync'
-  ) {
-    return '/internal/service/admin/model-references/sync';
-  }
-  if (
-    upperMethod === 'POST' &&
-    /^provider-connections\/[^/]+\/test$/.test(normalized)
-  ) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (
-    (upperMethod === 'PATCH' || upperMethod === 'DELETE') &&
-    /^provider-connections\/[^/]+$/.test(normalized)
-  ) {
-    return `/internal/service/admin/${normalized}`;
-  }
-  if (
-    upperMethod === 'POST' &&
-    normalized === 'ability-models/plugin-routing'
-  ) {
-    return '/internal/service/admin/ability-models/plugin-routing';
-  }
-
-  return normalized ? `/internal/service/${normalized}` : '/internal/service';
+  const prefix =
+    rule.namespace === 'admin' ? '/internal/service/admin' : '/internal/service';
+  return {
+    backendPath: `${prefix}/${normalized}`,
+    requiredCapability: rule.requiredCapability,
+  };
 }
 
 async function proxyAdminRequest(
@@ -175,7 +323,7 @@ async function proxyAdminRequest(
   }
 ): Promise<NextResponse> {
   const method = (options.method || request.method).toUpperCase();
-  const backendPath = buildAdminBackendPath(pathSegments, method);
+  const routeResolution = resolveAdminRoute(pathSegments, method);
   const accept = request.headers.get('accept');
   const contentType = request.headers.get('content-type');
   const requestOrigin = getExternalRequestOrigin(request);
@@ -185,6 +333,22 @@ async function proxyAdminRequest(
   const sessionResult = await requireAdminSessionData(request);
   if (sessionResult instanceof NextResponse) {
     return sessionResult;
+  }
+  if (!routeResolution) {
+    return buildErrorResponse(
+      404,
+      'proxy.admin_route_not_allowed',
+      'admin route is not exposed'
+    );
+  }
+  if (routeResolution.requiredCapability) {
+    const capabilityError = requireAdminCapability(
+      sessionResult.session,
+      routeResolution.requiredCapability
+    );
+    if (capabilityError) {
+      return capabilityError;
+    }
   }
 
   const headers = buildForwardedRequestHeaders(request, {
@@ -197,12 +361,9 @@ async function proxyAdminRequest(
   headers['X-Forwarded-Proto'] = requestProto;
   headers['X-Forwarded-Port'] = request.nextUrl.port || '';
 
-  // Copy specific request headers
-  for (const headerName of COPIED_REQUEST_HEADERS) {
-    const value = request.headers.get(headerName);
-    if (value) {
-      headers[headerName] = value;
-    }
+  const acceptLanguage = request.headers.get('accept-language');
+  if (acceptLanguage) {
+    headers['accept-language'] = acceptLanguage;
   }
 
   // Add internal token for all admin requests
@@ -226,17 +387,17 @@ async function proxyAdminRequest(
 
   let response: Response;
   try {
-    response = await fetch(buildBackendUrl(backendPath, request.nextUrl.search), {
+    response = await fetch(buildBackendUrl(routeResolution.backendPath, request.nextUrl.search), {
       method,
       headers,
       body,
       cache: 'no-store',
     });
-  } catch (error) {
+  } catch {
     return buildErrorResponse(
       502,
       options.unreachableCode,
-      error instanceof Error ? error.message : options.unreachableMessage
+      options.unreachableMessage
     );
   }
 

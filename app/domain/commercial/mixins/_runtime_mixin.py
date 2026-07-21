@@ -18,6 +18,7 @@ from app.core.models import (
     ENTITLEMENT_SNAPSHOT_STATUS_ACTIVE,
     PLAN_STATUS_ACTIVE,
     PLAN_VERSION_STATUS_PUBLISHED,
+    PLATFORM_KIND_WORDPRESS,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_ACTIVE,
@@ -29,6 +30,9 @@ from app.core.models import (
 from app.core.secrets import encrypt_site_api_signing_secret
 from app.core.security import build_secret_hash
 from app.domain.commercial.credits import (
+    SITE_KNOWLEDGE_INDEX_METERING_CLASS,
+    package_credit_net_delta,
+    package_credit_used,
     record_credit_ledger_component,
     usage_meter_credit_component,
 )
@@ -51,6 +55,7 @@ from app.domain.runtime.errors import (
     RuntimeSiteNotProvisionedError,
     RuntimeSubscriptionInactiveError,
 )
+from app.domain.site_knowledge.contracts import SITE_KNOWLEDGE_SYNC_ABILITY
 
 
 class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
@@ -107,6 +112,8 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 account_id=resolved_account_id,
                 name=site_name or site_id,
                 status=SITE_STATUS_ACTIVE,
+                site_url="",
+                platform_kind=PLATFORM_KIND_WORDPRESS,
                 metadata_json=(
                     {
                         "source": "seed_runtime",
@@ -475,15 +482,25 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             until=period_end_at,
             limit=None,
         )
-        used_ai_credits = round(
-            max(
-                0.0,
-                -sum(
-                    service._coerce_float(getattr(entry, "credit_delta", 0.0))
-                    for entry in credit_entries
-                ),
-            ),
-            6,
+        used_ai_credits = package_credit_used(credit_entries)
+        paid_credit = service._paid_credit_balance_in_session(
+            repository,
+            account_id=subscription.account_id,
+            now=now,
+        )
+        package_credit_limit = self._coerce_float(
+            budgets.get("max_ai_credits_per_period")
+        )
+        package_credit_remaining = max(0.0, package_credit_limit - used_ai_credits)
+        paid_credit_remaining = self._coerce_float(paid_credit.get("remaining"))
+        # Zero is the unlimited sentinel; prior usage must not turn it into a finite limit.
+        effective_ai_credit_limit = (
+            0.0
+            if package_credit_limit <= 0
+            else round(
+                used_ai_credits + package_credit_remaining + paid_credit_remaining,
+                6,
+            )
         )
         projected_ai_credits = (
             max(0.0, service._coerce_float(estimated_ai_credits))
@@ -494,7 +511,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             (
                 "ai_credits",
                 used_ai_credits,
-                budgets.get("max_ai_credits_per_period"),
+                effective_ai_credit_limit,
                 projected_ai_credits,
             ),
         )
@@ -581,15 +598,14 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             "ai_credit_budget": {
                 "used": used_ai_credits,
                 "estimated_request": projected_ai_credits,
-                "limit": self._coerce_float(budgets.get("max_ai_credits_per_period")),
-                "remaining_before_request": (
-                    max(
-                        0.0,
-                        self._coerce_float(budgets.get("max_ai_credits_per_period"))
-                        - used_ai_credits,
-                    )
-                    if self._coerce_float(budgets.get("max_ai_credits_per_period")) > 0
-                    else None
+                "limit": effective_ai_credit_limit,
+                "package_limit": package_credit_limit,
+                "package_remaining": round(package_credit_remaining, 6),
+                "paid_remaining": round(paid_credit_remaining, 6),
+                "paid_grant_count": int(paid_credit.get("grant_count") or 0),
+                "remaining_before_request": round(
+                    package_credit_remaining + paid_credit_remaining,
+                    6,
                 ),
             },
             "concurrency": concurrency,
@@ -625,7 +641,9 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 "ai_credit_budget": {
                     "used": used_ai_credits,
                     "estimated_request": projected_ai_credits,
-                    "limit": self._coerce_float(budgets.get("max_ai_credits_per_period")),
+                    "limit": effective_ai_credit_limit,
+                    "package_remaining": round(package_credit_remaining, 6),
+                    "paid_remaining": round(paid_credit_remaining, 6),
                 },
                 "concurrency": concurrency,
                 "batch_limits": batch_limits,
@@ -662,7 +680,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             data_classification=run.data_classification,
             currency="USD",
             dedupe_key=f"run:{run.run_id}:runs",
-            payload_json={"status": run.status},
+            payload_json=self._runtime_usage_meter_context(run, {"status": run.status}),
         )
         self._record_credit_for_usage_meter_event(repository=repository, event=event)
 
@@ -675,15 +693,20 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         usage_context: dict[str, object] | None = None,
     ) -> None:
         repository = CommercialRepository(session)
-        base_payload = {
-            "provider_id": provider_call.provider_id,
-            "model_id": provider_call.model_id,
-            "instance_id": provider_call.instance_id,
-            "retry_count": provider_call.retry_count,
-            "error_code": provider_call.error_code,
-        }
+        base_payload = self._runtime_usage_meter_context(
+            run,
+            {
+                "provider_id": provider_call.provider_id,
+                "model_id": provider_call.model_id,
+                "instance_id": provider_call.instance_id,
+                "retry_count": provider_call.retry_count,
+                "error_code": provider_call.error_code,
+            },
+        )
         if isinstance(usage_context, dict):
             for key, value in usage_context.items():
+                if key in {"ability_name", "metering_class"}:
+                    continue
                 if value is None or value == "" or value == [] or value == {}:
                     continue
                 if isinstance(value, str | int | float | bool):
@@ -738,6 +761,16 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             )
             self._record_credit_for_usage_meter_event(repository=repository, event=event)
 
+    @staticmethod
+    def _runtime_usage_meter_context(
+        run: RunRecord,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        context = {**payload, "ability_name": run.ability_name}
+        if run.ability_name == SITE_KNOWLEDGE_SYNC_ABILITY:
+            context["metering_class"] = SITE_KNOWLEDGE_INDEX_METERING_CLASS
+        return context
+
     def _record_credit_for_usage_meter_event(
         self,
         *,
@@ -777,7 +810,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 continue
             if isinstance(value, str | int | float | bool):
                 metadata_json[key] = value
-        record_credit_ledger_component(
+        ledger_entry = record_credit_ledger_component(
             repository=repository,
             account_id=getattr(event, "account_id", None),
             site_id=getattr(event, "site_id", None),
@@ -791,6 +824,70 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             metadata_json=metadata_json,
             created_at=getattr(event, "created_at", None),
         )
+        if ledger_entry is None or not getattr(ledger_entry, "account_id", None):
+            return
+        entry = cast(Any, ledger_entry)
+        entry_metadata = getattr(entry, "metadata_json", None)
+        entry_metadata = dict(entry_metadata) if isinstance(entry_metadata, dict) else {}
+        if self._coerce_float(entry_metadata.get("paid_credit_consumed")) > 0:
+            return
+        subscription_id = str(getattr(entry, "subscription_id", "") or "")
+        subscription = repository.get_subscription(subscription_id) if subscription_id else None
+        if subscription is None:
+            return
+        now = cast(Any, self)._normalize_datetime(
+            getattr(entry, "created_at", None) or cast(Any, self).now_factory()
+        )
+        period_start_at, period_end_at = cast(Any, self)._resolve_period(subscription, now)
+        plan_version = repository.get_plan_version(subscription.plan_version_id)
+        budgets = cast(Any, self)._resolve_effective_subscription_budgets(
+            plan_version=plan_version,
+            subscription=subscription,
+        )
+        package_limit = self._coerce_float(budgets.get("max_ai_credits_per_period"))
+        current_credits = max(
+            0.0,
+            -self._coerce_float(getattr(entry, "credit_delta", 0.0)),
+        )
+        if package_limit <= 0:
+            entry_metadata["paid_credit_consumed"] = 0.0
+            entry_metadata["package_credit_consumed"] = round(current_credits, 6)
+            entry.metadata_json = entry_metadata
+            return
+        period_entries = repository.list_credit_ledger_entries(
+            account_ids=[str(entry.account_id)],
+            subscription_id=subscription.subscription_id,
+            event_types=[
+                CREDIT_LEDGER_EVENT_CONSUME,
+                CREDIT_LEDGER_EVENT_GRANT,
+                CREDIT_LEDGER_EVENT_ADJUSTMENT,
+                CREDIT_LEDGER_EVENT_REFUND,
+            ],
+            since=period_start_at,
+            until=period_end_at,
+            limit=None,
+        )
+        package_net_after = package_credit_net_delta(period_entries)
+        package_used_before = max(0.0, -(package_net_after + current_credits))
+        package_remaining_before = max(0.0, package_limit - package_used_before)
+        paid_credits = max(0.0, current_credits - package_remaining_before)
+        if paid_credits <= 0:
+            return
+        cast(Any, self)._ensure_paid_credit_grants_from_ledger_in_session(
+            repository,
+            account_id=str(entry.account_id),
+        )
+        allocated = repository.consume_paid_credit_grants(
+            account_id=str(entry.account_id),
+            credits=paid_credits,
+            now=now,
+        )
+        entry_metadata["paid_credit_consumed"] = round(allocated, 6)
+        entry_metadata["package_credit_consumed"] = round(
+            max(0.0, current_credits - allocated),
+            6,
+        )
+        entry.metadata_json = entry_metadata
 
     def _resolve_budget_policy_action(
         self,

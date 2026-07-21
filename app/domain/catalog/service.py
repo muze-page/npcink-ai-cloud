@@ -22,7 +22,9 @@ from app.domain.hosted_model_defaults import (
     TEXT_AI_PROFILE_ID,
     VISION_AI_PROFILE_ID,
 )
+from app.domain.wordpress_ai_connector.contracts import WORDPRESS_OPERATION_CONTRACT
 from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
     WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
     WP_AI_CONNECTOR_PROFILE_SPECS,
 )
@@ -532,11 +534,7 @@ class CatalogService:
 
         for profile_id, (execution_kind, ordered_tiers) in profile_specs.items():
             wp_ai_spec = next(
-                (
-                    spec
-                    for spec in WP_AI_CONNECTOR_PROFILE_SPECS
-                    if spec.profile_id == profile_id
-                ),
+                (spec for spec in WP_AI_CONNECTOR_PROFILE_SPECS if spec.profile_id == profile_id),
                 None,
             )
             candidate_instance_ids = select_candidates(
@@ -550,12 +548,18 @@ class CatalogService:
                         WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
                     }
                     else AUDIO_NARRATION_MODEL_ID
-                    if profile_id == AUDIO_NARRATION_PROFILE_ID
+                    if profile_id
+                    in {
+                        AUDIO_NARRATION_PROFILE_ID,
+                        WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+                    }
                     else AUDIO_NARRATION_QUALITY_MODEL_ID
                     if profile_id == AUDIO_NARRATION_QUALITY_PROFILE_ID
                     else None
                 ),
             )
+            if wp_ai_spec is not None:
+                candidate_instance_ids = candidate_instance_ids[:2]
             default_policy_json: dict[str, object] = {
                 "allow_fallback": True,
                 "max_retries": 0,
@@ -566,29 +570,43 @@ class CatalogService:
                     "allow_fallback": wp_ai_spec.allow_fallback,
                     "max_retries": wp_ai_spec.max_retries,
                     "timeout_ms": wp_ai_spec.timeout_ms,
-                    "managed_surface": "wordpress_ai_connector",
+                    "managed_surface": "hosted_runtime_profiles",
+                    "platform_kind": "wordpress",
+                    "connector_id": "wordpress_ai_connector",
+                    "operation_contract_version": WORDPRESS_OPERATION_CONTRACT,
                     "task_group": wp_ai_spec.group_id,
                     "tasks": list(wp_ai_spec.tasks),
                 }
-            repository.upsert_routing_profile(
-                profile_id=profile_id,
-                execution_kind=execution_kind,
-                default_policy_json=default_policy_json,
+            existing_binding = repository.get_routing_binding(profile_id)
+            preserve_hosted_admin_state = bool(
+                wp_ai_spec is not None
+                and existing_binding is not None
+                and str(existing_binding.revision or "").startswith("runtime-profiles-admin-")
             )
-            repository.upsert_routing_binding(
-                profile_id=profile_id,
-                candidate_instance_ids=candidate_instance_ids,
-                selection_policy_json={
-                    "strategy": "ordered",
-                    "ordered_tiers": ordered_tiers,
-                    **(
-                        {
-                            "managed_surface": "wordpress_ai_connector",
-                            "task_group": wp_ai_spec.group_id,
-                        }
-                        if wp_ai_spec is not None
-                        else {}
-                    ),
-                },
-                revision=revision,
-            )
+            if not preserve_hosted_admin_state:
+                repository.upsert_routing_profile(
+                    profile_id=profile_id,
+                    execution_kind=execution_kind,
+                    default_policy_json=default_policy_json,
+                )
+            if not preserve_hosted_admin_state:
+                repository.upsert_routing_binding(
+                    profile_id=profile_id,
+                    candidate_instance_ids=candidate_instance_ids,
+                    selection_policy_json={
+                        "strategy": "ordered",
+                        "ordered_tiers": ordered_tiers,
+                        **(
+                            {
+                                "managed_surface": "hosted_runtime_profiles",
+                                "platform_kind": "wordpress",
+                                "connector_id": "wordpress_ai_connector",
+                                "operation_contract_version": WORDPRESS_OPERATION_CONTRACT,
+                                "task_group": wp_ai_spec.group_id,
+                            }
+                            if wp_ai_spec is not None
+                            else {}
+                        ),
+                    },
+                    revision=revision,
+                )

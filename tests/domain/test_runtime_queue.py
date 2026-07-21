@@ -8,11 +8,12 @@ from typing import cast
 
 import httpx
 import pytest
+from redis import Redis
 from sqlalchemy import select
 
 from app.adapters.callbacks.base import RuntimeCallbackDispatchRequest
 from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
-from app.adapters.queue.in_memory import InMemoryRuntimeQueue
+from app.adapters.queue.base import RuntimeQueueError
 from app.adapters.queue.redis_runtime_queue import RedisRuntimeQueue
 from app.adapters.repositories.runtime_repository import RuntimeRepository
 from app.core.db import dispose_engine, get_session, init_schema
@@ -82,6 +83,36 @@ def _register_runtime_callback(database_url: str, callback_url: str) -> None:
             }
         }
         session.commit()
+
+
+class _FakeRedisRuntimeQueueClient:
+    def __init__(self) -> None:
+        self.values: list[str] = []
+        self.brpop_calls: list[tuple[list[str], int]] = []
+        self.rpop_calls: list[str] = []
+        self.closed = False
+
+    def lpush(self, queue_key: str, run_id: str) -> None:
+        assert queue_key == "runtime:test"
+        self.values.insert(0, run_id)
+
+    def brpop(self, queue_keys: list[str], timeout: int) -> tuple[str, str] | None:
+        assert queue_keys == ["runtime:test"]
+        assert timeout > 0, "zero-timeout drains must never use blocking BRPOP"
+        self.brpop_calls.append((queue_keys, timeout))
+        if not self.values:
+            return None
+        return queue_keys[0], self.values.pop()
+
+    def rpop(self, queue_key: str) -> str | None:
+        assert queue_key == "runtime:test"
+        self.rpop_calls.append(queue_key)
+        if not self.values:
+            return None
+        return self.values.pop()
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_execute_requires_preprovisioned_active_site(tmp_path: Path) -> None:
@@ -218,6 +249,80 @@ def test_process_next_queued_run_claims_from_database_without_signal(tmp_path: P
     dispose_engine(database_url)
 
 
+def test_execute_commits_queued_run_before_publish_and_survives_publish_failure(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
+    seed_site_auth(database_url, site_id="site_queue")
+
+    class VisibilityCheckingFailingQueue:
+        def __init__(self) -> None:
+            self.publish_attempts: list[str] = []
+
+        def publish(self, run_id: str) -> None:
+            with get_session(database_url) as observer_session:
+                durable_run = observer_session.get(RunRecord, run_id)
+                assert durable_run is not None
+                assert durable_run.status == "queued"
+            self.publish_attempts.append(run_id)
+            raise RuntimeQueueError("injected Redis wake-up failure")
+
+        def consume(self, timeout_seconds: int) -> str | None:
+            del timeout_seconds
+            return None
+
+    runtime_queue = VisibilityCheckingFailingQueue()
+    service = _runtime_service(database_url, runtime_queue=runtime_queue)
+    request = RuntimeRequest(
+        site_id="site_queue",
+        ability_name="workflow/media_nightly_image_optimize",
+        skill_id="media_nightly_optimize",
+        workflow_id="media_nightly_image_optimize",
+        contract_version="v1",
+        channel="openapi",
+        execution_kind="text",
+        profile_id="text.balanced",
+        execution_tier="cloud",
+        execution_pattern="whole_run_offload",
+        data_classification="internal",
+        timeout_seconds=1800,
+        retry_max=2,
+        retention_ttl=86400,
+        task_backend={"enabled": True, "mode": "polling"},
+        input_payload={
+            "messages": [{"role": "user", "content": "commit before Redis wake-up"}]
+        },
+        policy={"allow_fallback": True},
+        idempotency_key="queue-domain-commit-before-publish-001",
+        trace_id="trace-queue-domain-commit-before-publish-001",
+    )
+
+    first = service.execute(request)
+    replay = service.execute(request)
+
+    assert first.status == "queued"
+    assert first.idempotent_replay is False
+    assert first.provider_call_count == 0
+    assert first.task_backend["status"] == "queued"
+    assert replay.run_id == first.run_id
+    assert replay.status == "queued"
+    assert replay.idempotent_replay is True
+    assert replay.provider_call_count == 0
+    assert runtime_queue.publish_attempts == [first.run_id]
+
+    processed = _runtime_service(database_url).process_next_queued_run(timeout_seconds=0)
+    assert processed == {
+        "run_id": first.run_id,
+        "status": "succeeded",
+        "trace_id": "trace-queue-domain-commit-before-publish-001",
+    }
+
+    dispose_engine(database_url)
+
+
 def test_claim_next_queued_run_uses_atomic_update_returning(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
@@ -280,7 +385,12 @@ def test_process_queued_runs_drains_signaled_and_unsignaled_runs_in_one_cycle(
         concurrency={"max_active_runs": 2},
     )
 
-    runtime_queue = InMemoryRuntimeQueue()
+    redis_client = _FakeRedisRuntimeQueueClient()
+    runtime_queue = RedisRuntimeQueue(
+        "redis://example",
+        "runtime:test",
+        client=cast(Redis, redis_client),
+    )
     queue_service = _runtime_service(database_url, runtime_queue=runtime_queue)
     fallback_service = _runtime_service(database_url)
 
@@ -363,6 +473,8 @@ def test_process_queued_runs_drains_signaled_and_unsignaled_runs_in_one_cycle(
 
     assert worker.get_run(signaled.run_id)["task_backend"]["status"] == "completed"
     assert worker.get_run(unsignaled.run_id)["task_backend"]["status"] == "completed"
+    assert redis_client.brpop_calls == [(["runtime:test"], 1)]
+    assert redis_client.rpop_calls == ["runtime:test"]
 
     dispose_engine(database_url)
 
@@ -986,6 +1098,25 @@ def test_redis_runtime_queue_reuses_one_client_across_publish_and_consume(
 
     assert len(instances) == 1
     assert instances[0].closed is True
+
+
+def test_redis_runtime_queue_zero_timeout_uses_nonblocking_rpop_and_preserves_fifo() -> None:
+    redis_client = _FakeRedisRuntimeQueueClient()
+    queue = RedisRuntimeQueue(
+        "redis://example",
+        "runtime:test",
+        client=cast(Redis, redis_client),
+    )
+
+    assert queue.consume(0) is None
+    queue.publish("run-1")
+    queue.publish("run-2")
+    assert queue.consume(0) == "run-1"
+    assert queue.consume(0) == "run-2"
+    assert queue.consume(-1) is None
+
+    assert redis_client.brpop_calls == []
+    assert redis_client.rpop_calls == ["runtime:test"] * 4
 
 
 def test_http_callback_dispatcher_reuses_one_client_across_dispatches(

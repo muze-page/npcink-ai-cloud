@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
@@ -110,6 +110,7 @@ def test_alipay_gateway_verifies_payment_and_refund_callbacks() -> None:
     assert payment.external_order_no == "pay_alipay_001"
     assert payment.provider_trade_no == "202606230000000001"
     assert payment.amount == 99.0
+    assert payment.occurred_at == datetime(2026, 6, 23, 2, 20, 30, tzinfo=UTC)
     assert payment.to_payload()["contract_version"] == PAYMENT_GATEWAY_CONTRACT_VERSION
     assert refund.status == "succeeded"
     assert refund.external_refund_no == "ref_alipay_001"
@@ -185,6 +186,7 @@ def test_real_alipay_gateway_signs_order_and_verifies_callback() -> None:
     assert payment.external_order_no == "pay_real_alipay_001"
     assert payment.provider_trade_no == "202607040000000001"
     assert payment.amount == 29.0
+    assert payment.occurred_at == datetime(2026, 7, 4, 2, 20, 30, tzinfo=UTC)
 
 
 def test_real_alipay_gateway_closes_order(monkeypatch: pytest.MonkeyPatch) -> None:

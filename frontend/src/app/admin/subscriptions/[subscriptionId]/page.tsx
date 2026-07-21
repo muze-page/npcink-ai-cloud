@@ -4,20 +4,26 @@ import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { localizeAdminCommercialCopy } from '@/lib/admin-commercial-copy';
 import { resolveAdminPackageLabel } from '@/lib/admin-plan-copy';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { normalizeStatusToken, translateStatusLabel } from '@/lib/status-display';
-import { readResponsePayload } from '@/lib/safe-response';
 import {
   BackofficeMetricStrip,
+  BackofficeDiagnosticNotice,
+  BackofficeDisclosure,
   BackofficePageStack,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
-import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
+import { type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
+import { AdminLatestOperationButton } from '@/components/admin/AdminLatestOperationDialog';
+import { AdminHorizontalScroll } from '@/components/admin/AdminHorizontalScroll';
+import { AdminRouteSkeleton } from '@/components/admin/AdminRouteSkeleton';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { AdminAuditSummaryPanel } from '@/components/admin/AdminAuditSummaryPanel';
@@ -121,16 +127,21 @@ type SubscriptionBillingSnapshotRebuildResult = {
   receipt?: AdminMutationReceiptPayload;
 };
 
+const subscriptionDetailClient = createApiClient({ idempotencyPrefix: 'admin_subscription_detail' });
+
 function SubscriptionDetailContent() {
   const params = useParams();
   const { t } = useLocale();
+  const toast = useToast();
   const { subscriptionId } = params as { subscriptionId: string };
   const [detail, setDetail] = useState<SubscriptionDetailPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [mutationNotice, setMutationNotice] = useState<string | null>(null);
   const [lastReceipt, setLastReceipt] = useState<AdminMutationReceiptPayload | null>(null);
+  const [receiptOpen, setReceiptOpen] = useState(false);
   const [isSnapshotRefreshSaving, setIsSnapshotRefreshSaving] = useState(false);
+  const [snapshotRefreshError, setSnapshotRefreshError] = useState<string | null>(null);
+  const [loadVersion, setLoadVersion] = useState(0);
 
   useEffect(() => {
     const loadDetail = async () => {
@@ -138,35 +149,25 @@ function SubscriptionDetailContent() {
       setError(null);
 
       try {
-        const response = await fetch(`/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}`, {
-          credentials: 'include',
-        });
-
-        if (!response.ok) {
-          throw new Error(t('error.failed_load'));
-        }
-
-        const payload = await response.json();
-        setDetail((payload?.data ?? null) as SubscriptionDetailPayload | null);
+        const payload = (await subscriptionDetailClient.request<SubscriptionDetailPayload>(
+          `/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}`
+        )).data;
+        setDetail(payload);
       } catch (err) {
-        setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+        setError(resolveUiErrorMessage(err, t('error.failed_load')));
       } finally {
         setIsLoading(false);
       }
     };
 
     void loadDetail();
-  }, [subscriptionId, t]);
+  }, [loadVersion, subscriptionId, t]);
 
   const reloadDetail = async () => {
-    const response = await fetch(`/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}`, {
-      credentials: 'include',
-    });
-    if (!response.ok) {
-      throw new Error(t('error.failed_load'));
-    }
-    const payload = await response.json();
-    setDetail((payload?.data ?? null) as SubscriptionDetailPayload | null);
+    const payload = (await subscriptionDetailClient.request<SubscriptionDetailPayload>(
+      `/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}`
+    )).data;
+    setDetail(payload);
   };
 
   const normalized = useMemo(() => {
@@ -232,20 +233,24 @@ function SubscriptionDetailContent() {
   }, [detail, subscriptionId]);
 
   if (isLoading) {
-    return <LoadingFallback />;
+    return <AdminRouteSkeleton />;
   }
 
   if (error) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="max-w-md text-center">
-          <h2 className="mb-4 text-2xl font-bold text-red-600">{t('common.error')}</h2>
-          <p className="mb-6 text-gray-600 dark:text-gray-400">{error}</p>
-          <button onClick={() => window.location.reload()} className="btn btn-primary">
-            {t('common.retry')}
-          </button>
-        </div>
-      </div>
+      <BackofficePageStack>
+        <BackofficePrimaryPanel
+          eyebrow={t('admin.nav_coverage', {}, 'Service status')}
+          title={t('admin.subscription_detail.load_error_title', {}, 'Subscription detail is temporarily unavailable')}
+          description={t('admin.subscription_detail.load_error_desc', {}, 'The operator shell remains available. Retry this bounded subscription read without leaving the current route.')}
+        >
+          <BackofficeDiagnosticNotice
+            message={error}
+            retryLabel={t('common.retry')}
+            onRetry={() => setLoadVersion((value) => value + 1)}
+          />
+        </BackofficePrimaryPanel>
+      </BackofficePageStack>
     );
   }
 
@@ -300,6 +305,20 @@ function SubscriptionDetailContent() {
   const localizedSnapshotActionLabel = localizeAdminCommercialCopy(normalized.billingSnapshotNextAction.label, t);
   const localizedSnapshotActionDetail = localizeAdminCommercialCopy(normalized.billingSnapshotNextAction.detail, t);
   const hasSnapshotFollowUp = ['missing', 'stale'].includes(normalized.billingSnapshotStatus);
+  const needsCustomerCoverage = normalized.hasBudgetPressure || ['past_due', 'expired', 'suspended'].includes(normalized.status);
+  const conclusionTitle = hasSnapshotFollowUp
+    ? t('admin.subscription_detail.conclusion_snapshot_title', {}, 'Billing statistics need reconciliation')
+    : normalized.hasBudgetPressure
+      ? t('admin.subscription_detail.conclusion_budget_title', {}, 'Budget pressure needs customer follow-up')
+      : needsCustomerCoverage
+        ? t('admin.subscription_detail.conclusion_coverage_title', {}, 'Customer coverage needs follow-up')
+        : t('admin.subscription_detail.conclusion_stable_title', {}, 'Subscription coverage is stable');
+  const conclusionDescription = hasSnapshotFollowUp
+    ? t('admin.subscription_detail.current_conclusion_snapshot', {}, 'This period billing statistics need follow-up before treating this customer service state as reconciled.')
+    : nextStepCopy;
+  const accountCoverageHref = detail?.related_surfaces?.account_href || normalized.accountId
+    ? `${detail?.related_surfaces?.account_href || `/admin/accounts/${encodeURIComponent(normalized.accountId)}`}#coverage-actions`
+    : '';
   const relatedSiteCountLabel =
     normalized.relatedSites.length > 0
       ? t(
@@ -310,36 +329,31 @@ function SubscriptionDetailContent() {
       : t('common.not_found', {}, 'Not found');
 
   const handleBillingSnapshotRefresh = async () => {
-    setMutationNotice(null);
     setLastReceipt(null);
-    setError(null);
+    setSnapshotRefreshError(null);
     setIsSnapshotRefreshSaving(true);
     try {
-      const response = await fetch(
+      const data = (await subscriptionDetailClient.request<SubscriptionBillingSnapshotRebuildResult>(
         `/api/admin/subscriptions/${encodeURIComponent(normalized.subscriptionId)}/billing-snapshots/rebuild`,
         {
           method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
+          body: {},
         }
-      );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload?.message ?? null, t('error.failed_save', {}, 'Failed to save.')));
-      }
-      const data = (payload?.data || {}) as SubscriptionBillingSnapshotRebuildResult;
+      )).data;
       setLastReceipt(data.receipt || null);
-      setMutationNotice(
+      toast.success(
         t(
           'admin.subscription_detail.snapshot_refresh_notice',
           {},
           'Current-period billing snapshots were rebuilt for this subscription.'
-        )
+        ),
+        t('admin.subscription_detail.snapshot_refresh_success_title', {}, 'Billing statistics refreshed')
       );
       await reloadDetail();
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save', {}, 'Failed to save.')));
+      setSnapshotRefreshError(
+        resolveUiErrorMessage(err, t('error.failed_save', {}, 'Failed to save.'))
+      );
     } finally {
       setIsSnapshotRefreshSaving(false);
     }
@@ -358,26 +372,6 @@ function SubscriptionDetailContent() {
           'admin.subscription_detail.primary_desc',
           {},
           'Start with the current conclusion, then handle the customer, package, usage, or billing-statistics follow-up shown below.'
-        )}
-        actions={(
-          <>
-            <Link href="/admin/subscriptions" className="btn btn-secondary">
-              {t('admin.back_to_subscriptions', {}, 'Back to subscriptions')}
-            </Link>
-            {detail?.related_surfaces?.account_href ? (
-              <Link href={detail.related_surfaces.account_href} className="btn btn-primary">
-                {t('admin.subscription_detail.open_customer_action', {}, 'Open customer')}
-              </Link>
-            ) : null}
-            {detail?.related_surfaces?.account_href || normalized.accountId ? (
-              <Link
-                href={`${detail?.related_surfaces?.account_href || `/admin/accounts/${encodeURIComponent(normalized.accountId)}`}#coverage-actions`}
-                className="btn btn-secondary"
-              >
-                {t('admin.account_detail.change_package_action', {}, 'Change package')}
-              </Link>
-            ) : null}
-          </>
         )}
         summary={(
           <BackofficeMetricStrip
@@ -407,63 +401,107 @@ function SubscriptionDetailContent() {
           />
         )}
       >
-        <BackofficeStackCard className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <BackofficeStatusBadge status={normalized.status} label={translateStatusLabel(normalized.status, t)} />
-              <BackofficeStatusBadge status={billingSnapshotStatusTone} label={billingSnapshotStatusLabel} />
-              {normalized.graceActive ? (
-                <BackofficeStatusBadge status="warning" label={t('admin.subscription_detail.grace_active', {}, 'Grace active')} />
+        <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+          <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('admin.subscription_detail.current_follow_up', {}, 'Current follow-up')}
+            </p>
+            <h3 className="mt-3 text-lg font-semibold text-gray-950 dark:text-white">{conclusionTitle}</h3>
+            <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">{conclusionDescription}</p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              {hasSnapshotFollowUp && normalized.billingSnapshotNextAction.action ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => void handleBillingSnapshotRefresh()}
+                  disabled={isSnapshotRefreshSaving}
+                >
+                  {isSnapshotRefreshSaving
+                    ? t('admin.subscription_detail.snapshot_refresh_saving', {}, 'Refreshing statistics...')
+                    : localizedSnapshotActionLabel ||
+                      t('admin.subscription_detail.snapshot_refresh_action', {}, 'Refresh this period billing statistics')}
+                </button>
+              ) : accountCoverageHref ? (
+                <Link href={accountCoverageHref} className="btn btn-primary">
+                  {needsCustomerCoverage
+                    ? t('admin.subscription_detail.open_customer_coverage_action', {}, 'Open customer coverage')
+                    : t('admin.subscription_detail.open_customer_action', {}, 'Open customer')}
+                </Link>
+              ) : normalized.relatedSites[0]?.siteId ? (
+                <Link href={`/admin/sites/${normalized.relatedSites[0].siteId}`} className="btn btn-primary">
+                  {t('admin.site_detail.open_site_action', {}, 'Open site')}
+                </Link>
               ) : null}
             </div>
-            <p className="mt-3 text-sm font-semibold text-slate-950 dark:text-white">
-              {normalized.accountName || t('admin.subscription_detail.current_customer_label', {}, 'Current customer')}
-              {' · '}
-              {packageLabel}
+            {snapshotRefreshError ? (
+              <BackofficeDiagnosticNotice message={snapshotRefreshError} className="mt-4" />
+            ) : null}
+            <AdminLatestOperationButton
+              receipt={lastReceipt}
+              isOpen={receiptOpen}
+              onOpen={() => setReceiptOpen(true)}
+              onClose={() => setReceiptOpen(false)}
+              title={t('admin.latest_operation', {}, 'Latest operation')}
+              triggerLabel={t('admin.latest_operation', {}, 'Latest operation')}
+            />
+          </BackofficeStackCard>
+
+          <BackofficeStackCard>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('admin.subscription_detail.follow_up_focus', {}, 'Follow-up focus')}
             </p>
-            <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-              <span className="font-semibold text-slate-800 dark:text-slate-100">
-                {t('admin.current_conclusion', {}, 'Current conclusion')}:{' '}
-              </span>
-              {hasSnapshotFollowUp
-                ? t('admin.subscription_detail.current_conclusion_snapshot', {}, 'This period billing statistics need follow-up before treating this customer service state as reconciled.')
-                : nextStepCopy}
-            </p>
-            <details className="mt-3 text-xs text-slate-500 dark:text-slate-400">
-              <summary className="cursor-pointer font-medium">
-                {t('portal.support_information', {}, 'Support information')}
-              </summary>
-              <div className="mt-2 space-y-1">
-                <BackofficeIdentifier value={normalized.subscriptionId} full />
-                {normalized.planVersionId ? <BackofficeIdentifier value={normalized.planVersionId} full /> : null}
-              </div>
-            </details>
-          </div>
-          {hasSnapshotFollowUp && normalized.billingSnapshotNextAction.action ? (
-            <div className="shrink-0 space-y-2 lg:max-w-xs">
-              <button
-                type="button"
-                className="btn btn-primary w-full"
-                onClick={() => void handleBillingSnapshotRefresh()}
-                disabled={isSnapshotRefreshSaving}
-              >
-                {isSnapshotRefreshSaving
-                  ? t('admin.subscription_detail.snapshot_refresh_saving', {}, 'Refreshing statistics...')
-                  : localizedSnapshotActionLabel ||
-                    t('admin.subscription_detail.snapshot_refresh_action', {}, 'Refresh this period billing statistics')}
-              </button>
-              <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                {t(
-                  'admin.subscription_detail.snapshot_refresh_boundary',
-                  {},
-                  'Rebuilds billing statistics from usage records only. It does not change the package or WordPress content.'
-                )}
-              </p>
+            <div className="mt-4 divide-y divide-slate-200 dark:divide-slate-800">
+              {[
+                {
+                  label: t('admin.subscription_detail.service_state_metric', {}, 'Service state'),
+                  value: statusValue,
+                  detail: normalized.graceActive
+                    ? t('admin.subscription_detail.grace_active', {}, 'Grace active')
+                    : t('admin.subscription_detail.grace_inactive', {}, 'No active grace window'),
+                  tone: needsCustomerCoverage ? 'text-red-600 dark:text-red-400' : '',
+                },
+                {
+                  label: t('admin.subscription_detail.snapshot_freshness', {}, 'Billing statistics'),
+                  value: billingSnapshotStatusLabel,
+                  detail: localizedBillingSnapshotSummary || t('admin.subscription_detail.snapshot_freshness_desc', {}, 'This period billing statistics.'),
+                  tone: hasSnapshotFollowUp ? 'text-amber-600 dark:text-amber-300' : '',
+                },
+                {
+                  label: t('admin.subscription_detail.budget_pressure_label', {}, 'Budget pressure'),
+                  value: normalized.hasBudgetPressure
+                    ? t('common.attention', {}, 'Attention')
+                    : t('common.ok', {}, 'OK'),
+                  detail: t('admin.subscription_detail.budget_pressure_desc', {}, 'Current-period request, token, and cost limits.'),
+                  tone: normalized.hasBudgetPressure ? 'text-red-600 dark:text-red-400' : '',
+                },
+              ].map((item) => (
+                <div key={item.label} className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.14em] text-gray-500 dark:text-gray-400">{item.label}</p>
+                    <p className={`mt-1 text-sm font-semibold text-gray-950 dark:text-white ${item.tone}`}>{item.value}</p>
+                  </div>
+                  <p className="max-w-sm text-right text-sm text-gray-600 dark:text-gray-400">{item.detail}</p>
+                </div>
+              ))}
             </div>
-          ) : null}
-        </BackofficeStackCard>
+          </BackofficeStackCard>
+        </div>
+
+        <details className="rounded-2xl border border-dashed border-slate-200 px-4 py-4 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+          <summary className="cursor-pointer font-medium">
+            {t('portal.support_information', {}, 'Support information')}
+          </summary>
+          <div className="mt-2 space-y-1">
+            <BackofficeIdentifier value={normalized.subscriptionId} full />
+            {normalized.planVersionId ? <BackofficeIdentifier value={normalized.planVersionId} full /> : null}
+          </div>
+        </details>
       </BackofficePrimaryPanel>
 
+      <BackofficeDisclosure
+        summary={t('admin.subscription_detail.advanced_operational_evidence', {}, 'Advanced subscription evidence')}
+        contentClassName="space-y-6"
+      >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)]">
         <BackofficeSectionPanel className="space-y-4">
           <div>
@@ -543,7 +581,11 @@ function SubscriptionDetailContent() {
                 </p>
               </div>
             </div>
-            <div className="mt-4 overflow-x-auto">
+            <AdminHorizontalScroll
+              className="mt-4"
+              label={t('admin.subscription_detail.usage_table_region_label', {}, 'Budget and usage')}
+              hint={t('admin.table_scroll_hint', {}, 'Swipe horizontally to see more columns.')}
+            >
               <table className="min-w-[36rem] text-left text-sm">
                 <thead className="text-xs text-slate-500 dark:text-slate-400">
                   <tr>
@@ -578,7 +620,7 @@ function SubscriptionDetailContent() {
                   </tr>
                 </tbody>
               </table>
-            </div>
+            </AdminHorizontalScroll>
           </BackofficeStackCard>
         </BackofficeSectionPanel>
 
@@ -621,30 +663,11 @@ function SubscriptionDetailContent() {
                   )}
               </p>
               {normalized.billingSnapshotNextAction.action ? (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/50">
-                  <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    {localizedSnapshotActionDetail ||
-                      t('admin.subscription_detail.snapshot_refresh_detail', {}, 'Refresh this period billing statistics for every covered site before treating the service state as reconciled.')}
-                  </p>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm mt-3"
-                    onClick={() => void handleBillingSnapshotRefresh()}
-                    disabled={isSnapshotRefreshSaving}
-                  >
-                    {isSnapshotRefreshSaving
-                      ? t('admin.subscription_detail.snapshot_refresh_saving', {}, 'Refreshing statistics...')
-                      : localizedSnapshotActionLabel ||
-                        t('admin.subscription_detail.snapshot_refresh_action', {}, 'Refresh this period billing statistics')}
-                  </button>
-                </div>
+                <p className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-300">
+                  {localizedSnapshotActionDetail ||
+                    t('admin.subscription_detail.snapshot_refresh_detail', {}, 'Refresh this period billing statistics for every covered site before treating the service state as reconciled.')}
+                </p>
               ) : null}
-              {mutationNotice ? (
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-300">
-                  {mutationNotice}
-                </div>
-              ) : null}
-              <AdminMutationReceipt receipt={lastReceipt} />
             </BackofficeStackCard>
             <BackofficeStackCard>
               <p className="text-sm font-semibold text-slate-950 dark:text-white">
@@ -724,6 +747,7 @@ function SubscriptionDetailContent() {
           trailHref={detail?.related_surfaces?.audit_href}
         />
       </div>
+      </BackofficeDisclosure>
     </BackofficePageStack>
   );
 }

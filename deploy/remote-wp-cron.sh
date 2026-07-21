@@ -4,51 +4,11 @@ set -euo pipefail
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" >/dev/null 2>&1 && pwd -P || true)"
 ROOT_DIR="$(pwd -P)"
-if [ -n "${SCRIPT_DIR}" ] && [ -f "${SCRIPT_DIR}/../docker-compose.prod.yml" ]; then
+if [ -n "${SCRIPT_DIR}" ] && [ -f "${SCRIPT_DIR}/../deploy/common.sh" ]; then
 	ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 fi
 
-npcink_ai_cloud_require_cmd() {
-	local cmd="$1"
-	command -v "${cmd}" >/dev/null 2>&1 || {
-		echo "[fail] Missing required command: ${cmd}" >&2
-		exit 1
-	}
-}
-
-npcink_ai_cloud_load_env_file() {
-	local root_dir="$1"
-	local env_file="${NPCINK_CLOUD_ENV_FILE:-}"
-	local line=""
-	local key=""
-
-	if [ -z "${env_file}" ] && [ -f "${root_dir}/.env.deploy" ]; then
-		env_file="${root_dir}/.env.deploy"
-	fi
-	if [ -z "${env_file}" ] || [ ! -f "${env_file}" ]; then
-		return 0
-	fi
-
-	while IFS= read -r line || [ -n "${line}" ]; do
-		case "${line}" in
-			'' | '#'*)
-				continue
-				;;
-		esac
-		if [[ "${line}" != *=* ]]; then
-			continue
-		fi
-		key="${line%%=*}"
-		if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-			continue
-		fi
-		if [ -n "${!key+x}" ]; then
-			continue
-		fi
-		eval "export ${line}"
-	done < "${env_file}"
-}
-
+. "${ROOT_DIR}/deploy/common.sh"
 npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 
 ACTION="status"

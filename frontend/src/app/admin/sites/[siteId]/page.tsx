@@ -4,6 +4,8 @@ import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
+  BackofficeDiagnosticNotice,
+  BackofficeDisclosure,
   BackofficeLayer,
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -14,8 +16,11 @@ import {
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { AdminAuditSummaryPanel } from '@/components/admin/AdminAuditSummaryPanel';
+import { AdminRouteSkeleton } from '@/components/admin/AdminRouteSkeleton';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
+import { createApiClient } from '@/lib/api-client';
 import { resolveAdminPackageLabel } from '@/lib/admin-plan-copy';
 import { localizeAdminCommercialCopy } from '@/lib/admin-commercial-copy';
 import { translateStatusLabel } from '@/lib/status-display';
@@ -103,16 +108,75 @@ interface SiteDetail {
   }>;
 }
 
+interface SiteDetailApiPayload {
+  site?: Record<string, unknown>;
+  account?: Record<string, unknown>;
+  site_keys?: Array<{ status?: string }>;
+  subscription?: Record<string, unknown> | null;
+  commercial_policy?: {
+    budget_state?: SiteDetail['budget_state'];
+    subscription_grace?: SiteDetail['subscription_grace'];
+    policy?: Record<string, unknown>;
+  };
+  billing_reconciliation?: {
+    reconciliation?: {
+      in_sync?: boolean;
+      deltas?: { cost?: number };
+    };
+    snapshot?: Record<string, unknown> | null;
+  };
+  usage_meter?: {
+    totals?: {
+      requests?: number;
+      tokens?: number;
+      cost_usd?: number;
+    };
+  };
+  billing_snapshots?: { items?: Array<Record<string, unknown>> };
+  runtime_diagnostics?: {
+    queue?: { queued_runs?: number; latest_run_at?: string };
+    callback?: { failed?: number };
+  };
+  related_surfaces?: SiteDetail['related_surfaces'];
+  commercial_follow_up?: SiteDetail['commercial_follow_up'];
+  runtime_operator_explanations?: SiteDetail['runtime_operator_explanations'];
+}
+
+const siteDetailClient = createApiClient({ idempotencyPrefix: 'admin_site_detail' });
+
+function siteRuntimeExplanationText(
+  value: string,
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string
+): string {
+  const known: Record<string, [string, string]> = {
+    'Current runtime summary does not surface an immediate operator-critical blocker.': ['admin.site_detail.runtime_explanation_ok', 'Current runtime summary does not surface an immediate operator-critical blocker.'],
+    'Queued or backlogged runs are accumulating.': ['admin.site_detail.runtime_explanation_queued_short', 'Queued or backlogged runs are accumulating.'],
+  };
+  const copy = known[value];
+  if (copy) return t(copy[0], {}, copy[1]);
+  if (value.startsWith('Callback delivery is already degraded.')) {
+    return t('admin.site_detail.runtime_explanation_callback', {}, 'Callback delivery is degraded. Start from site runtime posture before widening provider or customer support work.');
+  }
+  if (value.startsWith('Queued or backlogged runs are accumulating.')) {
+    return t('admin.site_detail.runtime_explanation_queued', {}, 'Queued or backlogged runs are accumulating. Confirm the affected site before widening provider or model checks.');
+  }
+  if (value.startsWith('Recent guard events suggest')) {
+    return t('admin.site_detail.runtime_explanation_guard', {}, 'Recent guard events indicate policy or throttling pressure. Check commercial entitlement and support visibility before treating this as a pure runtime failure.');
+  }
+  return value;
+}
+
 function SiteDetailContent() {
   const params = useParams();
   const { t } = useLocale();
+  const toast = useToast();
   const { siteId } = params as { siteId: string };
   
   const [site, setSite] = useState<SiteDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [siteNotice, setSiteNotice] = useState<string | null>(null);
   const [siteActionError, setSiteActionError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [isActivatingSite, setIsActivatingSite] = useState(false);
 
   const handleActivateSite = async () => {
@@ -122,40 +186,26 @@ function SiteDetailContent() {
 
     setIsActivatingSite(true);
     setSiteActionError(null);
-    setSiteNotice(null);
 
     try {
-      const response = await fetch(`/api/admin/sites/${encodeURIComponent(site.site_id)}/activate`, {
+      await siteDetailClient.request<Record<string, unknown>>(`/api/admin/sites/${encodeURIComponent(site.site_id)}/activate`, {
         method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({}),
+        body: {},
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(
-          resolveUiErrorMessage(
-            payload.message,
-            t('admin.site_detail.activate_failed', undefined, 'Failed to activate the site.')
-          )
-        );
-      }
       setSite((current) => (current ? { ...current, status: 'active' } : current));
-      setSiteNotice(
+      toast.success(
         t(
           'admin.site_detail.activate_success',
           undefined,
           'Site is now active. Signed addon probes and hosted runtime requests can proceed.'
-        )
+        ),
+        t('admin.site_detail.activate_success_title', undefined, 'Site activated')
       );
     } catch (err) {
-      setSiteActionError(
-        err instanceof Error
-          ? err.message
-          : t('admin.site_detail.activate_failed', undefined, 'Failed to activate the site.')
-      );
+      setSiteActionError(resolveUiErrorMessage(
+        err,
+        t('admin.site_detail.activate_failed', undefined, 'Failed to activate the site.')
+      ));
     } finally {
       setIsActivatingSite(false);
     }
@@ -167,16 +217,9 @@ function SiteDetailContent() {
       setError(null);
       
       try {
-        const response = await fetch(`/api/admin/sites/${siteId}`, {
-          credentials: 'include',
-        });
-        
-        if (!response.ok) {
-          throw new Error(t('error.failed_load'));
-        }
-        
-        const data = await response.json();
-        const payload = data.data || {};
+        const payload = (await siteDetailClient.request<SiteDetailApiPayload>(
+          `/api/admin/sites/${siteId}`
+        )).data;
         const rawSite = payload.site || {};
         const rawAccount = payload.account || {};
         const siteKeys = Array.isArray(payload.site_keys) ? payload.site_keys : [];
@@ -188,9 +231,7 @@ function SiteDetailContent() {
         const usageTotals = payload.usage_meter?.totals || {};
         const billingItems = Array.isArray(payload.billing_snapshots?.items)
           ? payload.billing_snapshots.items
-          : Array.isArray(payload.billing_snapshots)
-            ? payload.billing_snapshots
-            : [];
+          : [];
         const latestSnapshot = billingItems[0] || payload.billing_reconciliation?.snapshot || null;
         const normalizedSite: SiteDetail = {
           site_id: String(rawSite.site_id || siteId),
@@ -256,35 +297,34 @@ function SiteDetailContent() {
         setSite(normalizedSite);
         await Promise.resolve();
       } catch (err) {
-        setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+        setError(resolveUiErrorMessage(err, t('error.failed_load')));
       } finally {
         setIsLoading(false);
       }
     };
 
     loadSite();
-  }, [siteId, t]);
+  }, [reloadKey, siteId, t]);
 
   if (isLoading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin text-4xl mb-4">⏳</div>
-          <p className="text-gray-600 dark:text-gray-400">{t('common.loading')}</p>
-        </div>
-      </div>
-    );
+    return <AdminRouteSkeleton />;
   }
 
   if (error) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="text-center max-w-md">
-          <h2 className="text-2xl font-bold mb-4 text-red-600">{t('common.error')}</h2>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">{error}</p>
-          <button onClick={() => window.location.reload()} className="btn btn-primary">{t('common.retry')}</button>
-        </div>
-      </div>
+      <BackofficePageStack>
+        <BackofficePrimaryPanel
+          eyebrow={t('admin.site_health')}
+          title={t('admin.site_detail.load_error_title', undefined, 'Site detail is temporarily unavailable')}
+          description={t('admin.site_detail.load_error_desc', undefined, 'Retry this bounded site read without leaving the current operator route.')}
+        >
+          <BackofficeDiagnosticNotice
+            message={error}
+            retryLabel={t('common.retry')}
+            onRetry={() => setReloadKey((value) => value + 1)}
+          />
+        </BackofficePrimaryPanel>
+      </BackofficePageStack>
     );
   }
 
@@ -431,6 +471,17 @@ function SiteDetailContent() {
     site.commercial_follow_up?.next_operator_follow_up,
     t
   );
+  const formatUsageAgainstLimit = (
+    current: number,
+    limit: number,
+    formatter: (value: number) => string
+  ) => limit > 0
+    ? `${formatter(current)} / ${formatter(limit)}`
+    : t(
+        'admin.site_detail.usage_without_limit',
+        { used: formatter(current) },
+        `Used ${formatter(current)} · limit not configured`
+      );
 
   return (
     <BackofficePageStack>
@@ -438,12 +489,7 @@ function SiteDetailContent() {
         eyebrow={t('admin.site_health')}
         title={site.site_name || site.site_id}
         description={postureDescription}
-        actions={(
-          <>
-            <Link href={`/admin/accounts/${site.account_id}`} className="btn btn-secondary">
-              {t('common.account')}
-            </Link>
-            {site.status === 'provisioning' ? (
+        actions={site.status === 'provisioning' ? (
               <button
                 type="button"
                 onClick={handleActivateSite}
@@ -454,9 +500,7 @@ function SiteDetailContent() {
                   ? t('common.saving')
                   : t('admin.site_detail.activate_action', undefined, 'Activate site')}
               </button>
-            ) : null}
-          </>
-        )}
+            ) : undefined}
         summary={(
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_1.45fr]">
             <div>
@@ -474,8 +518,6 @@ function SiteDetailContent() {
                   />
                 ) : null}
               </div>
-              <h2 className="mt-4 text-xl font-semibold text-gray-950 dark:text-white">{postureTitle}</h2>
-              <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{t('admin.site_detail.summary_desc')}</p>
               {site.status === 'provisioning' ? (
                 <p className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
                   {t(
@@ -483,11 +525,6 @@ function SiteDetailContent() {
                     undefined,
                     'This site record exists, but hosted runtime is still blocked until the site is activated.'
                   )}
-                </p>
-              ) : null}
-              {siteNotice ? (
-                <p className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
-                  {siteNotice}
                 </p>
               ) : null}
               {siteActionError ? (
@@ -530,15 +567,6 @@ function SiteDetailContent() {
               <Link href={nextStep.href} className="btn btn-primary">
                 {nextStep.label}
               </Link>
-              {site.related_surfaces?.audit_href ? (
-                <Link
-                  href={site.related_surfaces.audit_href}
-                  className="text-sm font-medium text-slate-600 underline decoration-dotted underline-offset-4 transition hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
-                  target="_blank"
-                >
-                  {t('admin.view_audit_trail', {}, 'View audit trail')}
-                </Link>
-              ) : null}
             </div>
           </BackofficeStackCard>
           <BackofficeStackCard>
@@ -572,9 +600,6 @@ function SiteDetailContent() {
                   {t('common.account', {}, 'Customer')}
                 </Link>
               ) : null}
-              <Link href="/admin/subscriptions" className="btn btn-secondary">
-                {t('admin.coverage_title', {}, 'Coverage')}
-              </Link>
               {site.related_surfaces?.subscription_href ? (
                 <Link href={site.related_surfaces.subscription_href} className="text-sm font-medium text-slate-600 underline decoration-dotted underline-offset-4 transition hover:text-slate-950 dark:text-slate-300 dark:hover:text-white">
                   {t('admin.inspect_subscription_detail', {}, 'Inspect subscription detail')}
@@ -600,7 +625,7 @@ function SiteDetailContent() {
                   <p className="text-sm font-semibold text-slate-950 dark:text-white">
                     {translateStatusLabel(item.state || 'ok', t)}
                   </p>
-                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{item.explain_text || t('common.not_available', {}, 'N/A')}</p>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{item.explain_text ? siteRuntimeExplanationText(item.explain_text, t) : t('common.not_available', {}, 'N/A')}</p>
                 </div>
               ))}
             </div>
@@ -622,6 +647,10 @@ function SiteDetailContent() {
         </details>
       </BackofficePrimaryPanel>
 
+      <BackofficeDisclosure
+        summary={t('admin.site_detail.advanced_operational_evidence', undefined, 'Advanced site operational evidence')}
+        contentClassName="space-y-6"
+      >
       <BackofficeLayer
         eyebrow={t('admin.site_detail.operational_detail_eyebrow', undefined, 'Operational detail')}
         title={t('admin.site_detail.operational_detail_title', undefined, 'Inspect linked records before deeper support actions')}
@@ -676,15 +705,27 @@ function SiteDetailContent() {
                 <div className="grid gap-3 md:grid-cols-3">
                   <CoverageMetric
                     label={t('billing.runs', {}, 'Runs')}
-                    value={`${formatInteger(Number(runBudget.current_total || 0))} / ${formatInteger(Number(runBudget.limit || 0))}`}
+                    value={formatUsageAgainstLimit(
+                      Number(runBudget.current_total || 0),
+                      Number(runBudget.limit || 0),
+                      formatInteger
+                    )}
                   />
                   <CoverageMetric
                     label={t('common.tokens')}
-                    value={`${formatInteger(Number(tokenBudget.current_total || 0))} / ${formatInteger(Number(tokenBudget.limit || 0))}`}
+                    value={formatUsageAgainstLimit(
+                      Number(tokenBudget.current_total || 0),
+                      Number(tokenBudget.limit || 0),
+                      formatInteger
+                    )}
                   />
                   <CoverageMetric
                     label={t('common.cost')}
-                    value={`${formatAdminCurrency(Number(costBudget.current_total || 0))} / ${formatAdminCurrency(Number(costBudget.limit || 0))}`}
+                    value={formatUsageAgainstLimit(
+                      Number(costBudget.current_total || 0),
+                      Number(costBudget.limit || 0),
+                      formatAdminCurrency
+                    )}
                   />
                 </div>
                 <div className="mt-4 space-y-2 text-sm text-gray-600 dark:text-gray-300">
@@ -845,6 +886,7 @@ function SiteDetailContent() {
           </div>
         </BackofficeSectionPanel>
       </div>
+      </BackofficeDisclosure>
     </BackofficePageStack>
   );
 }

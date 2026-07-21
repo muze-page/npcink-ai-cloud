@@ -7,6 +7,7 @@ const portalNavbarPath = resolve(root, 'src/components/portal/PortalNavbar.tsx')
 const portalSupportPagePath = resolve(root, 'src/app/portal/support/page.tsx');
 const portalSupportDetailPagePath = resolve(root, 'src/app/portal/support/[requestId]/page.tsx');
 const portalBillingPagePath = resolve(root, 'src/app/portal/billing/page.tsx');
+const portalPackagePanelPath = resolve(root, 'src/components/portal/PortalPackageChangePanel.tsx');
 const portalClientPath = resolve(root, 'src/lib/portal-client.ts');
 const adminLayoutPath = resolve(root, 'src/app/admin/layout.tsx');
 const adminSupportPagePath = resolve(root, 'src/app/admin/support-requests/page.tsx');
@@ -18,6 +19,7 @@ const portalNavbarSource = readFileSync(portalNavbarPath, 'utf8');
 const portalSupportPageSource = readFileSync(portalSupportPagePath, 'utf8');
 const portalSupportDetailPageSource = readFileSync(portalSupportDetailPagePath, 'utf8');
 const portalBillingPageSource = readFileSync(portalBillingPagePath, 'utf8');
+const portalPackagePanelSource = readFileSync(portalPackagePanelPath, 'utf8');
 const portalClientSource = readFileSync(portalClientPath, 'utf8');
 const adminLayoutSource = readFileSync(adminLayoutPath, 'utf8');
 const adminSupportPageSource = readFileSync(adminSupportPagePath, 'utf8');
@@ -37,6 +39,15 @@ assert.match(
 );
 assert.match(
   portalSupportPageSource,
+  /<Modal[\s\S]*data-portal-support="new-ticket-dialog"/,
+  'Portal ticket creation must open in a focused dialog instead of displacing ticket history'
+);
+assert.ok(
+  portalSupportPageSource.indexOf('portal.support_request_list_title') < portalSupportPageSource.indexOf('data-portal-support="status-rules"'),
+  'Portal ticket history must appear before status guidance'
+);
+assert.match(
+  portalSupportPageSource,
   /<ListPagination[\s\S]*offset=\{offset\}[\s\S]*total=\{total\}/,
   'Portal support history must expose all tickets through pagination'
 );
@@ -51,14 +62,14 @@ assert.match(
   'Portal support page must explain ticket status, close evaluation, and reopen expectations'
 );
 assert.match(
-  portalBillingPageSource,
+  portalPackagePanelSource,
   /\/portal\/support\?new=1&topic=billing/,
-  'Portal package page must open the ticket form for package or payment issues'
+  'Portal package dialog must keep a contextual support path for Agency requests'
 );
 assert.doesNotMatch(
   portalBillingPageSource,
-  /\/portal\/support\?new=1&topic=billing&site=|encodeURIComponent\(selectedSiteId\)/,
-  'Portal package page must open account-level billing tickets without preselecting a site'
+  /supportRequestHref|portal\.support_request_new_action/,
+  'Portal package header must not duplicate the global ticket navigation'
 );
 assert.doesNotMatch(
   portalSupportPageSource,
@@ -112,7 +123,7 @@ assert.match(
 );
 assert.match(
   adminSupportPageSource,
-  /fetch\(`\/api\/admin\/support-requests\?\$\{params\.toString\(\)\}`/,
+  /createApiClient[\s\S]*`\/api\/admin\/support-requests\?\$\{(?:requestKey|params\.toString\(\))\}`/,
   'Admin support page must load the support request queue through the admin proxy'
 );
 assert.match(
@@ -122,12 +133,12 @@ assert.match(
 );
 assert.match(
   adminSupportPageSource,
-  /\/api\/admin\/support-requests\/\$\{encodeURIComponent\(requestId\)\}[\s\S]*method: 'PATCH'/,
+  /\/api\/admin\/support-requests\/\$\{encodeURIComponent\((?:item\.request_id|requestId)\)\}[\s\S]*method: 'PATCH'/,
   'Admin support page must update ticket status through the admin proxy'
 );
 assert.match(
   adminSupportPageSource,
-  /params\.set\('topic', topic\)[\s\S]*topicFilter/,
+  /params\.set\('topic', (?:appliedTopic|topic)\)[\s\S]*value=\{(?:appliedTopic|topicFilter)\}/,
   'Admin support queue must expose the backend topic filter'
 );
 assert.match(
@@ -147,13 +158,13 @@ assert.match(
 );
 assert.match(
   adminProxySource,
-  /PATCH[\s\S]*\^support-requests\\\/\[\^\/\]\+\$/,
-  'Admin proxy must route support request status updates to the admin service namespace'
+  /methods: \['PATCH'\],[\s\S]*?pattern: \/\^support-requests\\\/\[\^\/\]\+\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_accounts'/,
+  'Admin proxy must explicitly allowlist support request status updates with account-management authority'
 );
 assert.match(
   adminProxySource,
-  /POST[\s\S]*\^support-requests\\\/\[\^\/\]\+\\\/messages\$/,
-  'Admin proxy must route support request message creation to the admin service namespace'
+  /methods: \['POST'\],[\s\S]*?pattern: \/\^support-requests\\\/\[\^\/\]\+\\\/\(\?:messages\|attachments\)\$\/[\s\S]*?namespace: 'admin'[\s\S]*?requiredCapability: 'can_manage_accounts'/,
+  'Admin proxy must explicitly allowlist support request message and attachment creation with account-management authority'
 );
 assert.match(
   i18nSource,

@@ -60,7 +60,7 @@ wait_for_admin_route() {
 
 command -v docker >/dev/null 2>&1 || fail "docker is not installed or not on PATH"
 node scripts/check-frontend-lock-sync.js >/dev/null \
-	|| fail "frontend dependency lockfiles are not in sync"
+	|| fail "root frontend dependency lock is invalid"
 docker compose -f "${COMPOSE_FILE}" ps >/dev/null 2>&1 || fail "dev compose stack is unavailable"
 
 frontend_status="$(
@@ -82,10 +82,11 @@ fi
 info "checking frontend container dependencies"
 docker compose -f "${COMPOSE_FILE}" exec -T frontend sh -lc '
 	set -eu
-	test -d /app/node_modules || { echo "/app/node_modules is missing"; exit 1; }
+	test -d /app/frontend/node_modules || { echo "/app/frontend/node_modules is missing"; exit 1; }
 	test -d /app/node_modules/.pnpm || { echo "/app/node_modules/.pnpm is missing"; exit 1; }
 	count="$(find /app/node_modules/.pnpm -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d " ")"
 	[ "${count}" -gt 20 ] || { echo "/app/node_modules/.pnpm has too few packages: ${count}"; exit 1; }
+	cd /app/frontend
 	node - <<'"'"'NODE'"'"'
 const required = [
   "@swc/helpers/package.json",

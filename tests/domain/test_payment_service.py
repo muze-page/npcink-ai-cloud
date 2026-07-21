@@ -22,6 +22,7 @@ from app.core.models import (
     AccountEntitlementSnapshot,
     AccountSubscription,
     CreditLedgerEntry,
+    PaidCreditGrant,
     PaymentEvent,
     PaymentOrder,
     PaymentRefund,
@@ -604,6 +605,36 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
         entries = list(session.scalars(select(CreditLedgerEntry)))
         assert len(entries) == 1
         assert entries[0].credit_delta == 10000.0
+        grant = session.scalar(select(PaidCreditGrant))
+        assert grant is not None
+        assert grant.payment_order_id == order["order_id"]
+        assert grant.remaining_credits == 10000.0
+
+    quota = service.get_portal_account_quota_summary("acct_pay")
+    assert quota["credit"]["package_remaining"] == 200.0
+    assert quota["credit"]["paid_remaining"] == 10000.0
+    assert quota["credit"]["total_remaining"] == 10200.0
+
+    with get_session(database_url) as session:
+        subscription = session.scalar(select(AccountSubscription))
+        grant = session.scalar(select(PaidCreditGrant))
+        assert subscription is not None
+        assert grant is not None
+        subscription.current_period_start_at = datetime.now(UTC) + timedelta(days=30)
+        subscription.current_period_end_at = datetime.now(UTC) + timedelta(days=60)
+        grant.expires_at = datetime.now(UTC) + timedelta(days=300)
+        session.commit()
+
+    next_period_quota = service.get_portal_account_quota_summary("acct_pay")
+    assert next_period_quota["credit"]["paid_remaining"] == 10000.0
+
+    with get_session(database_url) as session:
+        grant = session.scalar(select(PaidCreditGrant))
+        assert grant is not None
+        grant.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+    expired_quota = service.get_portal_account_quota_summary("acct_pay")
+    assert expired_quota["credit"]["paid_remaining"] == 0.0
 
     dispose_engine(database_url)
 

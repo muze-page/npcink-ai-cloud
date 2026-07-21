@@ -7,7 +7,10 @@ const accountDetailSource = readFileSync(fromFrontendRoot('src/app/admin/account
 const portalUsersSource = readFileSync(fromFrontendRoot('src/app/admin/portal-users/page.tsx'), 'utf8');
 const subscriptionDetailSource = readFileSync(fromFrontendRoot('src/app/admin/subscriptions/[subscriptionId]/page.tsx'), 'utf8');
 const aiResourcesSource = readFileSync(fromFrontendRoot('src/app/admin/ai-resources/page.tsx'), 'utf8');
-const abilityModelsSource = readFileSync(fromFrontendRoot('src/app/admin/ability-models/page.tsx'), 'utf8');
+const supplierToolbarSource = readFileSync(fromFrontendRoot('src/components/admin/SupplierToolbar.tsx'), 'utf8');
+const toastSource = readFileSync(fromFrontendRoot('src/components/ui/Toast.tsx'), 'utf8');
+const feedbackContractSource = readFileSync(fromFrontendRoot('../docs/cloud-admin-feedback-and-layout-contract-v1.md'), 'utf8');
+const runtimeProfilesSource = readFileSync(fromFrontendRoot('src/app/admin/runtime-profiles/page.tsx'), 'utf8');
 const serviceSettingsSource = readFileSync(fromFrontendRoot('src/app/admin/service-settings/page.tsx'), 'utf8');
 const i18nSource = readFileSync(fromFrontendRoot('src/lib/i18n.ts'), 'utf8');
 const zhStart = i18nSource.indexOf("'zh-CN': {");
@@ -89,27 +92,65 @@ assert.match(
   'AI resources provider writes must render the shared admin mutation receipt'
 );
 
-assert.match(
-  aiResourcesSource,
-  /setLastReceipt\(\(payload\.data\?\.receipt \|\| null\) as AdminMutationReceiptPayload \| null\)/,
+assert.ok(
+  Array.from(
+    aiResourcesSource.matchAll(
+      /setLastReceipt\((?:response\.data\.receipt|result\.receipt) \|\| null\)/g
+    )
+  ).length >= 3,
   'AI resources provider writes must store backend receipts for save, delete, and test operations'
 );
 
 assert.match(
-  abilityModelsSource,
-  /AdminMutationReceipt[\s\S]*AdminMutationReceiptPayload/,
-  'Ability-model routing writes must render the shared admin mutation receipt'
+  aiResourcesSource,
+  /useToast\(\)/,
+  'AI resources transient provider outcomes must use the global Toast surface'
+);
+
+assert.doesNotMatch(
+  aiResourcesSource,
+  /!providerFormOpen && message[\s\S]{0,400}BackofficeStackCard/,
+  'AI resources must not expand the summary panel with transient success feedback'
 );
 
 assert.match(
-  abilityModelsSource,
-  /setDialogReceipt\(\(payload\.data\?\.receipt \|\| null\) as AdminMutationReceiptPayload \| null\)/,
-  'Ability-model routing writes must store backend receipts in the save dialog'
+  aiResourcesSource,
+  /hasLatestOperation=\{Boolean\(lastReceipt\)\}[\s\S]*onOpenLatestOperation=\{\(\) => setReceiptDetailsOpen\(true\)\}/,
+  'AI resources must expose the latest auditable receipt from the supplier toolbar'
+);
+
+assert.match(
+  supplierToolbarSource,
+  /hasLatestOperation[\s\S]*action_latest_operation/,
+  'Supplier toolbar must keep the latest operation entry compact and contextual'
+);
+
+assert.match(
+  toastSource,
+  /fixed inset-x-4 top-16[\s\S]*sm:left-1\/2[\s\S]*sm:-translate-x-1\/2/,
+  'Global Toast feedback must stay out of document flow, stay inset on mobile, and center on wider screens'
+);
+
+assert.match(
+  feedbackContractSource,
+  /## 4\. Feedback Taxonomy[\s\S]*### 4\.5 Auditable mutation receipt/,
+  'Cloud admin feedback contract must classify transient feedback separately from durable receipts'
+);
+
+assert.match(
+  runtimeProfilesSource,
+  /AdminMutationReceipt[\s\S]*AdminMutationReceiptPayload/,
+  'Hosted runtime profile writes must render the shared admin mutation receipt'
+);
+
+assert.match(
+  runtimeProfilesSource,
+  /receipt[\s\S]{0,200}AdminMutationReceiptPayload \| null/,
+  'Hosted runtime profile writes must store the backend receipt'
 );
 
 for (const [source, label] of [
   [aiResourcesSource, 'AI resources'],
-  [abilityModelsSource, 'Ability-model routing'],
   [serviceSettingsSource, 'Service settings'],
 ]) {
   assert.match(
@@ -118,6 +159,12 @@ for (const [source, label] of [
     `${label} must collect low-frequency top-level descriptions behind an info hint`
   );
 }
+
+assert.match(
+  runtimeProfilesSource,
+  /<BackofficePrimaryPanel[\s\S]*description=\{copy\('description'/,
+  'Hosted runtime profiles must keep the Cloud runtime boundary visible in the compact workspace header'
+);
 
 const requiredKeys = [
   'admin.receipt_latest',

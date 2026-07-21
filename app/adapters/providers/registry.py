@@ -34,6 +34,7 @@ OPENAI_COMPATIBLE_CONNECTION_KINDS = frozenset(
         "image_generation_provider",
     }
 )
+ALLOWED_IMAGE_RESPONSE_FORMATS = frozenset({"url", "b64_json"})
 
 
 def build_provider_adapters(
@@ -237,6 +238,12 @@ def _instantiate_connection_adapter(
         or _default_timeout_seconds(settings, kind)
     )
     allow_sample_fallback = _allow_sample_provider_fallback(settings)
+    image_response_format = _coerce_string(config.get("image_response_format")).lower()
+    if (
+        kind in OPENAI_COMPATIBLE_CONNECTION_KINDS or kind == "siliconflow"
+    ) and image_response_format not in ALLOWED_IMAGE_RESPONSE_FORMATS | {""}:
+        return None
+    image_output_hosts = _coerce_string_list(config.get("image_output_hosts"))
 
     if kind in OPENAI_COMPATIBLE_CONNECTION_KINDS:
         return _with_connection_identity(
@@ -256,6 +263,8 @@ def _instantiate_connection_adapter(
                     default_provider_id="openai",
                 ),
                 provider_label=display_name,
+                image_output_hosts=image_output_hosts,
+                image_response_format=image_response_format or None,
             ),
             provider_id=provider_id,
             display_name=display_name,
@@ -360,6 +369,8 @@ def _instantiate_connection_adapter(
                 api_key=credential,
                 timeout_seconds=timeout_seconds,
                 app_name=settings.project_name,
+                image_output_hosts=image_output_hosts,
+                image_response_format=image_response_format or None,
             ),
             provider_id=provider_id,
             display_name=display_name,

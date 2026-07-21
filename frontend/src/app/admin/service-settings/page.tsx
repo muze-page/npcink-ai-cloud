@@ -1,23 +1,34 @@
 'use client';
 
-import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useRouter } from 'next/navigation';
 import {
-  BackofficeMetricStrip,
+  BackofficeDiagnosticNotice,
   BackofficePageStack,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
-  BackofficeStackCard,
+  BackofficeSummaryStrip,
 } from '@/components/backoffice/BackofficeScaffold';
+import { AdminRouteSkeleton } from '@/components/admin/AdminRouteSkeleton';
+import { ConfirmModal } from '@/components/ui/Modal';
+import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
-import { resolveUiErrorMessage } from '@/lib/errors';
+import { createApiClient } from '@/lib/api-client';
+import { ApiError, resolveUiErrorMessage } from '@/lib/errors';
+import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
+import { cn } from '@/lib/utils';
 
 type SettingStatus = 'ready' | 'disabled' | 'missing_config' | 'error' | string;
-type ServiceSettingsTab = 'login' | 'email' | 'payment';
+type ServiceSettingsTab = 'portal' | 'qq' | 'email' | 'payment';
 type EmailPreviewType = 'login' | 'registration' | 'email_change' | 'email_changed' | 'test';
 type EmailPreviewMode = 'html' | 'text';
-type BackendPayload = Record<string, unknown> | string | null;
 type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
+const serviceSettingsClient = createApiClient({
+  cache: 'default',
+  idempotencyPrefix: 'admin_service_settings',
+});
 
 type ServiceSetting = {
   setting_id: string;
@@ -83,6 +94,13 @@ type AlipayForm = {
   return_url: string;
   private_key: string;
   public_key: string;
+};
+
+type SavedServiceSettingsForms = {
+  portal: PortalPublicForm;
+  qq: QQForm;
+  email: EmailForm;
+  payment: AlipayForm;
 };
 
 function stringValue(value: unknown): string {
@@ -184,17 +202,12 @@ function inferBrowserPublicBaseUrl(): string {
   }
 }
 
-function payloadRecord(payload: BackendPayload): Record<string, unknown> | null {
-  return payload && typeof payload === 'object' ? payload : null;
-}
-
-function serviceSettingsErrorMessage(
-  record: Record<string, unknown>,
+function serviceSettingsErrorDetail(
+  errorCode: string,
+  rawMessage: string,
   fallback: string,
   t: Translator
 ): string {
-  const errorCode = String(record.error_code || '').trim();
-  const rawMessage = String(record.message || '').trim();
   if (errorCode === 'service_settings.email_delivery_failed') {
     if (/Authentication failure|authentication failed|auth/i.test(rawMessage)) {
       return t('admin.service_settings.error_email_auth_failed', {}, 'SMTP 服务器拒绝认证。请检查 SMTP 用户名、密码或应用专用密码，并确认发件邮箱已启用 SMTP。');
@@ -251,49 +264,25 @@ function serviceSettingsErrorMessage(
   return resolveUiErrorMessage(rawMessage, fallback);
 }
 
-async function readBackendPayload(response: Response): Promise<BackendPayload> {
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    try {
-      return await response.json();
-    } catch {
-      return null;
-    }
-  }
-  const text = await response.text().catch(() => '');
-  return text.trim() || null;
-}
-
-function requestErrorMessage(
-  response: Response,
-  payload: BackendPayload,
+function serviceSettingsRequestErrorMessage(
+  error: unknown,
   fallback: string,
   t: Translator
 ): string {
-  const record = payloadRecord(payload);
-  if (record) {
-    const message = serviceSettingsErrorMessage(record, fallback, t);
-    const errorCode = String(record.error_code || '').trim();
-    if (errorCode.startsWith('service_settings.')) {
-      return response.status >= 500
-        ? t('admin.service_settings.error_http_suffix', { message, status: String(response.status) }, '{{message}} (HTTP {{status}}).')
-        : message;
-    }
-    if (response.status >= 500) {
-      return t('admin.service_settings.error_http_migration_hint', { message, status: String(response.status) }, '{{message}}（HTTP {{status}}）。请确认数据库迁移已执行，并查看 API 日志。');
-    }
-    return message;
+  if (!(error instanceof ApiError)) {
+    return resolveUiErrorMessage(error, fallback);
   }
 
-  const text = typeof payload === 'string' ? payload : '';
-  if (response.status >= 500) {
-    const detail = text ? `：${text.slice(0, 120)}` : '';
-    return t('admin.service_settings.error_backend_status', { fallback, status: String(response.status), detail }, '{{fallback}}：后端返回 {{status}}{{detail}}。请确认数据库迁移已执行，并查看 API 日志。');
+  const message = serviceSettingsErrorDetail(error.errorCode, error.message, fallback, t);
+  if (error.errorCode.startsWith('service_settings.')) {
+    return error.statusCode >= 500
+      ? t('admin.service_settings.error_http_suffix', { message, status: String(error.statusCode) }, '{{message}} (HTTP {{status}}).')
+      : message;
   }
-  if (text) {
-    return t('admin.service_settings.error_with_detail', { fallback, detail: text }, '{{fallback}}: {{detail}}');
+  if (error.statusCode >= 500) {
+    return t('admin.service_settings.error_http_migration_hint', { message, status: String(error.statusCode) }, '{{message}}（HTTP {{status}}）。请确认数据库迁移已执行，并查看 API 日志。');
   }
-  return t('admin.service_settings.error_http_suffix', { message: fallback, status: String(response.status) }, '{{message}} (HTTP {{status}}).');
+  return message;
 }
 
 function tabButtonClassName(active: boolean): string {
@@ -306,7 +295,11 @@ function tabButtonClassName(active: boolean): string {
 
 export default function AdminServiceSettingsPage() {
   const { t } = useLocale();
-  const [activeTab, setActiveTab] = useState<ServiceSettingsTab>('login');
+  const router = useRouter();
+  const { success: showSuccessToast } = useToast();
+  const [activeTab, setActiveTab] = useState<ServiceSettingsTab>('portal');
+  const [pendingTab, setPendingTab] = useState<ServiceSettingsTab | null>(null);
+  const [pendingNavigationHref, setPendingNavigationHref] = useState('');
   const [data, setData] = useState<ServiceSettingsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
@@ -351,20 +344,41 @@ export default function AdminServiceSettingsPage() {
     private_key: '',
     public_key: '',
   });
+  const [savedForms, setSavedForms] = useState<SavedServiceSettingsForms | null>(null);
+  const savedFormsRef = useRef<SavedServiceSettingsForms | null>(null);
+  const settingsMountedRef = useRef(false);
+  const settingsRequestActiveRef = useRef(false);
+  const settingsRequestSequenceRef = useRef(0);
+
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    showSuccessToast(
+      notice,
+      t('admin.service_settings.operation_completed_title', {}, 'Service setting updated')
+    );
+    setNotice('');
+  }, [notice, showSuccessToast, t]);
 
   const loadSettings = useCallback(async function loadSettings() {
+    if (settingsRequestActiveRef.current) {
+      return;
+    }
+    const requestSequence = settingsRequestSequenceRef.current + 1;
+    settingsRequestSequenceRef.current = requestSequence;
+    settingsRequestActiveRef.current = true;
     setLoading(true);
     setError('');
     try {
-      const response = await fetch('/api/admin/service-settings', { credentials: 'include' });
-      const payload = await readBackendPayload(response);
-      if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.load_failed', {}, 'Failed to load service settings.'), t));
-      }
-      const record = payloadRecord(payload);
-      const nextData = record?.data as ServiceSettingsData | undefined;
+      const nextData = (await serviceSettingsClient.request<ServiceSettingsData>(
+        '/api/admin/service-settings'
+      )).data;
       if (!nextData?.settings) {
         throw new Error(t('admin.service_settings.invalid_response', {}, 'Service settings response is invalid.'));
+      }
+      if (!settingsMountedRef.current || settingsRequestSequenceRef.current !== requestSequence) {
+        return;
       }
       setData(nextData);
       const portalPublic = nextData.settings.portal_public;
@@ -377,16 +391,16 @@ export default function AdminServiceSettingsPage() {
       const emailUsernameSameAsFromEmail =
         Boolean(emailSmtpUsername && emailFromAddress) &&
         emailSmtpUsername.toLowerCase() === emailFromAddress.toLowerCase();
-      setPortalPublicForm({
+      const nextPortalForm: PortalPublicForm = {
         enabled: portalPublic.enabled,
         public_base_url: stringValue(portalPublic.config.public_base_url),
-      });
-      setQqForm({
+      };
+      const nextQqForm: QQForm = {
         enabled: qq.enabled,
         client_id: stringValue(qq.config.client_id),
         client_secret: '',
-      });
-      setEmailForm({
+      };
+      const nextEmailForm: EmailForm = {
         enabled: email.enabled,
         smtp_host: stringValue(email.config.smtp_host),
         smtp_port: stringValue(email.config.smtp_port) || '465',
@@ -399,24 +413,47 @@ export default function AdminServiceSettingsPage() {
         from_email: stringValue(email.config.from_email),
         from_name: stringValue(email.config.from_name),
         reply_to: stringValue(email.config.reply_to),
-      });
-      setAlipayForm({
+      };
+      const nextAlipayForm: AlipayForm = {
         enabled: alipay.enabled,
         app_id: stringValue(alipay.config.app_id),
         notify_url: stringValue(alipay.config.notify_url),
         return_url: stringValue(alipay.config.return_url),
         private_key: '',
         public_key: '',
-      });
+      };
+      const nextSavedForms = {
+        portal: nextPortalForm,
+        qq: nextQqForm,
+        email: nextEmailForm,
+        payment: nextAlipayForm,
+      };
+      savedFormsRef.current = nextSavedForms;
+      setSavedForms(nextSavedForms);
+      setPortalPublicForm(nextPortalForm);
+      setQqForm(nextQqForm);
+      setEmailForm(nextEmailForm);
+      setAlipayForm(nextAlipayForm);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : t('admin.service_settings.load_failed', {}, 'Failed to load service settings.'));
+      if (settingsMountedRef.current && settingsRequestSequenceRef.current === requestSequence) {
+        setError(serviceSettingsRequestErrorMessage(loadError, t('admin.service_settings.load_failed', {}, 'Failed to load service settings.'), t));
+      }
     } finally {
-      setLoading(false);
+      if (settingsRequestSequenceRef.current === requestSequence) {
+        settingsRequestActiveRef.current = false;
+        if (settingsMountedRef.current) {
+          setLoading(false);
+        }
+      }
     }
   }, [t]);
 
   useEffect(() => {
+    settingsMountedRef.current = true;
     void loadSettings();
+    return () => {
+      settingsMountedRef.current = false;
+    };
   }, [loadSettings]);
 
   useEffect(() => {
@@ -504,22 +541,15 @@ export default function AdminServiceSettingsPage() {
     }
   }
 
-  async function patchJson(
+  async function writeJson(
     path: string,
-    body: Record<string, unknown>,
-    fallbackMessage: string
-  ): Promise<BackendPayload> {
-    const response = await fetch(path, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const payload = await readBackendPayload(response);
-    if (!response.ok) {
-      throw new Error(requestErrorMessage(response, payload, fallbackMessage, t));
-    }
-    return payload;
+    method: 'PATCH' | 'POST',
+    body: Record<string, unknown>
+  ): Promise<unknown> {
+    return (await serviceSettingsClient.request<unknown>(path, {
+      method,
+      body,
+    })).data;
   }
 
   async function saveJson(
@@ -533,11 +563,11 @@ export default function AdminServiceSettingsPage() {
     setNotice('');
     const fallbackMessage = t('admin.service_settings.save_failed', {}, 'Failed to save service settings.');
     try {
-      await patchJson(path, body, fallbackMessage);
+      await writeJson(path, 'PATCH', body);
       setNotice(successMessage);
       await loadSettings();
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : fallbackMessage);
+      setError(serviceSettingsRequestErrorMessage(saveError, fallbackMessage, t));
     } finally {
       setSaving('');
     }
@@ -552,21 +582,13 @@ export default function AdminServiceSettingsPage() {
     setSaving(savingKey);
     setError('');
     setNotice('');
+    const fallbackMessage = t('admin.service_settings.test_failed', {}, 'Failed to test service settings.');
     try {
-      const response = await fetch(path, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const payload = await readBackendPayload(response);
-      if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.test_failed', {}, 'Failed to test service settings.'), t));
-      }
+      await writeJson(path, 'POST', body);
       setNotice(successMessage);
       await loadSettings();
     } catch (testError) {
-      setError(testError instanceof Error ? testError.message : t('admin.service_settings.test_failed', {}, 'Failed to test service settings.'));
+      setError(serviceSettingsRequestErrorMessage(testError, fallbackMessage, t));
     } finally {
       setSaving('');
     }
@@ -576,23 +598,18 @@ export default function AdminServiceSettingsPage() {
     setSaving('email-preview');
     setError('');
     try {
-      const response = await fetch('/api/admin/service-settings/email/preview', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          preview_type: type,
-          locale: 'zh-CN',
-          from_name: emailForm.from_name,
-          from_email: emailForm.from_email,
-        }),
-      });
-      const payload = await readBackendPayload(response);
-      if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.email_preview_failed', {}, 'Failed to load email preview.'), t));
-      }
-      const record = payloadRecord(payload);
-      const preview = record?.data as EmailPreview | undefined;
+      const preview = (await serviceSettingsClient.request<EmailPreview>(
+        '/api/admin/service-settings/email/preview',
+        {
+          method: 'POST',
+          body: {
+            preview_type: type,
+            locale: 'zh-CN',
+            from_name: emailForm.from_name,
+            from_email: emailForm.from_email,
+          },
+        }
+      )).data;
       if (!preview?.html || !preview.subject) {
         throw new Error(t('admin.service_settings.email_preview_invalid', {}, 'Email preview response is invalid.'));
       }
@@ -600,7 +617,7 @@ export default function AdminServiceSettingsPage() {
       setNotice('');
     } catch (previewError) {
       setEmailPreview(null);
-      setError(previewError instanceof Error ? previewError.message : t('admin.service_settings.email_preview_failed', {}, 'Failed to load email preview.'));
+      setError(serviceSettingsRequestErrorMessage(previewError, t('admin.service_settings.email_preview_failed', {}, 'Failed to load email preview.'), t));
     } finally {
       setSaving('');
     }
@@ -615,6 +632,10 @@ export default function AdminServiceSettingsPage() {
 
   function submitPortalPublic(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (activeValidationIssues.length > 0) {
+      setError(activeValidationIssues[0]);
+      return;
+    }
     void saveJson(
       '/api/admin/service-settings/portal-public',
       portalPublicForm,
@@ -625,6 +646,10 @@ export default function AdminServiceSettingsPage() {
 
   function submitQq(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (activeValidationIssues.length > 0) {
+      setError(activeValidationIssues[0]);
+      return;
+    }
     if (!qqRedirectUri) {
       setNotice('');
       setError(t('admin.service_settings.qq_redirect_requires_public_url', {}, 'Enter a valid public base URL first. The QQ redirect URL is generated automatically.'));
@@ -645,6 +670,10 @@ export default function AdminServiceSettingsPage() {
 
   function submitEmail(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (activeValidationIssues.length > 0) {
+      setError(activeValidationIssues[0]);
+      return;
+    }
     if (emailForm.smtp_use_ssl && emailForm.smtp_use_starttls) {
       setNotice('');
       setError(t('admin.service_settings.error_tls_mode_invalid', {}, 'SSL and STARTTLS cannot be enabled at the same time. Port 465 usually uses SSL only; port 587 usually uses STARTTLS only.'));
@@ -672,6 +701,10 @@ export default function AdminServiceSettingsPage() {
 
   async function submitAlipay(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (activeValidationIssues.length > 0) {
+      setError(activeValidationIssues[0]);
+      return;
+    }
     const alipayPublicBaseUrl = savedPortalPublicBaseUrl || browserPublicBaseUrl;
     const nextAlipayNotifyUrl = alipayForm.notify_url || buildAlipayNotifyUrl(alipayPublicBaseUrl);
     const nextAlipayReturnUrl = alipayForm.return_url || buildAlipayReturnUrl(alipayPublicBaseUrl);
@@ -698,17 +731,17 @@ export default function AdminServiceSettingsPage() {
     const fallbackMessage = t('admin.service_settings.save_failed', {}, '保存服务配置失败。');
     try {
       if (alipayForm.enabled && !savedPortalPublicBaseUrl && browserPublicBaseUrl) {
-        await patchJson(
+        await writeJson(
           '/api/admin/service-settings/portal-public',
+          'PATCH',
           {
             ...portalPublicForm,
             enabled: true,
             public_base_url: browserPublicBaseUrl,
-          },
-          fallbackMessage
+          }
         );
       }
-      await patchJson('/api/admin/service-settings/alipay-payment', payload, fallbackMessage);
+      await writeJson('/api/admin/service-settings/alipay-payment', 'PATCH', payload);
       setNotice(
         !savedPortalPublicBaseUrl && browserPublicBaseUrl
           ? t('admin.service_settings.alipay_saved_with_public_url', { baseUrl: browserPublicBaseUrl }, '已先保存门户基础地址 {{baseUrl}}，并保存支付宝支付配置。')
@@ -716,7 +749,7 @@ export default function AdminServiceSettingsPage() {
       );
       await loadSettings();
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : fallbackMessage);
+      setError(serviceSettingsRequestErrorMessage(saveError, fallbackMessage, t));
     } finally {
       setSaving('');
     }
@@ -728,6 +761,125 @@ export default function AdminServiceSettingsPage() {
     alipayPrivateKey: Boolean(data?.settings.alipay_payment.secrets.private_key?.configured),
     alipayPublicKey: Boolean(data?.settings.alipay_payment.secrets.public_key?.configured),
   };
+  const activeGroupDirty = (() => {
+    if (!savedForms) return false;
+    if (activeTab === 'portal') return JSON.stringify(portalPublicForm) !== JSON.stringify(savedForms.portal);
+    if (activeTab === 'qq') return JSON.stringify(qqForm) !== JSON.stringify(savedForms.qq);
+    if (activeTab === 'email') return JSON.stringify(emailForm) !== JSON.stringify(savedForms.email);
+    return JSON.stringify(alipayForm) !== JSON.stringify(savedForms.payment);
+  })();
+
+  const activeValidationIssues = (() => {
+    const issues: string[] = [];
+    if (activeTab === 'portal') {
+      try {
+        const parsed = new URL(portalPublicForm.public_base_url.trim());
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          throw new Error('unsupported protocol');
+        }
+      } catch {
+        issues.push(t('admin.service_settings.validation_public_url', {}, 'Enter a valid HTTP or HTTPS public URL.'));
+      }
+    }
+    if (activeTab === 'qq' && qqForm.enabled) {
+      if (!qqForm.client_id.trim()) {
+        issues.push(t('admin.service_settings.validation_qq_app_id', {}, 'Enter the QQ App ID.'));
+      }
+      if (!secretConfigured.qq && !qqForm.client_secret.trim()) {
+        issues.push(t('admin.service_settings.validation_qq_secret', {}, 'Enter the QQ App Secret.'));
+      }
+      if (!qqRedirectUri) {
+        issues.push(t('admin.service_settings.validation_qq_redirect', {}, 'Save a valid Portal public URL before enabling QQ login.'));
+      }
+    }
+    if (activeTab === 'email' && emailForm.enabled) {
+      const port = Number(emailForm.smtp_port);
+      const timeout = Number(emailForm.smtp_timeout_seconds);
+      if (!emailForm.smtp_host.trim()) {
+        issues.push(t('admin.service_settings.validation_email_host', {}, 'Enter the SMTP server.'));
+      }
+      if (!emailForm.from_email.includes('@')) {
+        issues.push(t('admin.service_settings.validation_email_sender', {}, 'Enter a valid sender email address.'));
+      }
+      if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+        issues.push(t('admin.service_settings.validation_email_port', {}, 'Enter a valid SMTP port from 1 to 65535.'));
+      }
+      if (!Number.isFinite(timeout) || timeout <= 0) {
+        issues.push(t('admin.service_settings.validation_email_timeout', {}, 'Enter a positive SMTP timeout.'));
+      }
+      if (emailForm.smtp_use_ssl && emailForm.smtp_use_starttls) {
+        issues.push(t('admin.service_settings.error_tls_mode_invalid', {}, 'SSL and STARTTLS cannot be enabled at the same time.'));
+      }
+      const username = emailForm.smtp_username_same_as_from_email
+        ? emailForm.from_email.trim()
+        : emailForm.smtp_username.trim();
+      if (username && !secretConfigured.email && !emailForm.smtp_password.trim()) {
+        issues.push(t('admin.service_settings.validation_email_password', {}, 'Enter the SMTP password for the configured username.'));
+      }
+      if (!username && emailForm.smtp_password.trim()) {
+        issues.push(t('admin.service_settings.validation_email_username', {}, 'Enter the SMTP username before entering a password.'));
+      }
+    }
+    if (activeTab === 'payment' && alipayForm.enabled) {
+      if (!effectivePortalPublicBaseUrl) {
+        issues.push(t('admin.service_settings.validation_payment_public_url', {}, 'Save a public URL before enabling Alipay.'));
+      }
+      if (!alipayForm.app_id.trim()) {
+        issues.push(t('admin.service_settings.validation_payment_app_id', {}, 'Enter the Alipay App ID.'));
+      }
+      if (!secretConfigured.alipayPrivateKey && !alipayForm.private_key.trim()) {
+        issues.push(t('admin.service_settings.validation_payment_private_key', {}, 'Enter the Alipay application private key.'));
+      }
+      if (!secretConfigured.alipayPublicKey && !alipayForm.public_key.trim()) {
+        issues.push(t('admin.service_settings.validation_payment_public_key', {}, 'Enter the Alipay public key.'));
+      }
+    }
+    return issues;
+  })();
+
+  const restoreActiveGroup = useCallback(() => {
+    const saved = savedFormsRef.current;
+    if (!saved) return;
+    if (activeTab === 'portal') setPortalPublicForm(saved.portal);
+    if (activeTab === 'qq') setQqForm(saved.qq);
+    if (activeTab === 'email') setEmailForm(saved.email);
+    if (activeTab === 'payment') setAlipayForm(saved.payment);
+    setError('');
+  }, [activeTab]);
+
+  const requestTabChange = useCallback((nextTab: ServiceSettingsTab) => {
+    if (nextTab === activeTab) return;
+    if (activeGroupDirty) {
+      setPendingTab(nextTab);
+      return;
+    }
+    setError('');
+    setActiveTab(nextTab);
+  }, [activeGroupDirty, activeTab]);
+
+  useEffect(() => {
+    if (!activeGroupDirty) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    const handleAnchorClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
+      if (!(target instanceof HTMLAnchorElement) || target.target === '_blank') return;
+      const destination = new URL(target.href, window.location.href);
+      if (destination.origin !== window.location.origin || destination.pathname === window.location.pathname) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setPendingNavigationHref(`${destination.pathname}${destination.search}${destination.hash}`);
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('click', handleAnchorClick, true);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('click', handleAnchorClick, true);
+    };
+  }, [activeGroupDirty]);
+
   const emailSetting = data?.settings.portal_email;
   const emailStatus = emailSetting?.status || 'missing_config';
   const emailServerSummary = emailForm.smtp_host
@@ -747,19 +899,32 @@ export default function AdminServiceSettingsPage() {
 
   const tabs: Array<{ id: ServiceSettingsTab; label: string; description: string }> = [
     {
-      id: 'login',
-      label: t('admin.service_settings.tab_login', {}, '登录配置'),
-      description: t('admin.service_settings.tab_login_desc', {}, 'Public URL and QQ quick login'),
+      id: 'portal',
+      label: t('admin.service_settings.tab_portal', {}, '门户地址'),
+      description: activeTab === 'portal' && activeGroupDirty
+        ? t('admin.service_settings.unsaved_short', {}, 'Unsaved')
+        : statusLabel(data?.settings.portal_public.status || 'missing_config', t),
+    },
+    {
+      id: 'qq',
+      label: t('admin.service_settings.tab_qq', {}, 'QQ 登录'),
+      description: activeTab === 'qq' && activeGroupDirty
+        ? t('admin.service_settings.unsaved_short', {}, 'Unsaved')
+        : statusLabel(data?.settings.qq_login.status || 'missing_config', t),
     },
     {
       id: 'email',
       label: t('admin.service_settings.tab_email', {}, '邮件配置'),
-      description: t('admin.service_settings.tab_email_desc', {}, 'SMTP and test email'),
+      description: activeTab === 'email' && activeGroupDirty
+        ? t('admin.service_settings.unsaved_short', {}, 'Unsaved')
+        : statusLabel(data?.settings.portal_email.status || 'missing_config', t),
     },
     {
       id: 'payment',
       label: t('admin.service_settings.tab_payment', {}, '支付配置'),
-      description: t('admin.service_settings.tab_payment_desc', {}, 'Alipay checkout callbacks'),
+      description: activeTab === 'payment' && activeGroupDirty
+        ? t('admin.service_settings.unsaved_short', {}, 'Unsaved')
+        : statusLabel(data?.settings.alipay_payment.status || 'missing_config', t),
     },
   ];
 
@@ -785,6 +950,70 @@ export default function AdminServiceSettingsPage() {
       label: t('admin.service_settings.email_preview_test', {}, '测试邮件'),
     },
   ];
+  const emailPreviewDialogRef = useDialogKeyboard<HTMLDivElement>({
+    open: emailPreviewOpen,
+    onClose: () => setEmailPreviewOpen(false),
+  });
+
+  const activeStateNotice = (activeGroupDirty || activeValidationIssues.length > 0 || error) ? (
+    <div
+      data-ui="service-settings-active-state"
+      role={error || activeValidationIssues.length > 0 ? 'alert' : 'status'}
+      className={cn(
+        'flex flex-col gap-3 rounded-xl border px-4 py-3 text-sm sm:flex-row sm:items-start sm:justify-between',
+        error || activeValidationIssues.length > 0
+          ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/25 dark:text-rose-200'
+          : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/25 dark:text-amber-200'
+      )}
+    >
+      <div>
+        <p className="font-semibold">
+          {error
+            ? t('admin.service_settings.action_failed_title', {}, 'This configuration action failed')
+            : activeValidationIssues.length > 0
+              ? t('admin.service_settings.validation_title', {}, 'Resolve these fields before saving')
+              : t('admin.service_settings.unsaved_title', {}, 'Unsaved changes')}
+        </p>
+        {error ? <p className="mt-1">{error}</p> : null}
+        {activeValidationIssues.length > 0 ? (
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {activeValidationIssues.map((issue) => <li key={issue}>{issue}</li>)}
+          </ul>
+        ) : activeGroupDirty ? (
+          <p className="mt-1">
+            {t('admin.service_settings.unsaved_desc', {}, 'Save this group before testing it or opening another configuration group.')}
+          </p>
+        ) : null}
+      </div>
+      {activeGroupDirty ? (
+        <button type="button" className="btn btn-secondary btn-sm shrink-0" onClick={restoreActiveGroup}>
+          {t('admin.service_settings.restore_saved_values', {}, 'Restore saved values')}
+        </button>
+      ) : null}
+    </div>
+  ) : null;
+
+  if (loading && !data) {
+    return <AdminRouteSkeleton />;
+  }
+
+  if (!data) {
+    return (
+      <BackofficePageStack>
+        <BackofficePrimaryPanel
+          eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
+          title={t('admin.service_settings_title', {}, 'Service settings')}
+          description={t('admin.service_settings.load_shell_desc', {}, 'The service-settings shell remains available while this bounded configuration read is retried.')}
+        >
+          <BackofficeDiagnosticNotice
+            message={error || t('admin.service_settings.load_failed', {}, 'Failed to load service settings.')}
+            retryLabel={t('common.retry')}
+            onRetry={() => void loadSettings()}
+          />
+        </BackofficePrimaryPanel>
+      </BackofficePageStack>
+    );
+  }
 
   return (
     <BackofficePageStack>
@@ -797,26 +1026,11 @@ export default function AdminServiceSettingsPage() {
           'Configure Cloud-owned Portal login, QQ quick login, email delivery, and payment. Values are stored in Cloud runtime storage; .env fallback is no longer read.'
         )}
         descriptionDisplay="hint"
-        aside={(
-          <div className="w-full xl:w-[34rem]">
-            <BackofficeMetricStrip items={metrics} columnsClassName="md:grid-cols-4 xl:grid-cols-4" />
-          </div>
-        )}
+        summary={<BackofficeSummaryStrip items={metrics} />}
       />
 
-      {error ? (
-        <BackofficeStackCard role="alert" className="border-rose-200 bg-rose-50 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">
-          {error}
-        </BackofficeStackCard>
-      ) : null}
-      {notice ? (
-        <BackofficeStackCard role="status" aria-live="polite" className="border-emerald-200 bg-emerald-50 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
-          {notice}
-        </BackofficeStackCard>
-      ) : null}
-
       <BackofficeSectionPanel className="p-2 md:p-2">
-        <div role="tablist" aria-label={t('admin.service_settings.tablist_label', {}, 'Service settings categories')} className="grid gap-2 md:grid-cols-3">
+        <div role="tablist" aria-label={t('admin.service_settings.tablist_label', {}, 'Service settings categories')} className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {tabs.map((tab) => {
             const active = activeTab === tab.id;
             return (
@@ -827,7 +1041,7 @@ export default function AdminServiceSettingsPage() {
                 aria-selected={active}
                 aria-controls={`service-settings-${tab.id}`}
                 className={tabButtonClassName(active)}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => requestTabChange(tab.id)}
               >
                 <span className="block text-sm font-semibold">{tab.label}</span>
                 <span className={`mt-1 block text-xs ${active ? 'text-white/70 dark:text-slate-700' : 'text-slate-500 dark:text-slate-400'}`}>
@@ -839,9 +1053,9 @@ export default function AdminServiceSettingsPage() {
         </div>
       </BackofficeSectionPanel>
 
-      {activeTab === 'login' ? (
+      {activeTab === 'portal' ? (
         <BackofficeSectionPanel>
-          <div id="service-settings-login" className="space-y-8" role="tabpanel">
+          <div id="service-settings-portal" role="tabpanel">
             <section className="space-y-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
@@ -854,6 +1068,7 @@ export default function AdminServiceSettingsPage() {
                 {t('admin.service_settings.portal_public_desc', {}, 'Used to generate public callback URLs for QQ login, WeChat login, and payment notifications.')}
               </p>
             </div>
+            {activeStateNotice}
             <form className="grid gap-4 lg:grid-cols-[1fr_auto]" onSubmit={submitPortalPublic}>
               <label className={labelClassName()}>
                 {t('admin.service_settings.base_url_label', {}, 'Base URL')}
@@ -890,7 +1105,11 @@ export default function AdminServiceSettingsPage() {
                     {t('admin.service_settings.use_current_base_url', {}, '使用当前访问地址')}
                   </button>
                 ) : null}
-                <button type="submit" className="btn btn-primary" disabled={saving === 'portal-public'}>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={saving === 'portal-public' || !activeGroupDirty || activeValidationIssues.length > 0}
+                >
                   {saving === 'portal-public'
                     ? t('admin.service_settings.saving', {}, 'Saving')
                     : t('admin.service_settings.save_base_url', {}, '保存基础地址')}
@@ -898,8 +1117,14 @@ export default function AdminServiceSettingsPage() {
               </div>
             </form>
             </section>
+          </div>
+        </BackofficeSectionPanel>
+      ) : null}
 
-            <section className="space-y-4 border-t border-slate-200 pt-6 dark:border-slate-800">
+      {activeTab === 'qq' ? (
+        <BackofficeSectionPanel>
+          <div id="service-settings-qq" role="tabpanel">
+            <section className="space-y-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                 QQ OAuth
@@ -909,6 +1134,7 @@ export default function AdminServiceSettingsPage() {
                 {t('admin.service_settings.qq_desc', {}, '回调地址由门户基础地址自动生成。这里仅保存 QQ 应用凭证和登录开关。')}
               </p>
             </div>
+            {activeStateNotice}
             <form className="grid gap-4 lg:grid-cols-2" onSubmit={submitQq}>
               <label className={labelClassName()}>
                 App ID
@@ -927,6 +1153,7 @@ export default function AdminServiceSettingsPage() {
                     <input
                       className={fieldClassName()}
                       value={qqRedirectUri}
+                      aria-label={t('admin.service_settings.redirect_uri_label', {}, 'Redirect URL')}
                       readOnly
                       disabled={loading}
                       placeholder={t('admin.service_settings.redirect_uri_placeholder', {}, 'Generated after a public base URL is entered')}
@@ -958,10 +1185,10 @@ export default function AdminServiceSettingsPage() {
                   {t('admin.service_settings.qq_enabled_label', {}, '启用 QQ 登录')}
                 </div>
                 <div className="flex gap-2">
-                  <button type="button" className="btn btn-secondary" disabled={saving === 'qq-test'} onClick={() => postJson('/api/admin/service-settings/qq-login/test', {}, 'qq-test', t('admin.service_settings.qq_test_done', {}, 'QQ login configuration check completed.'))}>
+                  <button type="button" className="btn btn-secondary" disabled={saving === 'qq-test' || activeGroupDirty || activeValidationIssues.length > 0} onClick={() => postJson('/api/admin/service-settings/qq-login/test', {}, 'qq-test', t('admin.service_settings.qq_test_done', {}, 'QQ login configuration check completed.'))}>
                     {t('admin.service_settings.check_qq', {}, 'Check QQ settings')}
                   </button>
-                  <button type="submit" className="btn btn-primary" disabled={saving === 'qq-login'}>
+                  <button type="submit" className="btn btn-primary" disabled={saving === 'qq-login' || !activeGroupDirty || activeValidationIssues.length > 0}>
                     {saving === 'qq-login'
                       ? t('admin.service_settings.saving', {}, 'Saving')
                       : t('admin.service_settings.save_qq', {}, '保存 QQ 配置')}
@@ -998,6 +1225,8 @@ export default function AdminServiceSettingsPage() {
                     : t('admin.service_settings.email_config_edit', {}, '编辑 SMTP 配置')}
                 </button>
               </div>
+
+              {activeStateNotice}
 
               <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950/40 md:grid-cols-2 xl:grid-cols-5">
                 <div>
@@ -1180,7 +1409,7 @@ export default function AdminServiceSettingsPage() {
                 </label>
               </div>
               <div className="flex justify-end">
-                <button type="submit" className="btn btn-primary" disabled={saving === 'email'}>
+                <button type="submit" className="btn btn-primary" disabled={saving === 'email' || !activeGroupDirty || activeValidationIssues.length > 0}>
                   {saving === 'email'
                     ? t('admin.service_settings.saving', {}, 'Saving')
                     : t('common.save', {}, 'Save')}
@@ -1199,7 +1428,7 @@ export default function AdminServiceSettingsPage() {
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  disabled={saving === 'email-test' || !emailTestRecipient}
+                  disabled={saving === 'email-test' || !emailTestRecipient || activeGroupDirty || activeValidationIssues.length > 0}
                   onClick={() => postJson('/api/admin/service-settings/email/test', { recipient_email: emailTestRecipient }, 'email-test', t('admin.service_settings.email_test_sent', {}, 'Test email sent.'))}
                 >
                   {t('admin.service_settings.send_test_email', {}, 'Send test email')}
@@ -1220,9 +1449,11 @@ export default function AdminServiceSettingsPage() {
       {emailPreviewOpen && typeof document !== 'undefined' ? createPortal((
         <div className="fixed inset-0 z-50 bg-slate-950/35" role="presentation">
           <div
+            ref={emailPreviewDialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="email-preview-drawer-title"
+            tabIndex={-1}
             className="ml-auto flex h-full w-full max-w-[60rem] flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950"
           >
             <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800 md:flex-row md:items-start md:justify-between">
@@ -1383,6 +1614,20 @@ export default function AdminServiceSettingsPage() {
                 </p>
               </div>
 
+              {activeStateNotice}
+
+              <div
+                data-ui="service-settings-high-risk"
+                className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/25 dark:text-amber-100"
+              >
+                <p className="font-semibold">
+                  {t('admin.service_settings.payment_high_risk_title', {}, 'High-risk payment configuration')}
+                </p>
+                <p className="mt-1 leading-6">
+                  {t('admin.service_settings.payment_high_risk_desc', {}, 'Changing application keys or callback identity can interrupt payment confirmation. Save first, run the configuration check, and treat the server notify callback as the payment truth.')}
+                </p>
+              </div>
+
               <form className="grid gap-4 lg:grid-cols-2" onSubmit={(event) => void submitAlipay(event)}>
                 <label className={labelClassName()}>
                   App ID
@@ -1506,14 +1751,14 @@ export default function AdminServiceSettingsPage() {
                     <button
                       type="button"
                       className="btn btn-secondary"
-                      disabled={saving === 'alipay-test'}
+                      disabled={saving === 'alipay-test' || activeGroupDirty || activeValidationIssues.length > 0}
                       onClick={() => postJson('/api/admin/service-settings/alipay-payment/test', {}, 'alipay-test', t('admin.service_settings.alipay_test_done', {}, '支付宝配置检查完成。'))}
                     >
                       {saving === 'alipay-test'
                         ? t('admin.service_settings.checking', {}, 'Checking')
                         : t('admin.service_settings.check_alipay', {}, '检查支付宝配置')}
                     </button>
-                    <button type="submit" className="btn btn-primary" disabled={saving === 'alipay-payment'}>
+                    <button type="submit" className="btn btn-primary" disabled={saving === 'alipay-payment' || !activeGroupDirty || activeValidationIssues.length > 0}>
                       {saving === 'alipay-payment'
                         ? t('admin.service_settings.saving', {}, 'Saving')
                         : t('admin.service_settings.save_alipay', {}, '保存支付宝配置')}
@@ -1525,6 +1770,48 @@ export default function AdminServiceSettingsPage() {
           </div>
         </BackofficeSectionPanel>
       ) : null}
+
+      <ConfirmModal
+        isOpen={pendingTab !== null}
+        title={t('admin.service_settings.unsaved_switch_title', {}, 'Discard unsaved changes?')}
+        message={t(
+          'admin.service_settings.unsaved_switch_desc',
+          {},
+          'Opening another configuration group will discard the edits in this group. Saved settings are not affected.'
+        )}
+        confirmLabel={t('admin.service_settings.discard_and_switch', {}, 'Discard and switch')}
+        cancelLabel={t('common.cancel', {}, 'Cancel')}
+        variant="danger"
+        onClose={() => setPendingTab(null)}
+        onConfirm={() => {
+          const nextTab = pendingTab;
+          restoreActiveGroup();
+          setPendingTab(null);
+          if (nextTab) {
+            setActiveTab(nextTab);
+          }
+        }}
+      />
+
+      <ConfirmModal
+        isOpen={Boolean(pendingNavigationHref)}
+        title={t('admin.service_settings.unsaved_leave_title', {}, 'Leave with unsaved changes?')}
+        message={t(
+          'admin.service_settings.unsaved_leave_desc',
+          {},
+          'Leaving this page will discard the edits in the current group. Saved service settings are not affected.'
+        )}
+        confirmLabel={t('admin.service_settings.discard_and_leave', {}, 'Discard and leave')}
+        cancelLabel={t('common.cancel', {}, 'Cancel')}
+        variant="danger"
+        onClose={() => setPendingNavigationHref('')}
+        onConfirm={() => {
+          const href = pendingNavigationHref;
+          restoreActiveGroup();
+          setPendingNavigationHref('');
+          if (href) router.push(href);
+        }}
+      />
     </BackofficePageStack>
   );
 }

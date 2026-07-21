@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import base64
 import os
 import socket
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
@@ -11,7 +12,14 @@ from sqlalchemy import select
 os.environ["NPCINK_CLOUD_INTERNAL_AUTH_TOKEN"] = "npcink-cloud-internal-test-token-32b"
 os.environ["NPCINK_CLOUD_ADMIN_SESSION_SECRET"] = "npcink-cloud-ops-session-secret-32b"
 os.environ["NPCINK_CLOUD_PORTAL_JWT_SECRET"] = "npcink-cloud-portal-jwt-secret-32b"
-os.environ["NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"] = "npcink-cloud-service-settings-secret-32b"
+os.environ["NPCINK_CLOUD_SERVICE_SETTINGS_SECRET"] = base64.urlsafe_b64encode(
+    b"S" * 32
+).decode()
+os.environ["NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"] = "test-service-settings-key"
+os.environ["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"] = base64.urlsafe_b64encode(
+    b"R" * 32
+).decode()
+os.environ["NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"] = "test-runtime-data-key"
 for _provider_env_name in (
     "NPCINK_CLOUD_OPENAI_API_KEY",
     "NPCINK_CLOUD_ANTHROPIC_API_KEY",
@@ -43,6 +51,7 @@ os.environ["NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER"] = "deterministic"
 os.environ["NPCINK_CLOUD_SITE_KNOWLEDGE_VECTOR_BACKEND"] = "postgres_json"
 os.environ["NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
 
+from app.api.auth import build_portal_session_token
 from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import (
@@ -398,6 +407,7 @@ def build_portal_headers(
     secret: str = TEST_PORTAL_JWT_SECRET,
     issuer: str | None = None,
     audience: str | None = None,
+    site_id: str = "",
     expires_at: datetime | None = None,
     idempotency_key: str = "",
     trace_id: str = "00112233445566778899aabbccddeeff",
@@ -408,6 +418,7 @@ def build_portal_headers(
         secret=secret,
         issuer=issuer,
         audience=audience,
+        site_id=site_id,
         expires_at=expires_at,
         idempotency_key=idempotency_key,
         trace_id=trace_id,
@@ -424,21 +435,30 @@ def build_portal_bearer_headers(
     secret: str = TEST_PORTAL_JWT_SECRET,
     issuer: str | None = None,
     audience: str | None = None,
+    site_id: str = "",
     expires_at: datetime | None = None,
     idempotency_key: str = "",
     trace_id: str = "00112233445566778899aabbccddeeff",
 ) -> dict[str, str]:
-    payload: dict[str, object] = {
-        "sub": principal_id,
-        "session_version": int(session_version or 1),
-    }
-    if issuer:
-        payload["iss"] = issuer
-    if audience:
-        payload["aud"] = audience
-    if expires_at is not None:
-        payload["exp"] = expires_at
-    token = jwt.encode(payload, secret, algorithm="HS256")
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        portal_jwt_secret=secret,
+        portal_jwt_issuer=issuer,
+        portal_jwt_audience=audience,
+    )
+    token = build_portal_session_token(
+        settings,
+        principal_id=principal_id,
+        session_version=session_version,
+        site_id=site_id,
+        expires_at=(expires_at if expires_at is None or expires_at > datetime.now(UTC) else None),
+    )
+    if expires_at is not None and expires_at <= datetime.now(UTC):
+        payload = jwt.decode(token, options={"verify_signature": False})
+        payload["iat"] = int((expires_at - timedelta(minutes=1)).timestamp())
+        payload["exp"] = int(expires_at.timestamp())
+        token = jwt.encode(payload, secret, algorithm="HS256")
     headers = {
         "Authorization": f"Bearer {token}",
         "traceparent": build_traceparent(trace_id),

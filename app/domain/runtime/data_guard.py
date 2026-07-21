@@ -50,6 +50,7 @@ PII_VALUE_PATTERNS = (
         r"(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b"
     ),
 )
+OPAQUE_MEDIA_ARTIFACT_ID_PATTERN = re.compile(r"^art_[0-9a-f]{32}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,5 +110,7 @@ def _contains_secret_value(value: str) -> bool:
 
 def _contains_pii_value(value: str) -> bool:
     if not value:
+        return False
+    if OPAQUE_MEDIA_ARTIFACT_ID_PATTERN.fullmatch(value):
         return False
     return any(pattern.search(value) for pattern in PII_VALUE_PATTERNS)

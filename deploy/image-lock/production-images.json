@@ -1,0 +1,168 @@
+{
+  "schema_version": "npcink.production-image-lock.v1",
+  "resolved_at_utc": "2026-07-19T06:02:29Z",
+  "resolved_from_revision": "8a34e0c4599a590abcb2795f9ecb11a26365fb4d",
+  "production_inputs": [
+    {
+      "key": "dockerfile_frontend",
+      "kind": "dockerfile_frontend",
+      "tag": "docker/dockerfile:1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
+      "reference": "docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
+      "source_file": "Dockerfile",
+      "required_platforms": ["linux/amd64", "linux/arm64"]
+    },
+    {
+      "key": "python_runtime",
+      "kind": "dockerfile_base",
+      "tag": "python:3.14-alpine",
+      "digest": "sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92",
+      "reference": "python:3.14-alpine@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92",
+      "source_file": "Dockerfile",
+      "required_platforms": ["linux/amd64", "linux/arm64"]
+    },
+    {
+      "key": "uv_builder",
+      "kind": "dockerfile_base",
+      "tag": "ghcr.io/astral-sh/uv:0.11.29",
+      "digest": "sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc",
+      "reference": "ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc",
+      "source_file": "Dockerfile",
+      "required_platforms": ["linux/amd64", "linux/arm64"]
+    },
+    {
+      "key": "node_frontend",
+      "kind": "dockerfile_base",
+      "tag": "node:22-alpine",
+      "digest": "sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2",
+      "reference": "node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2",
+      "source_file": "frontend/Dockerfile",
+      "required_platforms": ["linux/amd64", "linux/arm64"]
+    },
+    {
+      "key": "postgres_base",
+      "kind": "dockerfile_base",
+      "tag": "postgres:16-alpine",
+      "digest": "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+      "reference": "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+      "source_file": "Dockerfile.postgres",
+      "required_platforms": ["linux/amd64", "linux/arm64"]
+    },
+    {
+      "key": "redis",
+      "kind": "compose_external",
+      "tag": "redis:7-alpine",
+      "digest": "sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+      "reference": "redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+      "release_reference": "npcink-ai-cloud-external-redis:prod",
+      "source_files": ["docker-compose.prod.yml", "docker-compose.runtime.yml"],
+      "services": ["redis"],
+      "required_platforms": ["linux/amd64", "linux/arm64"]
+    },
+    {
+      "key": "nginx",
+      "kind": "compose_external",
+      "tag": "nginx:1.30-alpine-slim",
+      "digest": "sha256:ddde39c6e51f02fde7410c2e9c234cf2d0a4c7bdbbe176aeb37d8ad7ab4eb58c",
+      "reference": "nginx:1.30-alpine-slim@sha256:ddde39c6e51f02fde7410c2e9c234cf2d0a4c7bdbbe176aeb37d8ad7ab4eb58c",
+      "release_reference": "npcink-ai-cloud-external-nginx:prod",
+      "source_files": ["docker-compose.prod.yml", "docker-compose.runtime.yml"],
+      "services": ["proxy"],
+      "required_platforms": ["linux/amd64", "linux/arm64"]
+    }
+  ],
+  "application_outputs": [
+    {
+      "key": "postgres",
+      "reference": "npcink-ai-cloud-postgres:prod",
+      "dockerfile": "Dockerfile.postgres",
+      "compose_references": [
+        {"source_file": "docker-compose.prod.yml", "services": ["postgres"]},
+        {"source_file": "docker-compose.runtime.yml", "services": ["postgres"]}
+      ],
+      "scan_by_default": true
+    },
+    {
+      "key": "api",
+      "reference": "npcink-ai-cloud-api:prod",
+      "dockerfile": "Dockerfile",
+      "compose_references": [
+        {"source_file": "docker-compose.prod.yml", "services": ["api"]},
+        {"source_file": "docker-compose.runtime.yml", "services": ["api"]}
+      ],
+      "scan_by_default": true
+    },
+    {
+      "key": "frontend",
+      "reference": "npcink-ai-cloud-frontend:prod",
+      "dockerfile": "frontend/Dockerfile",
+      "compose_references": [
+        {"source_file": "docker-compose.prod.yml", "services": ["frontend"]},
+        {"source_file": "docker-compose.runtime.yml", "services": ["frontend"]}
+      ],
+      "scan_by_default": true
+    },
+    {
+      "key": "worker",
+      "reference": "npcink-ai-cloud-worker:prod",
+      "dockerfile": "Dockerfile",
+      "compose_references": [
+        {"source_file": "docker-compose.prod.yml", "services": ["worker"]},
+        {
+          "source_file": "docker-compose.runtime.yml",
+          "services": ["worker", "callback-worker", "ops-worker"]
+        }
+      ],
+      "scan_by_default": false,
+      "scan_equivalent_to": "api"
+    },
+    {
+      "key": "callback_worker",
+      "reference": "npcink-ai-cloud-callback-worker:prod",
+      "dockerfile": "Dockerfile",
+      "compose_references": [
+        {"source_file": "docker-compose.prod.yml", "services": ["callback-worker"]}
+      ],
+      "scan_by_default": false,
+      "scan_equivalent_to": "api"
+    },
+    {
+      "key": "ops_worker",
+      "reference": "npcink-ai-cloud-ops-worker:prod",
+      "dockerfile": "Dockerfile",
+      "compose_references": [
+        {"source_file": "docker-compose.prod.yml", "services": ["ops-worker"]}
+      ],
+      "scan_by_default": false,
+      "scan_equivalent_to": "api"
+    }
+  ],
+  "scanner_images": [
+    {
+      "key": "syft",
+      "version": "1.33.0",
+      "tag": "anchore/syft:v1.33.0",
+      "digest": "sha256:f94e5d9fce1f2278491a8e3a63bd5f6ddb81fdfdbb8bf7a1637565c1d5344357",
+      "reference": "anchore/syft:v1.33.0@sha256:f94e5d9fce1f2278491a8e3a63bd5f6ddb81fdfdbb8bf7a1637565c1d5344357",
+      "required_platforms": ["linux/amd64", "linux/arm64"]
+    },
+    {
+      "key": "grype",
+      "version": "0.98.0",
+      "tag": "anchore/grype:v0.98.0",
+      "digest": "sha256:c97f0b287be40117e22908f3e87b530164b6e1674647aa83cd258e6fb75c80b7",
+      "reference": "anchore/grype:v0.98.0@sha256:c97f0b287be40117e22908f3e87b530164b6e1674647aa83cd258e6fb75c80b7",
+      "required_platforms": ["linux/amd64", "linux/arm64"]
+    }
+  ],
+  "scan_policy": {
+    "sbom_format": "cyclonedx-json",
+    "severity_threshold": "high",
+    "unfixed_policy": "block",
+    "unknown_severity_policy": "block",
+    "max_database_age_hours": 72,
+    "max_exception_days": 30,
+    "allowlist_file": "deploy/image-lock/cve-allowlist.json",
+    "generated_artifacts_must_not_be_committed": true
+  }
+}

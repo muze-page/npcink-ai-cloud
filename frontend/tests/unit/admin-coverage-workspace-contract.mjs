@@ -8,14 +8,26 @@ const i18nSource = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8
 
 assert.match(
   coverageSource,
-  /title=\{t\('admin\.coverage_surface_title'[\s\S]*Customer service workspace/,
-  'Coverage surface must be framed as a customer service workspace'
+  /title=\{t\('admin\.coverage_surface_title'[\s\S]*Service risk queue/,
+  'Coverage surface must be framed as the canonical service risk queue'
 );
 
 assert.match(
   coverageSource,
-  /const selectedQueueItem = visibleItems\[0\] \|\| visibleQueueItems\[0\] \|\| null/,
-  'Coverage workspace must derive a current customer focus for the inspector'
+  /useSearchParams\(\)[\s\S]*updateQueueUrl[\s\S]*status[\s\S]*reason[\s\S]*sort[\s\S]*focus/,
+  'Coverage filters, sort, and inspector focus must survive refresh and detail navigation through the URL'
+);
+
+assert.match(
+  coverageSource,
+  /type QueueSort = 'priority' \| 'expiry' \| 'customer'[\s\S]*searchQuery[\s\S]*reasonFilter[\s\S]*visibleItems = useMemo/,
+  'Coverage queue must support search, reason filtering, and explicit prioritization'
+);
+
+assert.match(
+  coverageSource,
+  /visibleItems\.find\(\(item\) => queueItemKey\(item\) === selectedKey\)[\s\S]*admin\.coverage\.select_inspector_action/,
+  'Coverage inspector must follow an explicit operator selection instead of always taking the first row'
 );
 
 assert.match(
@@ -36,6 +48,24 @@ assert.match(
   'Coverage workspace must expose subscription risk as a secondary entry'
 );
 
+assert.match(
+  coverageSource,
+  /coverageRequestActiveRef = useRef[\s\S]*coverageRequestSequenceRef = useRef[\s\S]*loadCoverage\(true\)/,
+  'Coverage queue must deduplicate initial loading and expose a bounded refresh action'
+);
+
+assert.doesNotMatch(
+  coverageSource,
+  /AdminHorizontalScroll|<table|min-w-\[64rem\]/,
+  'The core service queue must not depend on a horizontally scrolling desktop table on mobile'
+);
+
+assert.match(
+  coverageSource,
+  /role="list"[\s\S]*data-ui="coverage-queue-item"[\s\S]*aria-controls="coverage-inspector"/,
+  'Coverage queue must use a responsive task list with an explicitly connected inspector'
+);
+
 assert.doesNotMatch(
   layoutSource,
   /href: '\/admin\/subscriptions'[\s\S]*labelKey: 'admin\.nav_subscriptions'/,
@@ -50,14 +80,14 @@ assert.match(
 
 assert.match(
   i18nSource,
-  /'admin\.coverage_surface_title': '客户服务工作区'/,
-  'Coverage workspace must provide Simplified Chinese title copy'
+  /'admin\.coverage_surface_title': '服务风险队列'/,
+  'Coverage queue must provide task-specific Simplified Chinese title copy'
 );
 
 assert.match(
   i18nSource,
-  /'admin\.coverage\.inspector_title': '当前客户焦点'[\s\S]*'admin\.coverage\.inspector_boundary': '这个检查器只打开现有客户、订阅、站点和套餐界面，不创建客户侧 checkout、支付或 WordPress 写入控制。'/,
-  'Coverage inspector must provide Simplified Chinese boundary copy'
+  /'admin\.coverage\.refresh_action': '刷新队列'[\s\S]*'admin\.coverage\.search_placeholder': '客户、账户、订阅或套餐'[\s\S]*'admin\.coverage\.sort_priority': '影响最高'[\s\S]*'admin\.coverage\.inspector_boundary': '这个检查器只打开现有客户、订阅、站点和套餐界面，不创建客户侧 checkout、支付或 WordPress 写入控制。'/,
+  'Coverage toolbar and inspector must provide Simplified Chinese utility copy'
 );
 
 assert.doesNotMatch(

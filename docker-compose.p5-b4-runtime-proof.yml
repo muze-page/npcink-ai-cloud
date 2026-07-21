@@ -1,0 +1,232 @@
+x-proof-environment: &proof-environment
+  P5_B4_DISPOSABLE_PROOF: I_UNDERSTAND_THIS_DESTROYS_PROOF_DATA
+  P5_B4_PROOF_PROJECT: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME must be set}
+  P5_B4_PROOF_IMAGE_ID: ${P5_B4_PROOF_IMAGE_ID:?P5_B4_PROOF_IMAGE_ID must be set}
+  P5_B4_REVISION: ${P5_B4_REVISION:?P5_B4_REVISION must be set}
+  P5_B4_CONTEXT_SHA256: ${P5_B4_CONTEXT_SHA256:?P5_B4_CONTEXT_SHA256 must be set}
+  P5_B4_HARNESS_SHA256: ${P5_B4_HARNESS_SHA256:?P5_B4_HARNESS_SHA256 must be set}
+  P5_B4_COMPOSE_SHA256: ${P5_B4_COMPOSE_SHA256:?P5_B4_COMPOSE_SHA256 must be set}
+  P5_B4_WRAPPER_SHA256: ${P5_B4_WRAPPER_SHA256:?P5_B4_WRAPPER_SHA256 must be set}
+  P5_B4_MIGRATION_MANIFEST_SHA256: ${P5_B4_MIGRATION_MANIFEST_SHA256:?P5_B4_MIGRATION_MANIFEST_SHA256 must be set}
+  P5_B4_MIGRATION_HEAD_SHA256: ${P5_B4_MIGRATION_HEAD_SHA256:?P5_B4_MIGRATION_HEAD_SHA256 must be set}
+  P5_B4_MIGRATION_HEAD_SOURCE_SHA256: ${P5_B4_MIGRATION_HEAD_SOURCE_SHA256:?P5_B4_MIGRATION_HEAD_SOURCE_SHA256 must be set}
+  P5_B4_ENVIRONMENT_FINGERPRINT: ${P5_B4_ENVIRONMENT_FINGERPRINT:?P5_B4_ENVIRONMENT_FINGERPRINT must be set}
+  P5_B4_DATASET_ID: ${P5_B4_DATASET_ID:?P5_B4_DATASET_ID must be set}
+  P5_B4_DATASET_CONFIG: ${P5_B4_DATASET_CONFIG:?P5_B4_DATASET_CONFIG must be set}
+  P5_B4_DATASET_SHA256: ${P5_B4_DATASET_SHA256:?P5_B4_DATASET_SHA256 must be set}
+  P5_B4_GIT_DIRTY: ${P5_B4_GIT_DIRTY:?P5_B4_GIT_DIRTY must be set}
+  P5_B4_GIT_DIRTY_COUNT: ${P5_B4_GIT_DIRTY_COUNT:?P5_B4_GIT_DIRTY_COUNT must be set}
+  P5_B4_GIT_STATUS_SHA256: ${P5_B4_GIT_STATUS_SHA256:?P5_B4_GIT_STATUS_SHA256 must be set}
+  P5_B4_POSTGRES_IMAGE_ID: ${P5_B4_POSTGRES_IMAGE_ID:?P5_B4_POSTGRES_IMAGE_ID must be set}
+  P5_B4_REDIS_IMAGE_ID: ${P5_B4_REDIS_IMAGE_ID:?P5_B4_REDIS_IMAGE_ID must be set}
+  P5_B4_DOCKER_ARCH: ${P5_B4_DOCKER_ARCH:?P5_B4_DOCKER_ARCH must be set}
+  P5_B4_DOCKER_CPU_COUNT: ${P5_B4_DOCKER_CPU_COUNT:?P5_B4_DOCKER_CPU_COUNT must be set}
+  P5_B4_DOCKER_MEMORY_BYTES: ${P5_B4_DOCKER_MEMORY_BYTES:?P5_B4_DOCKER_MEMORY_BYTES must be set}
+  P5_B4_DOCKER_SERVER_VERSION: ${P5_B4_DOCKER_SERVER_VERSION:?P5_B4_DOCKER_SERVER_VERSION must be set}
+  P5_B4_DOCKER_COMPOSE_VERSION: ${P5_B4_DOCKER_COMPOSE_VERSION:?P5_B4_DOCKER_COMPOSE_VERSION must be set}
+  P5_B4_DOCKER_BACKGROUND_CONTAINER_COUNT: ${P5_B4_DOCKER_BACKGROUND_CONTAINER_COUNT:?P5_B4_DOCKER_BACKGROUND_CONTAINER_COUNT must be set}
+  P5_B4_PROOF_API_URL: http://proof-api:8000
+  P5_B4_PROOF_PROVIDER_URL: http://proof-provider:8090/v1
+  P5_B4_PROVIDER_DELAY_MS: "150"
+  NPCINK_CLOUD_ENVIRONMENT: test
+  NPCINK_CLOUD_LOG_LEVEL: WARNING
+  NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST: proof-api
+  NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink_p5_b4:p5-b4-disposable-postgres-password@proof-postgres:5432/npcink_p5_b4_proof
+  NPCINK_CLOUD_REDIS_URL: redis://proof-redis:6379/15
+  NPCINK_CLOUD_RUNTIME_QUEUE_KEY: p5_b4_disposable:runtime_queue
+  NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS: "5"
+  NPCINK_CLOUD_RUNTIME_WORKER_BATCH_SIZE: "8"
+  NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: "30"
+  NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /proof-artifacts
+  NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: UlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlI= # gitleaks:allow
+  NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: p5-b4-disposable-runtime-key
+  NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: p5-b4-disposable-internal-token-32b
+  NPCINK_CLOUD_ADMIN_SESSION_SECRET: p5-b4-disposable-admin-session-secret-32b
+  NPCINK_CLOUD_PORTAL_JWT_SECRET: p5-b4-disposable-portal-jwt-secret-32b
+  NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4= # gitleaks:allow
+  NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: p5-b4-disposable-service-key
+  NPCINK_CLOUD_PUBLIC_POST_RATE_LIMIT_WINDOW_SECONDS: "60"
+  NPCINK_CLOUD_PUBLIC_POST_MAX_REQUESTS_PER_WINDOW: "100000"
+  NPCINK_CLOUD_PUBLIC_POST_MAX_REQUESTS_PER_KEY_WINDOW: "100000"
+  NPCINK_CLOUD_PUBLIC_POST_MAX_REQUESTS_PER_IP_WINDOW: "100000"
+  NPCINK_CLOUD_PUBLIC_PULL_RATE_LIMIT_WINDOW_SECONDS: "60"
+  NPCINK_CLOUD_PUBLIC_PULL_MAX_REQUESTS_PER_WINDOW: "100000"
+  NPCINK_CLOUD_PUBLIC_PULL_MAX_REQUESTS_PER_KEY_WINDOW: "100000"
+  NPCINK_CLOUD_PUBLIC_PULL_MAX_REQUESTS_PER_IP_WINDOW: "100000"
+  NPCINK_CLOUD_OPENAI_API_KEY: ""
+  NPCINK_CLOUD_ANTHROPIC_API_KEY: ""
+  NPCINK_CLOUD_MINIMAX_API_KEY: ""
+  NPCINK_CLOUD_LITELLM_API_KEY: ""
+  NPCINK_CLOUD_VLLM_API_KEY: ""
+  NPCINK_CLOUD_TEI_API_KEY: ""
+  NPCINK_CLOUD_OPENROUTER_API_KEY: ""
+  NPCINK_CLOUD_SILICONFLOW_API_KEY: ""
+  NPCINK_CLOUD_HUGGINGFACE_API_TOKEN: ""
+  NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY: ""
+  NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS: ""
+  NPCINK_CLOUD_WEB_SEARCH_BOCHA_API_KEY: ""
+  NPCINK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY: ""
+  NPCINK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN: ""
+  NPCINK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY: ""
+  NPCINK_CLOUD_IMAGE_SOURCE_PIXABAY_API_KEY: ""
+  NPCINK_CLOUD_IMAGE_SOURCE_PEXELS_API_KEY: ""
+  NPCINK_CLOUD_LITELLM_PROVIDER_ENABLED: "false"
+  NPCINK_CLOUD_VLLM_PROVIDER_ENABLED: "false"
+  NPCINK_CLOUD_TEI_PROVIDER_ENABLED: "false"
+  NPCINK_CLOUD_OPENROUTER_PROVIDER_ENABLED: "false"
+  NPCINK_CLOUD_SILICONFLOW_PROVIDER_ENABLED: "false"
+  NPCINK_CLOUD_WEB_SEARCH_PROVIDER: disabled
+  NPCINK_CLOUD_IMAGE_SOURCE_PROVIDER: disabled
+  NPCINK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE: ""
+  NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ""
+
+x-proof-app: &proof-app
+  image: ${P5_B4_PROOF_IMAGE:?P5_B4_PROOF_IMAGE must be set}
+  environment: *proof-environment
+  networks:
+    - proof-internal
+  security_opt:
+    - no-new-privileges:true
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+
+services:
+  proof-postgres:
+    image: ${P5_B4_POSTGRES_IMAGE_REF:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: npcink_p5_b4_proof
+      POSTGRES_USER: npcink_p5_b4
+      POSTGRES_PASSWORD: p5-b4-disposable-postgres-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U npcink_p5_b4 -d npcink_p5_b4_proof"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - proof-internal
+    volumes:
+      - proof-postgres-data:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+
+  proof-redis:
+    image: ${P5_B4_REDIS_IMAGE_REF:-redis:7-alpine}
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-n", "15", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - proof-internal
+    volumes:
+      - proof-redis-data:/data
+    security_opt:
+      - no-new-privileges:true
+
+  proof-provider:
+    <<: *proof-app
+    command:
+      - python
+      - scripts/p5_b4_runtime_load_soak.py
+      - --confirm-disposable
+      - serve-provider
+    depends_on:
+      proof-redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          raise SystemExit(0 if urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2).status == 200 else 1)
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  proof-api:
+    <<: *proof-app
+    command:
+      - gunicorn
+      - app.api.main:app
+      - --workers
+      - "2"
+      - --worker-class
+      - uvicorn.workers.UvicornWorker
+      - --bind
+      - 0.0.0.0:8000
+      - --timeout
+      - "60"
+      - --keep-alive
+      - "10"
+      - --access-logfile
+      - /dev/null
+      - --error-logfile
+      - "-"
+      - --log-level
+      - warning
+    depends_on:
+      proof-postgres:
+        condition: service_healthy
+      proof-redis:
+        condition: service_healthy
+      proof-provider:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          request=urllib.request.Request('http://127.0.0.1:8000/health/ready', headers={'X-Npcink-Internal-Token':'p5-b4-disposable-internal-token-32b'});
+          raise SystemExit(0 if urllib.request.urlopen(request, timeout=3).status == 200 else 1)
+      interval: 2s
+      timeout: 4s
+      retries: 30
+    volumes:
+      - proof-artifacts:/proof-artifacts
+    stop_grace_period: 15s
+
+  proof-worker:
+    <<: *proof-app
+    command: ["python", "-m", "app.workers.runtime_queue"]
+    deploy:
+      replicas: 2
+    depends_on:
+      proof-postgres:
+        condition: service_healthy
+      proof-redis:
+        condition: service_healthy
+      proof-provider:
+        condition: service_healthy
+    volumes:
+      - proof-artifacts:/proof-artifacts
+    stop_grace_period: 15s
+
+  proof-runner:
+    <<: *proof-app
+    user: ${P5_B4_RUNNER_UID:?P5_B4_RUNNER_UID must be set}:${P5_B4_RUNNER_GID:?P5_B4_RUNNER_GID must be set}
+    profiles:
+      - proof
+    command: ["python", "scripts/p5_b4_runtime_load_soak.py", "--help"]
+    depends_on:
+      proof-postgres:
+        condition: service_healthy
+      proof-redis:
+        condition: service_healthy
+    volumes:
+      - proof-artifacts:/proof-artifacts
+      - ${P5_B4_EVIDENCE_DIR:?P5_B4_EVIDENCE_DIR must be set}:/proof-evidence
+
+networks:
+  proof-internal:
+    internal: true
+
+volumes:
+  proof-postgres-data:
+  proof-redis-data:
+  proof-artifacts:

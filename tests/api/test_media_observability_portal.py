@@ -9,7 +9,8 @@ from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
 from app.core.models import (
-    MediaDerivativeArtifact,
+    MediaArtifact,
+    MediaArtifactDelivery,
     MediaDerivativeJobMetric,
     RunRecord,
 )
@@ -67,17 +68,17 @@ def _run_record(run_id: str, site_id: str, *, status: str, now: datetime) -> Run
         account_id=f"acct_{site_id}",
         subscription_id=f"sub_{site_id}",
         plan_version_id="plan-media",
-        ability_name="generate_optimized_media_derivative",
+        ability_name="media_image_transform",
         ability_family="vision",
         skill_id="",
         workflow_id="",
-        contract_version="media_derivative_cloud_request.v1",
+        contract_version="media_job_request.v1",
         channel="openapi",
         execution_kind="media_derivative",
         execution_tier="cloud",
         execution_pattern="whole_run_offload",
         data_classification="internal",
-        profile_id="media_derivative.worker",
+        profile_id="media.transform.worker",
         canonical_run_id=None,
         status=status,
         idempotency_key=f"idem-{run_id}",
@@ -116,24 +117,88 @@ def _seed_media_metrics(database_url: str) -> None:
             ]
         )
         session.flush()
-        session.add(
-            MediaDerivativeArtifact(
-                artifact_id="art-media-portal-001",
-                run_id="run-media-portal-001",
-                site_id="site-media-portal-001",
-                storage_ref="blob://media_derivative/art-media-portal-001",
-                blob_data=b"1234",
-                mime_type="image/webp",
-                format="webp",
-                width=100,
-                height=80,
-                filesize_bytes=400,
-                checksum="sha256:abc",
-                source_media_type="image",
-                processing_warnings_json={"warnings": []},
-                expires_at=now + timedelta(minutes=30),
-                created_at=now,
-            )
+        artifact = MediaArtifact(
+            artifact_id="art-media-portal-001",
+            run_id="run-media-portal-001",
+            site_id="site-media-portal-001",
+            storage_key="obj_11111111111111111111111111111111",
+            media_kind="image",
+            operation="image.transform.v1",
+            status="available",
+            content_type="image/webp",
+            format="webp",
+            width=100,
+            height=80,
+            byte_size=400,
+            checksum="sha256:abc",
+            processing_warnings_json={"warnings": []},
+            expires_at=now + timedelta(minutes=30),
+            created_at=now,
+        )
+        foreign_artifact = MediaArtifact(
+            artifact_id="art-media-portal-foreign",
+            run_id="run-media-portal-002",
+            site_id="site-media-portal-002",
+            storage_key="obj_22222222222222222222222222222222",
+            media_kind="image",
+            operation="image.transform.v1",
+            status="available",
+            content_type="image/jpeg",
+            format="jpeg",
+            width=100,
+            height=80,
+            byte_size=500,
+            checksum="sha256:foreign",
+            processing_warnings_json={"warnings": []},
+            expires_at=now + timedelta(minutes=30),
+            created_at=now,
+        )
+        session.add_all([artifact, foreign_artifact])
+        session.flush()
+        session.add_all(
+            [
+                MediaArtifactDelivery(
+                    delivery_id="delivery-media-portal-001",
+                    artifact_id=artifact.artifact_id,
+                    site_id=artifact.site_id,
+                    expected_byte_size=artifact.byte_size,
+                    expected_checksum=artifact.checksum,
+                    pull_trace_id="trace-delivery-media-portal-001",
+                    started_at=now - timedelta(minutes=9),
+                    completed_at=now - timedelta(minutes=8),
+                    completed_byte_size=artifact.byte_size,
+                    completed_checksum=artifact.checksum,
+                    ack_deadline_at=now + timedelta(minutes=1),
+                    acked_at=now - timedelta(minutes=7),
+                    ack_idempotency_key="ack-delivery-media-portal-001",
+                    ack_request_fingerprint="f" * 64,
+                    ack_trace_id="ack-trace-delivery-media-portal-001",
+                    received_byte_size=artifact.byte_size,
+                    received_checksum=artifact.checksum,
+                    byte_size_verified=True,
+                    checksum_verified=True,
+                ),
+                MediaArtifactDelivery(
+                    delivery_id="delivery-media-portal-002",
+                    artifact_id=artifact.artifact_id,
+                    site_id=artifact.site_id,
+                    expected_byte_size=artifact.byte_size,
+                    expected_checksum=artifact.checksum,
+                    pull_trace_id="trace-delivery-media-portal-002",
+                    started_at=now - timedelta(minutes=6),
+                    ack_deadline_at=now + timedelta(minutes=4),
+                ),
+                MediaArtifactDelivery(
+                    delivery_id="delivery-media-portal-cross-site-artifact",
+                    artifact_id=foreign_artifact.artifact_id,
+                    site_id=artifact.site_id,
+                    expected_byte_size=foreign_artifact.byte_size,
+                    expected_checksum=foreign_artifact.checksum,
+                    pull_trace_id="trace-delivery-media-portal-cross-site-artifact",
+                    started_at=now - timedelta(minutes=5),
+                    ack_deadline_at=now + timedelta(minutes=5),
+                ),
+            ]
         )
         session.add_all(
             [
@@ -160,7 +225,6 @@ def _seed_media_metrics(database_url: str) -> None:
                     warnings_count=0,
                     artifact_id="art-media-portal-001",
                     artifact_expires_at=now + timedelta(minutes=30),
-                    artifact_download_count=1,
                     created_at=now - timedelta(minutes=10),
                     finished_at=now - timedelta(minutes=10),
                 ),
@@ -203,19 +267,37 @@ def test_portal_media_observability_returns_current_site_summary(tmp_path: Path)
     envelope = response.json()
     assert envelope["status"] == "ok"
     data = envelope["data"]
-    assert data["contract_version"] == "magick-media-observability-summary-v1"
+    assert data["contract_version"] == "magick-media-observability-summary-v2"
     assert data["workflow_metadata"]["workflow_id"] == ("media_derivative_artifact_generation")
     assert data["workflow_metadata"]["direct_wordpress_write"] is False
     assert data["site_id"] == "site-media-portal-001"
-    assert data["account_id"] == "acct_site-media-portal-001"
+    assert {
+        "account_id",
+        "principal_id",
+        "identity_type",
+        "role",
+        "allowed_actions",
+        "site_admin_ref",
+        "member_ref",
+    }.isdisjoint(data)
     assert data["totals"]["jobs_total"] == 1
     assert data["totals"]["succeeded_total"] == 1
     assert data["totals"]["failed_total"] == 0
+    assert data["totals"]["delivery_started_count"] == 2
+    assert data["totals"]["delivery_stream_completed_count"] == 1
+    assert data["totals"]["delivery_acknowledged_count"] == 1
+    assert data["totals"]["stream_completion_rate"] == 0.5
+    assert data["totals"]["acknowledgement_rate"] == 1.0
+    assert "artifact_download_count" not in data["totals"]
+    assert {item["site_id"] for item in data["delivery_evidence"]["by_site"]} == {
+        "site-media-portal-001"
+    }
+    assert data["delivery_evidence"]["cms_write_evidence"] is False
     assert data["totals"]["active_artifact_count"] == 1
     assert data["formats"][0]["target_format"] == "webp"
     assert data["errors"] == []
     assert "sites" not in data
-    assert "blob_data" not in str(data)
+    assert "storage_key" not in str(data)
 
 
 def test_portal_media_observability_rejects_other_site(tmp_path: Path) -> None:

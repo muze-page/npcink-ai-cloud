@@ -34,6 +34,22 @@ from app.domain.commercial.identity import (
 
 COOKIE_ADMIN_TOKEN = "npcink_admin_session_token"
 ADMIN_SESSION_ALGORITHM = "HS256"
+ADMIN_SESSION_ISSUER = "npcink-ai-cloud"
+ADMIN_SESSION_AUDIENCE = "npcink-ai-cloud-admin"
+ADMIN_SESSION_PURPOSE = "admin_session"
+ADMIN_SESSION_AUTH_MODE = "admin_bootstrap_token"
+ADMIN_SESSION_REQUIRED_CLAIMS = (
+    "iss",
+    "aud",
+    "sub",
+    "purpose",
+    "auth_mode",
+    "grant_id",
+    "is_persisted",
+    "session_version",
+    "iat",
+    "exp",
+)
 
 router = APIRouter(include_in_schema=False)
 
@@ -63,19 +79,41 @@ def _resolve_admin_session_secret(request: Request) -> str:
 def _build_admin_session_token(
     request: Request,
     *,
+    grant_id: str,
     principal_id: str,
-    role: str,
-    auth_mode: str,
+    is_persisted: bool,
     session_version: int = 1,
 ) -> str:
+    if (
+        not isinstance(grant_id, str)
+        or grant_id != grant_id.strip()
+        or not isinstance(principal_id, str)
+        or not principal_id
+        or principal_id != principal_id.strip()
+        or not isinstance(is_persisted, bool)
+        or (is_persisted and not grant_id)
+        or (not is_persisted and bool(grant_id))
+        or isinstance(session_version, bool)
+        or not isinstance(session_version, int)
+        or session_version < 1
+    ):
+        raise PortalBearerTokenError(
+            401,
+            "auth.admin_session_invalid",
+            "admin session is invalid",
+        )
     settings = get_cloud_services(request).settings
     now = datetime.now(UTC)
     expires_at = now.timestamp() + max(60, int(settings.admin_session_ttl_seconds or 0))
     payload = {
+        "iss": ADMIN_SESSION_ISSUER,
+        "aud": ADMIN_SESSION_AUDIENCE,
         "sub": principal_id,
-        "role": role,
-        "auth_mode": auth_mode,
-        "session_version": int(session_version or 1),
+        "purpose": ADMIN_SESSION_PURPOSE,
+        "auth_mode": ADMIN_SESSION_AUTH_MODE,
+        "grant_id": grant_id,
+        "is_persisted": is_persisted,
+        "session_version": session_version,
         "iat": int(now.timestamp()),
         "exp": int(expires_at),
     }
@@ -108,6 +146,63 @@ def _resolve_admin_session_cookie_candidates(request: Request) -> list[str]:
     return candidates
 
 
+def _validate_admin_session_claims(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise InvalidTokenError("admin session claims must be an object")
+    claims: dict[str, Any] = payload
+    principal_id = claims.get("sub")
+    grant_id = claims.get("grant_id")
+    is_persisted = claims.get("is_persisted")
+    session_version = claims.get("session_version")
+    issued_at = claims.get("iat")
+    expires_at = claims.get("exp")
+    not_before = claims.get("nbf")
+    if (
+        claims.get("iss") != ADMIN_SESSION_ISSUER
+        or claims.get("aud") != ADMIN_SESSION_AUDIENCE
+        or claims.get("purpose") != ADMIN_SESSION_PURPOSE
+        or claims.get("auth_mode") != ADMIN_SESSION_AUTH_MODE
+        or "role" in claims
+        or not isinstance(grant_id, str)
+        or grant_id != grant_id.strip()
+        or not isinstance(principal_id, str)
+        or not principal_id.strip()
+        or principal_id != principal_id.strip()
+        or not isinstance(is_persisted, bool)
+        or (is_persisted and not grant_id)
+        or (not is_persisted and bool(grant_id))
+        or isinstance(session_version, bool)
+        or not isinstance(session_version, int)
+        or session_version < 1
+        or isinstance(issued_at, bool)
+        or not isinstance(issued_at, int)
+        or issued_at < 0
+        or isinstance(expires_at, bool)
+        or not isinstance(expires_at, int)
+        or expires_at <= issued_at
+        or (
+            "nbf" in claims
+            and (isinstance(not_before, bool) or not isinstance(not_before, int) or not_before < 0)
+        )
+    ):
+        raise InvalidTokenError("admin session claims are invalid")
+    try:
+        datetime.fromtimestamp(issued_at, tz=UTC)
+        datetime.fromtimestamp(expires_at, tz=UTC)
+        if not_before is not None:
+            datetime.fromtimestamp(not_before, tz=UTC)
+    except (OverflowError, OSError, ValueError) as error:
+        raise InvalidTokenError("admin session timestamps are invalid") from error
+    now_timestamp = datetime.now(UTC).timestamp()
+    if (
+        issued_at > now_timestamp
+        or expires_at <= now_timestamp
+        or (not_before is not None and (not_before > now_timestamp or not_before > expires_at))
+    ):
+        raise InvalidTokenError("admin session timestamps are invalid")
+    return claims
+
+
 def _current_admin_session(request: Request) -> dict[str, Any]:
     tokens = _resolve_admin_session_cookie_candidates(request)
     if not tokens:
@@ -125,11 +220,20 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
                 token,
                 _resolve_admin_session_secret(request),
                 algorithms=[ADMIN_SESSION_ALGORITHM],
+                issuer=ADMIN_SESSION_ISSUER,
+                audience=ADMIN_SESSION_AUDIENCE,
+                options={
+                    "require": list(ADMIN_SESSION_REQUIRED_CLAIMS),
+                    "verify_exp": False,
+                    "verify_iat": False,
+                    "verify_nbf": False,
+                },
             )
-            claims = payload if isinstance(payload, dict) else {}
+            claims = _validate_admin_session_claims(payload)
             break
-        except InvalidTokenError as error:
-            decode_error = error
+        except (InvalidTokenError, TypeError, ValueError, OverflowError) as error:
+            decode_error = InvalidTokenError("admin session claims are invalid")
+            decode_error.__cause__ = error
             continue
 
     if claims is None:
@@ -139,15 +243,14 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
             "admin session is invalid",
         ) from decode_error
 
-    principal_id = str(claims.get("sub") or "").strip()
-    auth_mode = str(claims.get("auth_mode") or "admin_bootstrap_token").strip()
+    principal_id = claims["sub"]
+    auth_mode = claims["auth_mode"]
     settings = get_cloud_services(request).settings
     bootstrap_principal_id = str(
         settings.admin_bootstrap_principal_id or "platform:internal_root"
     ).strip()
-    allow_bootstrap = auth_mode in {"admin_bootstrap_token", "dev_internal_autologin"} and (
-        principal_id in {bootstrap_principal_id, "platform:internal_root"}
-    )
+    token_is_persisted = claims["is_persisted"]
+    allow_bootstrap = not token_is_persisted and principal_id == bootstrap_principal_id
 
     from app.api.routes.service import _get_commercial_service
 
@@ -163,41 +266,37 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
             "auth.admin_session_revoked",
             "admin session is no longer valid",
         ) from error
-    token_session_version_value: Any = claims.get("session_version") or 1
-    current_session_version_value: Any = identity.get("session_version") or 1
-    token_session_version = int(token_session_version_value)
-    current_session_version = int(current_session_version_value)
-    if token_session_version != current_session_version:
+    is_persisted = identity.get("is_persisted")
+    token_grant_id = claims["grant_id"]
+    current_grant_id = identity.get("grant_id")
+    token_session_version = claims["session_version"]
+    current_session_version = identity.get("session_version")
+    if (
+        not isinstance(is_persisted, bool)
+        or is_persisted != token_is_persisted
+        or not isinstance(current_grant_id, str)
+        or current_grant_id != token_grant_id
+        or isinstance(current_session_version, bool)
+        or not isinstance(current_session_version, int)
+        or current_session_version < 1
+        or token_session_version != current_session_version
+    ):
         raise PortalBearerTokenError(
             401,
             "auth.admin_session_revoked",
             "admin session is no longer valid",
         )
-    identity_metadata = identity.get("metadata")
-    revocable = (
-        not bool(identity_metadata.get("bootstrap"))
-        if isinstance(identity_metadata, dict)
-        else True
-    )
+    revocable = is_persisted
 
-    issued_at = ""
-    expires_at = ""
-    if claims.get("iat"):
-        issued_at = (
-            datetime.fromtimestamp(int(claims["iat"]), tz=UTC).isoformat().replace("+00:00", "Z")
-        )
-    if claims.get("exp"):
-        expires_at = (
-            datetime.fromtimestamp(int(claims["exp"]), tz=UTC).isoformat().replace("+00:00", "Z")
-        )
+    issued_at = datetime.fromtimestamp(claims["iat"], tz=UTC).isoformat().replace("+00:00", "Z")
+    expires_at = datetime.fromtimestamp(claims["exp"], tz=UTC).isoformat().replace("+00:00", "Z")
+    identity_role = str(identity.get("role") or "").strip()
     return {
         "principal_id": str(identity.get("principal_id") or principal_id),
         "identity_type": IDENTITY_TYPE_PLATFORM_ADMIN,
-        "role": str(identity.get("role") or claims.get("role") or "").strip(),
+        "role": identity_role,
         "capabilities": _dict_value(identity.get("capabilities"))
-        or _platform_capability_flags(
-            str(identity.get("role") or claims.get("role") or "").strip()
-        ),
+        or _platform_capability_flags(identity_role),
         "auth_mode": auth_mode,
         "issued_at": issued_at,
         "expires_at": expires_at,
@@ -292,9 +391,9 @@ def _issue_admin_session_cookie(
         request,
         _build_admin_session_token(
             request,
+            grant_id=session.grant_id,
             principal_id=session.principal_id,
-            role=session.role,
-            auth_mode=session.auth_mode,
+            is_persisted=session.revocable,
             session_version=session.session_version,
         ),
     )
@@ -388,11 +487,6 @@ async def web_admin_auth_bootstrap(request: Request) -> Any:
         session = ResolvedAdminSession.from_identity(
             identity,
             auth_mode="admin_bootstrap_token",
-            fallback_principal_id=principal_id
-            or str(
-                get_cloud_services(request).settings.admin_bootstrap_principal_id
-                or "platform:internal_root"
-            ),
         )
     except PortalBearerTokenError as error:
         if wants_redirect:

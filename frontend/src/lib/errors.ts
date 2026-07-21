@@ -1,132 +1,43 @@
-import { CloudApiError, getErrorMessage } from './envelope';
-
-/**
- * Frontend Error Types
- */
-
-/**
- * Session error - user needs to log in or re-authenticate
- */
-export class SessionError extends CloudApiError {
-  constructor(message: string, errorCode?: string) {
-    super(errorCode || 'auth.session_required', message);
-    this.name = 'SessionError';
-  }
+export interface ApiErrorInit {
+  statusCode: number;
+  errorCode: string;
+  message: string;
+  details?: unknown;
+  traceId?: string;
+  revision?: string;
+  rawBody?: unknown;
+  cause?: unknown;
 }
 
-/**
- * Site selection error - user needs to select a site
- */
-export class SiteSelectionError extends CloudApiError {
-  constructor(message: string) {
-    super('auth.site_selection_required', message);
-    this.name = 'SiteSelectionError';
-  }
-}
+export class ApiError extends Error {
+  readonly statusCode: number;
+  readonly errorCode: string;
+  readonly details: unknown;
+  readonly traceId: string;
+  readonly revision: string;
+  readonly rawBody: unknown;
+  override readonly cause: unknown;
 
-/**
- * API error with additional context
- */
-export class ApiError extends CloudApiError {
-  constructor(
-    errorCode: string,
-    message: string,
-    public readonly statusCode?: number,
-    public readonly responseBody?: unknown
-  ) {
-    super(errorCode, message);
+  constructor(init: ApiErrorInit) {
+    super(init.message);
     this.name = 'ApiError';
+    this.statusCode = init.statusCode;
+    this.errorCode = init.errorCode;
+    this.details = init.details;
+    this.traceId = init.traceId || '';
+    this.revision = init.revision || '';
+    this.rawBody = init.rawBody;
+    this.cause = init.cause;
   }
 
-  static fromResponse(
-    response: Response,
-    body: unknown
-  ): ApiError {
-    const errorCode =
-      body && typeof body === 'object' && 'error_code' in body
-        ? String((body as { error_code?: string }).error_code || 'unknown')
-        : 'unknown';
+  get isAuthError(): boolean {
+    return this.statusCode === 401 || this.errorCode.startsWith('auth.');
+  }
 
-    const message =
-      body && typeof body === 'object' && 'message' in body
-        ? String((body as { message?: string }).message)
-        : getErrorMessage(errorCode);
-
-    return new ApiError(errorCode, message, response.status, body);
+  get isRateLimitError(): boolean {
+    return this.statusCode === 429 || this.errorCode.includes('rate_limit');
   }
 }
-
-/**
- * Network error - failed to reach the API
- */
-export class NetworkError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'NetworkError';
-  }
-}
-
-/**
- * Validation error - client-side validation failed
- */
-export class ValidationError extends Error {
-  constructor(
-    message: string,
-    public readonly field?: string
-  ) {
-    super(message);
-    this.name = 'ValidationError';
-  }
-}
-
-/**
- * Create error from Cloud API error code
- */
-export function createErrorFromCode(errorCode: string, message?: string): CloudApiError {
-  if (errorCode.startsWith('auth.')) {
-    if (errorCode === 'auth.session_required') {
-      return new SessionError(message || getErrorMessage(errorCode), errorCode);
-    }
-    if (errorCode === 'auth.site_selection_required') {
-      return new SiteSelectionError(message || getErrorMessage(errorCode));
-    }
-  }
-
-  return new CloudApiError(errorCode, message || getErrorMessage(errorCode));
-}
-
-/**
- * Handle error and return user-friendly message
- */
-export function getErrorMessageFromError(error: unknown): string {
-  if (error instanceof CloudApiError) {
-    return error.message;
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return 'An unexpected error occurred';
-}
-
-/**
- * Check if error requires redirect to login
- */
-export function requiresLogin(error: unknown): boolean {
-  if (error instanceof CloudApiError) {
-    return error.isAuthError;
-  }
-  return false;
-}
-
-/**
- * Check if error requires site selection
- */
-export function requiresSiteSelection(error: unknown): boolean {
-  return error instanceof SiteSelectionError;
-}
-// ============================================
-// UI Error Message Resolution
-// ============================================
 
 const GENERIC_ENGLISH_ERROR_PATTERNS: RegExp[] = [
   /^failed to /i,
@@ -144,17 +55,28 @@ function containsCjk(value: string): boolean {
   return /[\u3400-\u9fff]/.test(value);
 }
 
-/**
- * Resolve a user-friendly error message from a raw error string.
- * If the message is a generic English error pattern, returns the fallback.
- * If the message contains CJK characters, returns it as-is.
- */
-export function resolveUiErrorMessage(message: unknown, fallback: string): string {
-  if (typeof message !== 'string') {
-    return fallback;
+function extractMessage(value: unknown): string {
+  if (value instanceof Error) {
+    return String(value.message || '').trim();
+  }
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return '';
   }
 
-  const normalized = message.trim();
+  const record = value as Record<string, unknown>;
+  for (const candidate of [record.message, record.detail, record.error_code]) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return '';
+}
+
+export function resolveUiErrorMessage(error: unknown, fallback: string): string {
+  const normalized = extractMessage(error);
   if (!normalized) {
     return fallback;
   }

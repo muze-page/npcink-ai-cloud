@@ -2,13 +2,14 @@
 
 Status: active internal runbook
 Date: 2026-06-11
-Scope: platform administrator and site administrator onboarding path before public release
+Updated: 2026-07-16
+Scope: platform administrator and customer user onboarding path before public release
 
 ## Purpose
 
 This runbook proves the narrow internal alpha onboarding path:
 
-`platform_admin -> account/package/subscription -> site_admin_access -> Portal login -> site bind -> Cloud API key -> signed runtime call -> usage and audit evidence`
+`platform_admin -> account/package/subscription -> user access -> Portal login -> WordPress addon connection -> one-time server exchange -> signed runtime call -> usage and audit evidence`
 
 It is not a GA checklist, a payment flow, a customer storefront, or a Cloud-side
 WordPress control plane.
@@ -17,8 +18,9 @@ WordPress control plane.
 
 - `platform_admin`: manages Cloud platform data, customer accounts, packages,
   subscriptions, diagnostics, audit, and trial readiness.
-- `site_admin`: logs in to Portal, binds their own site, manages site keys, and views
-  usage, billing, and audit for their account/site scope.
+- `user`: logs in to Portal, authorizes an existing account-scoped WordPress
+  addon connection, and views usage, billing, and audit. The user never manages
+  signing keys directly.
 
 ## Fast Contract Smoke
 
@@ -33,8 +35,10 @@ verifies:
 
 - platform admin account, Pro package coverage, and subscription setup;
 - site administrator email-code login through `/portal/v1/auth/code/*`;
-- site administrator-created Portal site through `POST /portal/v1/sites`;
-- site administrator-issued Cloud API key through `POST /portal/v1/sites/{site_id}/api-keys`;
+- WordPress addon connection through `POST /portal/v1/addon-connections`, after
+  existing active account membership and `provision_sites` authorization;
+- one-time server exchange through `POST /portal/v1/addon-connections/exchange`,
+  with no key returned by the browser authorization step;
 - one signed hosted runtime request through `/v1/runtime/execute`;
 - usage meter evidence for runs and provider calls;
 - Portal and Admin audit visibility for the onboarding actions;
@@ -57,7 +61,8 @@ health readiness, provider/runtime execution, and evidence file generation under
 - `pnpm run smoke:internal-alpha-onboarding` passes.
 - `pnpm run smoke:local-alpha` passes for the chosen local or preview target.
 - Admin account detail shows trial readiness as ready.
-- Portal can load the selected site, key list, usage, billing, and audit.
+- Portal can load the selected site, connection/health evidence, usage,
+  billing, and Cloud audit without exposing signing keys.
 - WordPress remains the local binding and final-write owner.
 
 ## Boundary

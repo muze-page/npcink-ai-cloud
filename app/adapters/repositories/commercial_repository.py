@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import Integer, and_, case, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -17,6 +17,7 @@ from app.core.models import (
     IDENTITY_PROVIDER_BINDING_STATUS_REVOKED,
     PAYMENT_ORDER_STATUS_CANCELED,
     PAYMENT_ORDER_STATUS_PENDING,
+    PLATFORM_KIND_WORDPRESS,
     PORTAL_LOGIN_CODE_STATUS_PENDING,
     PORTAL_OAUTH_STATE_STATUS_PENDING,
     PRINCIPAL_STATUS_ACTIVE,
@@ -28,6 +29,7 @@ from app.core.models import (
     CommercialDecisionEvent,
     CreditLedgerEntry,
     IdentityProviderBinding,
+    PaidCreditGrant,
     PaymentEvent,
     PaymentOrder,
     PaymentRefund,
@@ -162,6 +164,12 @@ class CommercialRepository:
         self.session.add(message)
         self.session.flush()
         return message
+
+    def get_support_request_message(
+        self,
+        message_id: str,
+    ) -> SupportRequestMessage | None:
+        return self.session.get(SupportRequestMessage, message_id)
 
     def list_support_request_messages(
         self,
@@ -580,6 +588,18 @@ class CommercialRepository:
             provider=provider,
             external_subject_hash=external_subject_hash,
         )
+        if binding is not None and binding.principal_id != principal_id:
+            raise ValueError("identity provider binding principal_id is immutable")
+        union_binding = (
+            self.get_identity_provider_binding_by_unionid(
+                provider=provider,
+                unionid_hash=unionid_hash,
+            )
+            if unionid_hash
+            else None
+        )
+        if union_binding is not None and union_binding.principal_id != principal_id:
+            raise ValueError("identity provider binding principal_id is immutable")
         if binding is None:
             binding = IdentityProviderBinding(
                 binding_id=binding_id,
@@ -593,7 +613,6 @@ class CommercialRepository:
             )
             self.session.add(binding)
         else:
-            binding.principal_id = principal_id
             binding.unionid_hash = unionid_hash or None
             binding.status = status
             binding.metadata_json = metadata_json
@@ -1054,9 +1073,18 @@ class CommercialRepository:
         account_id: str | None,
         name: str,
         status: str,
+        site_url: str | None = None,
+        platform_kind: str = PLATFORM_KIND_WORDPRESS,
         metadata_json: dict[str, object] | None,
         provisioned_at: datetime | None,
     ) -> Site:
+        normalized_platform_kind = str(platform_kind or "").strip().lower()
+        if normalized_platform_kind != PLATFORM_KIND_WORDPRESS:
+            raise ValueError("unsupported platform_kind")
+        normalized_metadata = dict(metadata_json) if metadata_json is not None else None
+        if normalized_metadata is not None:
+            normalized_metadata.pop("site_url", None)
+            normalized_metadata.pop("url", None)
         site = self.get_site(site_id)
         if site is None:
             site = Site(
@@ -1064,7 +1092,9 @@ class CommercialRepository:
                 account_id=account_id,
                 name=name or site_id,
                 status=status,
-                metadata_json=metadata_json,
+                site_url=str(site_url or "").strip() if site_url is not None else "",
+                platform_kind=normalized_platform_kind,
+                metadata_json=normalized_metadata,
                 provisioned_at=provisioned_at,
             )
             self.session.add(site)
@@ -1072,7 +1102,10 @@ class CommercialRepository:
             site.account_id = account_id
             site.name = name or site.name or site_id
             site.status = status
-            site.metadata_json = metadata_json
+            if site_url is not None:
+                site.site_url = str(site_url or "").strip()
+            site.platform_kind = normalized_platform_kind
+            site.metadata_json = normalized_metadata
             if provisioned_at is not None and site.provisioned_at is None:
                 site.provisioned_at = provisioned_at
         self.session.flush()
@@ -2316,6 +2349,402 @@ class CommercialRepository:
         if limit is not None and limit > 0:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
+
+    def summarize_credit_consumption_buckets(
+        self,
+        *,
+        account_id: str,
+        buckets: list[tuple[datetime, datetime]],
+        site_ids: list[str] | None = None,
+    ) -> dict[int, dict[str, float | int]]:
+        if not buckets:
+            return {}
+        bucket_expression = case(
+            *[
+                (
+                    and_(
+                        CreditLedgerEntry.created_at >= start_at,
+                        CreditLedgerEntry.created_at < end_at,
+                    ),
+                    index,
+                )
+                for index, (start_at, end_at) in enumerate(buckets)
+            ],
+            else_=None,
+        ).label("bucket_index")
+        statement = (
+            select(
+                bucket_expression,
+                func.sum(-CreditLedgerEntry.credit_delta).label("consumed_credits"),
+                func.count(CreditLedgerEntry.ledger_entry_id).label("entry_count"),
+            )
+            .where(
+                CreditLedgerEntry.account_id == account_id,
+                CreditLedgerEntry.event_type == CREDIT_LEDGER_EVENT_CONSUME,
+                CreditLedgerEntry.credit_delta < 0,
+                CreditLedgerEntry.created_at >= buckets[0][0],
+                CreditLedgerEntry.created_at < buckets[-1][1],
+            )
+            .group_by(bucket_expression)
+        )
+        if site_ids is not None:
+            if not site_ids:
+                return {}
+            statement = statement.where(CreditLedgerEntry.site_id.in_(site_ids))
+        return {
+            int(bucket_index): {
+                "credits": round(float(consumed_credits or 0.0), 6),
+                "entry_count": int(entry_count or 0),
+            }
+            for bucket_index, consumed_credits, entry_count in self.session.execute(statement)
+            if bucket_index is not None
+        }
+
+    def list_portal_credit_event_groups(
+        self,
+        *,
+        account_id: str,
+        subscription_id: str | None,
+        event_types: list[str],
+        since: datetime,
+        until: datetime,
+        site_id: str = "",
+        feature: str = "",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int, float]:
+        source = func.lower(CreditLedgerEntry.source_type)
+        ability_name = func.lower(func.coalesce(RunRecord.ability_name, ""))
+        ability_family = func.lower(func.coalesce(RunRecord.ability_family, ""))
+        execution_kind = func.lower(func.coalesce(RunRecord.execution_kind, ""))
+        feature_expression = case(
+            (or_(source.like("zhihu%"), ability_name.like("%zhihu%")), "topic_research"),
+            (or_(source == "web_search", ability_name.like("%web-search%")), "web_search"),
+            (
+                or_(
+                    source.in_(["vector_documents", "vector_chunks"]),
+                    ability_name.like("%site-knowledge%"),
+                    ability_name.like("%site_knowledge%"),
+                    ability_family == "knowledge",
+                    execution_kind.in_(["embedding", "site_knowledge", "knowledge"]),
+                ),
+                "site_knowledge",
+            ),
+            (
+                or_(
+                    source.like("%image%"), ability_name.like("%image%"), ability_family == "vision"
+                ),
+                "image_assistance",
+            ),
+            (or_(source.like("%audio%"), ability_name.like("%audio%")), "audio_generation"),
+            else_="content_generation",
+        ).label("feature_key")
+        group_id = func.coalesce(
+            func.nullif(CreditLedgerEntry.run_id, ""), CreditLedgerEntry.ledger_entry_id
+        ).label("group_id")
+        grouped = (
+            select(
+                group_id,
+                CreditLedgerEntry.run_id.label("run_id"),
+                CreditLedgerEntry.site_id.label("site_id"),
+                feature_expression,
+                func.max(CreditLedgerEntry.created_at).label("created_at"),
+                func.sum(CreditLedgerEntry.credit_delta).label("net_credit_delta"),
+                func.count(CreditLedgerEntry.ledger_entry_id).label("component_count"),
+            )
+            .select_from(CreditLedgerEntry)
+            .outerjoin(RunRecord, RunRecord.run_id == CreditLedgerEntry.run_id)
+            .where(
+                CreditLedgerEntry.account_id == account_id,
+                CreditLedgerEntry.event_type.in_(event_types),
+                CreditLedgerEntry.created_at >= since,
+                CreditLedgerEntry.created_at <= until,
+            )
+        )
+        if subscription_id is not None:
+            grouped = grouped.where(CreditLedgerEntry.subscription_id == subscription_id)
+        if site_id:
+            grouped = grouped.where(CreditLedgerEntry.site_id == site_id)
+        if feature:
+            grouped = grouped.where(feature_expression == feature)
+        grouped_subquery = grouped.group_by(
+            group_id,
+            CreditLedgerEntry.run_id,
+            CreditLedgerEntry.site_id,
+            feature_expression,
+        ).subquery()
+        summary = self.session.execute(
+            select(
+                func.count(),
+                func.sum(
+                    case(
+                        (
+                            grouped_subquery.c.net_credit_delta < 0,
+                            -grouped_subquery.c.net_credit_delta,
+                        ),
+                        else_=0,
+                    )
+                ),
+            ).select_from(grouped_subquery)
+        ).one()
+        rows = self.session.execute(
+            select(grouped_subquery)
+            .order_by(grouped_subquery.c.created_at.desc(), grouped_subquery.c.group_id.desc())
+            .limit(limit)
+            .offset(offset)
+        ).mappings()
+        return [dict(row) for row in rows], int(summary[0] or 0), round(float(summary[1] or 0.0), 6)
+
+    def list_credit_ledger_entries_for_event_groups(
+        self,
+        *,
+        account_id: str,
+        run_ids: list[str],
+        ledger_entry_ids: list[str],
+    ) -> list[CreditLedgerEntry]:
+        predicates: list[ColumnElement[bool]] = []
+        if run_ids:
+            predicates.append(CreditLedgerEntry.run_id.in_(run_ids))
+        if ledger_entry_ids:
+            predicates.append(CreditLedgerEntry.ledger_entry_id.in_(ledger_entry_ids))
+        if not predicates:
+            return []
+        return list(
+            self.session.scalars(
+                select(CreditLedgerEntry).where(
+                    CreditLedgerEntry.account_id == account_id,
+                    or_(*predicates),
+                )
+            )
+        )
+
+    def summarize_portal_credit_event_buckets(
+        self,
+        *,
+        account_id: str,
+        subscription_id: str | None,
+        event_types: list[str],
+        since: datetime,
+        until: datetime,
+        bucket_seconds: int,
+        site_id: str = "",
+        feature: str = "",
+    ) -> list[dict[str, Any]]:
+        source = func.lower(CreditLedgerEntry.source_type)
+        ability_name = func.lower(func.coalesce(RunRecord.ability_name, ""))
+        ability_family = func.lower(func.coalesce(RunRecord.ability_family, ""))
+        execution_kind = func.lower(func.coalesce(RunRecord.execution_kind, ""))
+        feature_expression = case(
+            (or_(source.like("zhihu%"), ability_name.like("%zhihu%")), "topic_research"),
+            (or_(source == "web_search", ability_name.like("%web-search%")), "web_search"),
+            (
+                or_(
+                    source.in_(["vector_documents", "vector_chunks"]),
+                    ability_name.like("%site-knowledge%"),
+                    ability_name.like("%site_knowledge%"),
+                    ability_family == "knowledge",
+                    execution_kind.in_(["embedding", "site_knowledge", "knowledge"]),
+                ),
+                "site_knowledge",
+            ),
+            (
+                or_(
+                    source.like("%image%"),
+                    ability_name.like("%image%"),
+                    ability_family == "vision",
+                ),
+                "image_assistance",
+            ),
+            (or_(source.like("%audio%"), ability_name.like("%audio%")), "audio_generation"),
+            else_="content_generation",
+        ).label("feature_key")
+        group_id = func.coalesce(
+            func.nullif(CreditLedgerEntry.run_id, ""),
+            CreditLedgerEntry.ledger_entry_id,
+        )
+        dialect_name = self.session.bind.dialect.name if self.session.bind is not None else ""
+        epoch_seconds = (
+            func.cast(func.strftime("%s", CreditLedgerEntry.created_at), Integer)
+            if dialect_name == "sqlite"
+            else func.extract("epoch", CreditLedgerEntry.created_at)
+        )
+        # PostgreSQL rounds numeric-to-integer casts, which can move entries in the
+        # second half of an interval into the next bucket. Floor explicitly so the
+        # bucket always starts at or before the event timestamp on every dialect.
+        bucket_index = func.cast(
+            func.floor(epoch_seconds / bucket_seconds),
+            Integer,
+        ).label("bucket_index")
+        statement = (
+            select(
+                bucket_index,
+                feature_expression,
+                func.sum(CreditLedgerEntry.credit_delta).label("net_credit_delta"),
+                func.count(func.distinct(group_id)).label("event_count"),
+                func.count(func.distinct(CreditLedgerEntry.site_id)).label("site_count"),
+            )
+            .select_from(CreditLedgerEntry)
+            .outerjoin(RunRecord, RunRecord.run_id == CreditLedgerEntry.run_id)
+            .where(
+                CreditLedgerEntry.account_id == account_id,
+                CreditLedgerEntry.event_type.in_(event_types),
+                CreditLedgerEntry.created_at >= since,
+                CreditLedgerEntry.created_at <= until,
+            )
+        )
+        if subscription_id is not None:
+            statement = statement.where(CreditLedgerEntry.subscription_id == subscription_id)
+        if site_id:
+            statement = statement.where(CreditLedgerEntry.site_id == site_id)
+        if feature:
+            statement = statement.where(feature_expression == feature)
+        feature_rows = self.session.execute(
+            statement.group_by(bucket_index, feature_expression).order_by(bucket_index.desc())
+        ).mappings()
+        total_statement = (
+            select(
+                bucket_index,
+                func.sum(CreditLedgerEntry.credit_delta).label("net_credit_delta"),
+                func.count(func.distinct(group_id)).label("event_count"),
+                func.count(func.distinct(CreditLedgerEntry.site_id)).label("site_count"),
+            )
+            .select_from(CreditLedgerEntry)
+            .outerjoin(RunRecord, RunRecord.run_id == CreditLedgerEntry.run_id)
+            .where(
+                CreditLedgerEntry.account_id == account_id,
+                CreditLedgerEntry.event_type.in_(event_types),
+                CreditLedgerEntry.created_at >= since,
+                CreditLedgerEntry.created_at <= until,
+            )
+        )
+        if subscription_id is not None:
+            total_statement = total_statement.where(
+                CreditLedgerEntry.subscription_id == subscription_id
+            )
+        if site_id:
+            total_statement = total_statement.where(CreditLedgerEntry.site_id == site_id)
+        if feature:
+            total_statement = total_statement.where(feature_expression == feature)
+        totals = {
+            int(row["bucket_index"]): dict(row)
+            for row in self.session.execute(
+                total_statement.group_by(bucket_index).order_by(bucket_index.desc())
+            ).mappings()
+        }
+        for row in feature_rows:
+            bucket = totals.get(int(row["bucket_index"]))
+            if bucket is None:
+                continue
+            features = bucket.setdefault("features", [])
+            cast(list[dict[str, Any]], features).append(
+                {
+                    "feature_key": str(row["feature_key"] or "content_generation"),
+                    "net_credit_delta": float(row["net_credit_delta"] or 0.0),
+                    "event_count": int(row["event_count"] or 0),
+                }
+            )
+        return list(totals.values())
+
+    def get_paid_credit_grant_by_order(self, payment_order_id: str) -> PaidCreditGrant | None:
+        return self.session.scalar(
+            select(PaidCreditGrant).where(PaidCreditGrant.payment_order_id == payment_order_id)
+        )
+
+    def upsert_paid_credit_grant(
+        self,
+        *,
+        account_id: str,
+        payment_order_id: str,
+        original_credits: float,
+        expires_at: datetime,
+        metadata_json: dict[str, object] | None = None,
+    ) -> PaidCreditGrant:
+        existing = self.get_paid_credit_grant_by_order(payment_order_id)
+        if existing is not None:
+            return existing
+        normalized_credits = round(max(0.0, float(original_credits or 0.0)), 6)
+        grant = PaidCreditGrant(
+            grant_id=f"pcg_{uuid4().hex}",
+            account_id=account_id,
+            payment_order_id=payment_order_id,
+            original_credits=normalized_credits,
+            remaining_credits=normalized_credits,
+            refunded_credits=0.0,
+            expires_at=expires_at,
+            metadata_json=metadata_json or {},
+            created_at=datetime.now(UTC),
+        )
+        self.session.add(grant)
+        self.session.flush()
+        return grant
+
+    def list_available_paid_credit_grants(
+        self,
+        *,
+        account_id: str,
+        now: datetime,
+        for_update: bool = False,
+    ) -> list[PaidCreditGrant]:
+        statement = (
+            select(PaidCreditGrant)
+            .where(
+                PaidCreditGrant.account_id == account_id,
+                PaidCreditGrant.remaining_credits > 0,
+                PaidCreditGrant.expires_at > now,
+            )
+            .order_by(PaidCreditGrant.expires_at.asc(), PaidCreditGrant.created_at.asc())
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return list(self.session.scalars(statement))
+
+    def consume_paid_credit_grants(
+        self,
+        *,
+        account_id: str,
+        credits: float,
+        now: datetime,
+    ) -> float:
+        remaining = round(max(0.0, float(credits or 0.0)), 6)
+        consumed = 0.0
+        for grant in self.list_available_paid_credit_grants(
+            account_id=account_id,
+            now=now,
+            for_update=True,
+        ):
+            if remaining <= 0:
+                break
+            amount = min(remaining, max(0.0, float(grant.remaining_credits or 0.0)))
+            grant.remaining_credits = round(float(grant.remaining_credits) - amount, 6)
+            consumed += amount
+            remaining -= amount
+        self.session.flush()
+        return round(consumed, 6)
+
+    def refund_paid_credit_grant(
+        self,
+        *,
+        payment_order_id: str,
+        credits: float,
+    ) -> PaidCreditGrant | None:
+        grant = self.session.scalar(
+            select(PaidCreditGrant)
+            .where(PaidCreditGrant.payment_order_id == payment_order_id)
+            .with_for_update()
+        )
+        if grant is None:
+            return None
+        normalized = round(max(0.0, float(credits or 0.0)), 6)
+        already_refunded = max(0.0, float(grant.refunded_credits or 0.0))
+        target_refunded = min(float(grant.original_credits), already_refunded + normalized)
+        increment = max(0.0, target_refunded - already_refunded)
+        grant.refunded_credits = round(target_refunded, 6)
+        grant.remaining_credits = round(
+            max(0.0, float(grant.remaining_credits or 0.0) - increment),
+            6,
+        )
+        self.session.flush()
+        return grant
 
     def count_credit_ledger_entries(
         self,

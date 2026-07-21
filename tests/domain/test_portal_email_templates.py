@@ -72,7 +72,7 @@ def test_registration_code_email_is_distinct_from_login_template() -> None:
         expires_in_seconds=300,
         project_name="Npcink_AI_Cloud",
         site_name="Demo Site",
-        wordpress_url="https://example.test",
+        site_url="https://example.test",
         locale="zh-CN",
     )
 

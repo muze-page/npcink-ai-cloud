@@ -15,8 +15,10 @@ from app.core.models import (
     ACCOUNT_STATUS_ACTIVE,
     ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
     ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
+    CREDIT_LEDGER_EVENT_CONSUME,
     IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     IDENTITY_PROVIDER_BINDING_STATUS_REVOKED,
+    PLATFORM_KIND_WORDPRESS,
     PORTAL_LOGIN_CODE_STATUS_CONSUMED,
     PORTAL_LOGIN_CODE_STATUS_EXPIRED,
     PORTAL_LOGIN_CODE_STATUS_LOCKED,
@@ -31,6 +33,7 @@ from app.core.models import (
 from app.core.security import build_secret_hash, verify_secret_hash
 from app.domain.commercial.audit_context import ServiceAuditContext
 from app.domain.commercial.errors import (
+    CommercialNotFoundError,
     CommercialPermissionError,
     CommercialValidationError,
 )
@@ -121,11 +124,11 @@ def _as_utc_datetime(value: datetime) -> datetime:
 
 
 def _resolve_membership_allowed_actions(value: object) -> list[str]:
-    if isinstance(value, list):
-        actions = [str(action).strip() for action in value if str(action).strip()]
-        if actions:
-            return actions
-    return resolve_principal_allowed_actions()
+    return (
+        [str(action).strip() for action in value if str(action).strip()]
+        if isinstance(value, list)
+        else []
+    )
 
 
 def _portal_registration_code_metadata(value: object) -> dict[str, object]:
@@ -143,6 +146,452 @@ def _portal_email_change_code_metadata(value: object) -> dict[str, object]:
 
 
 class CommercialServicePortalMixin(CommercialServiceAuditMixin):
+    def get_portal_current_subscription(
+        self,
+        *,
+        account_id: str,
+    ) -> dict[str, object] | None:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            normalized_account_id = str(account_id or "").strip()
+            reconciled = cast(Any, self)._reconcile_account_subscription_state_in_session(
+                repository=repository,
+                account_id=normalized_account_id,
+                now=self.now_factory(),
+            )
+            if reconciled is not None:
+                session.commit()
+            subscription = repository.get_runtime_subscription(normalized_account_id)
+            if subscription is None:
+                return None
+            return cast(Any, self)._serialize_subscription(subscription)
+
+    def get_portal_account_credit_events(
+        self,
+        account_id: str,
+        *,
+        window: str = "period",
+        site_id: str | None = None,
+        feature: str | None = None,
+        range_start_at: datetime | None = None,
+        range_end_at: datetime | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        normalized_window = str(window or "period").strip().lower()
+        window_durations = {
+            "24h": timedelta(hours=24),
+            "7d": timedelta(days=7),
+            "30d": timedelta(days=30),
+        }
+        if normalized_window not in {"period", *window_durations}:
+            raise CommercialValidationError(
+                "service.portal_credit_events_window_invalid",
+                "credit event window must be one of 24h, 7d, 30d, or period",
+            )
+        normalized_feature = str(feature or "").strip().lower()
+        allowed_features = {
+            "",
+            "content_generation",
+            "topic_research",
+            "web_search",
+            "site_knowledge",
+            "image_assistance",
+            "audio_generation",
+        }
+        if normalized_feature not in allowed_features:
+            raise CommercialValidationError(
+                "service.portal_credit_events_feature_invalid",
+                "credit event feature is not supported",
+            )
+        normalized_site_id = str(site_id or "").strip()
+        normalized_limit = min(50, max(1, int(limit or 20)))
+        normalized_offset = max(0, int(offset or 0))
+        now = self.now_factory()
+        service = cast(Any, self)
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            if repository.get_account(account_id) is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+            subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
+            primary_subscription = service._select_primary_subscription(subscriptions)
+            period_start_at, period_end_at = service._resolve_period(primary_subscription, now)
+            query_start_at = (
+                now - window_durations[normalized_window]
+                if normalized_window in window_durations
+                else period_start_at
+            )
+            query_end_at = now if normalized_window in window_durations else min(period_end_at, now)
+            if (range_start_at is None) != (range_end_at is None):
+                raise CommercialValidationError(
+                    "service.portal_credit_events_range_invalid",
+                    "credit event start_at and end_at must be provided together",
+                )
+            if range_start_at is not None and range_end_at is not None:
+                if range_start_at >= range_end_at:
+                    raise CommercialValidationError(
+                        "service.portal_credit_events_range_invalid",
+                        "credit event start_at must be earlier than end_at",
+                    )
+                query_start_at = max(query_start_at, range_start_at)
+                query_end_at = min(query_end_at, range_end_at)
+            group_rows, total, consumed_credits = repository.list_portal_credit_event_groups(
+                account_id=account_id,
+                subscription_id=(
+                    primary_subscription.subscription_id
+                    if normalized_window == "period" and primary_subscription
+                    else None
+                ),
+                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
+                since=query_start_at,
+                until=query_end_at,
+                site_id=normalized_site_id,
+                feature=normalized_feature,
+                limit=normalized_limit,
+                offset=normalized_offset,
+            )
+            run_ids = [str(row.get("run_id") or "") for row in group_rows if row.get("run_id")]
+            ledger_entry_ids = [
+                str(row.get("group_id") or "") for row in group_rows if not row.get("run_id")
+            ]
+            entries = repository.list_credit_ledger_entries_for_event_groups(
+                account_id=account_id,
+                run_ids=run_ids,
+                ledger_entry_ids=ledger_entry_ids,
+            )
+            components_by_group: dict[str, defaultdict[str, float]] = defaultdict(
+                lambda: defaultdict(float)
+            )
+            for entry in entries:
+                if str(getattr(entry, "event_type", "") or "") != CREDIT_LEDGER_EVENT_CONSUME:
+                    continue
+                group_id = str(
+                    getattr(entry, "run_id", "") or getattr(entry, "ledger_entry_id", "")
+                )
+                source_type = str(getattr(entry, "source_type", "") or "").lower()
+                component_key = (
+                    "request"
+                    if source_type == "runs"
+                    else "model_processing"
+                    if source_type in {"tokens", "tokens_total", "provider_calls_other"}
+                    else "web_search"
+                    if source_type == "web_search" or source_type.startswith("zhihu")
+                    else "site_knowledge"
+                    if source_type in {"vector_documents", "vector_chunks"}
+                    else "image"
+                    if "image" in source_type
+                    else "audio"
+                    if "audio" in source_type
+                    else "other"
+                )
+                components_by_group[group_id][component_key] += abs(
+                    float(getattr(entry, "credit_delta", 0.0) or 0.0)
+                )
+
+        feature_copy = {
+            "content_generation": (
+                "Content writing",
+                "The site used AI to draft, revise, or organize content.",
+            ),
+            "topic_research": (
+                "Topic research",
+                "The site used AI to look up public topics or hot-list information.",
+            ),
+            "web_search": ("Web search", "The site used AI to search public web information."),
+            "site_knowledge": (
+                "Site knowledge",
+                "The site used AI to search or update its site knowledge.",
+            ),
+            "image_assistance": (
+                "Image assistance",
+                "The site used AI to recommend, generate, or process images.",
+            ),
+            "audio_generation": (
+                "Audio generation",
+                "The site used AI to generate or process audio.",
+            ),
+        }
+        events: list[dict[str, object]] = []
+        for row in group_rows:
+            group_id = str(row.get("group_id") or "")
+            run_id = str(row.get("run_id") or "")
+            feature_key = str(row.get("feature_key") or "content_generation")
+            feature_label, feature_detail = feature_copy[feature_key]
+            net_delta = round(float(row.get("net_credit_delta") or 0.0), 6)
+            components = components_by_group[group_id]
+            events.append(
+                {
+                    "event_id": f"run:{group_id}" if run_id else f"entry:{group_id}",
+                    "support_reference": group_id,
+                    "site_id": str(row.get("site_id") or ""),
+                    "feature_key": feature_key,
+                    "feature_label": feature_label,
+                    "feature_detail": feature_detail,
+                    "created_at": self._serialize_datetime(row.get("created_at")),
+                    "net_credit_delta": net_delta,
+                    "consumed_credits": round(max(0.0, -net_delta), 6),
+                    "direction": "consumed" if net_delta < 0 else "added",
+                    "component_count": int(row.get("component_count") or 0),
+                    "components": [
+                        {"key": key, "credits": round(value, 6)}
+                        for key, value in sorted(components.items())
+                    ],
+                }
+            )
+        return {
+            "contract_version": "portal-credit-events-v1",
+            "account_id": account_id,
+            "generated_at": self._serialize_datetime(now),
+            "period_start_at": self._serialize_datetime(period_start_at),
+            "period_end_at": self._serialize_datetime(period_end_at),
+            "filters": {
+                "window": normalized_window,
+                "site_id": normalized_site_id,
+                "feature": normalized_feature,
+                "start_at": self._serialize_datetime(query_start_at),
+                "end_at": self._serialize_datetime(query_end_at),
+            },
+            "summary": {
+                "event_count": total,
+                "consumed_credits": consumed_credits,
+            },
+            "pagination": {
+                "limit": normalized_limit,
+                "offset": normalized_offset,
+                "total": total,
+                "has_more": normalized_offset + len(events) < total,
+            },
+            "items": events,
+        }
+
+    def get_portal_account_credit_event_buckets(
+        self,
+        account_id: str,
+        *,
+        bucket: str = "30m",
+        window: str = "7d",
+        site_id: str | None = None,
+        feature: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        bucket_seconds_by_key = {"10m": 600, "30m": 1800, "60m": 3600}
+        normalized_bucket = str(bucket or "30m").strip().lower()
+        if normalized_bucket not in bucket_seconds_by_key:
+            raise CommercialValidationError(
+                "service.portal_credit_event_bucket_invalid",
+                "credit event bucket must be one of 10m, 30m, or 60m",
+            )
+        normalized_window = str(window or "7d").strip().lower()
+        window_durations = {
+            "24h": timedelta(hours=24),
+            "7d": timedelta(days=7),
+            "30d": timedelta(days=30),
+        }
+        if normalized_window not in {"period", *window_durations}:
+            raise CommercialValidationError(
+                "service.portal_credit_event_bucket_window_invalid",
+                "credit event bucket window must be one of 24h, 7d, 30d, or period",
+            )
+        normalized_feature = str(feature or "").strip().lower()
+        allowed_features = {
+            "",
+            "content_generation",
+            "topic_research",
+            "web_search",
+            "site_knowledge",
+            "image_assistance",
+            "audio_generation",
+        }
+        if normalized_feature not in allowed_features:
+            raise CommercialValidationError(
+                "service.portal_credit_event_bucket_feature_invalid",
+                "credit event bucket feature is not supported",
+            )
+        normalized_site_id = str(site_id or "").strip()
+        normalized_limit = min(50, max(1, int(limit or 20)))
+        normalized_offset = max(0, int(offset or 0))
+        bucket_seconds = bucket_seconds_by_key[normalized_bucket]
+        now = self.now_factory()
+        service = cast(Any, self)
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            if repository.get_account(account_id) is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+            subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
+            primary_subscription = service._select_primary_subscription(subscriptions)
+            period_start_at, period_end_at = service._resolve_period(primary_subscription, now)
+            query_start_at = (
+                now - window_durations[normalized_window]
+                if normalized_window in window_durations
+                else period_start_at
+            )
+            query_end_at = now if normalized_window in window_durations else min(period_end_at, now)
+            bucket_rows = repository.summarize_portal_credit_event_buckets(
+                account_id=account_id,
+                subscription_id=(
+                    primary_subscription.subscription_id
+                    if normalized_window == "period" and primary_subscription
+                    else None
+                ),
+                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
+                since=query_start_at,
+                until=query_end_at,
+                bucket_seconds=bucket_seconds,
+                site_id=normalized_site_id,
+                feature=normalized_feature,
+            )
+        items: list[dict[str, object]] = []
+        for row in bucket_rows:
+            bucket_index = int(row.get("bucket_index") or 0)
+            raw_start_at = datetime.fromtimestamp(bucket_index * bucket_seconds, UTC)
+            raw_end_at = raw_start_at + timedelta(seconds=bucket_seconds)
+            bucket_start_at = max(raw_start_at, query_start_at)
+            bucket_end_at = min(raw_end_at, query_end_at)
+            if bucket_start_at >= bucket_end_at:
+                continue
+            features = cast(list[dict[str, Any]], row.get("features") or [])
+            feature_totals = [
+                {
+                    "feature_key": str(item.get("feature_key") or "content_generation"),
+                    "consumed_credits": round(
+                        max(0.0, -float(item.get("net_credit_delta") or 0.0)),
+                        6,
+                    ),
+                    "event_count": int(item.get("event_count") or 0),
+                }
+                for item in features
+            ]
+            feature_totals.sort(
+                key=lambda item: service._coerce_float(item.get("consumed_credits")),
+                reverse=True,
+            )
+            net_delta = round(float(row.get("net_credit_delta") or 0.0), 6)
+            items.append(
+                {
+                    "bucket_id": f"{normalized_bucket}:{bucket_index}",
+                    "start_at": self._serialize_datetime(bucket_start_at),
+                    "end_at": self._serialize_datetime(bucket_end_at),
+                    "consumed_credits": round(max(0.0, -net_delta), 6),
+                    "event_count": int(row.get("event_count") or 0),
+                    "site_count": int(row.get("site_count") or 0),
+                    "top_feature_key": (
+                        str(feature_totals[0].get("feature_key") or "") if feature_totals else ""
+                    ),
+                    "feature_totals": feature_totals,
+                }
+            )
+        total = len(items)
+        consumed_credits = round(
+            sum(service._coerce_float(item.get("consumed_credits")) for item in items),
+            6,
+        )
+        paged_items = items[normalized_offset : normalized_offset + normalized_limit]
+        return {
+            "contract_version": "portal-credit-event-buckets-v1",
+            "account_id": account_id,
+            "generated_at": self._serialize_datetime(now),
+            "period_start_at": self._serialize_datetime(period_start_at),
+            "period_end_at": self._serialize_datetime(period_end_at),
+            "bucket": normalized_bucket,
+            "bucket_seconds": bucket_seconds,
+            "timezone": "UTC",
+            "filters": {
+                "window": normalized_window,
+                "site_id": normalized_site_id,
+                "feature": normalized_feature,
+            },
+            "summary": {
+                "bucket_count": total,
+                "consumed_credits": consumed_credits,
+            },
+            "pagination": {
+                "limit": normalized_limit,
+                "offset": normalized_offset,
+                "total": total,
+                "has_more": normalized_offset + len(paged_items) < total,
+            },
+            "items": paged_items,
+        }
+
+    def get_portal_account_credit_trend(
+        self,
+        account_id: str,
+        *,
+        window: str = "24h",
+        site_id: str | None = None,
+    ) -> dict[str, object]:
+        normalized_window = str(window or "24h").strip().lower()
+        window_config = {
+            "1h": (timedelta(hours=1), timedelta(minutes=5)),
+            "24h": (timedelta(hours=24), timedelta(hours=1)),
+            "7d": (timedelta(days=7), timedelta(days=1)),
+            "30d": (timedelta(days=30), timedelta(days=1)),
+        }.get(normalized_window)
+        if window_config is None:
+            raise CommercialValidationError(
+                "service.portal_credit_trend_window_invalid",
+                "credit trend window must be one of 1h, 24h, 7d, or 30d",
+            )
+        duration, bucket_size = window_config
+        end_at = self.now_factory()
+        start_at = end_at - duration
+        bucket_count = max(1, int(duration / bucket_size))
+        buckets = [
+            (
+                start_at + bucket_size * index,
+                start_at + bucket_size * (index + 1),
+            )
+            for index in range(bucket_count)
+        ]
+        normalized_site_id = str(site_id or "").strip()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            if repository.get_account(account_id) is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+            summaries = repository.summarize_credit_consumption_buckets(
+                account_id=account_id,
+                buckets=buckets,
+                site_ids=[normalized_site_id] if normalized_site_id else None,
+            )
+        points = [
+            {
+                "start_at": self._serialize_datetime(bucket_start),
+                "end_at": self._serialize_datetime(bucket_end),
+                "credits": float(summaries.get(index, {}).get("credits", 0.0)),
+                "entry_count": int(summaries.get(index, {}).get("entry_count", 0)),
+            }
+            for index, (bucket_start, bucket_end) in enumerate(buckets)
+        ]
+        total_credits = 0.0
+        entry_count = 0
+        for summary in summaries.values():
+            total_credits += float(summary.get("credits", 0.0))
+            entry_count += int(summary.get("entry_count", 0))
+        return {
+            "contract_version": "portal-credit-trend-v1",
+            "account_id": account_id,
+            "generated_at": self._serialize_datetime(end_at),
+            "site_id": normalized_site_id,
+            "window": normalized_window,
+            "bucket_seconds": int(bucket_size.total_seconds()),
+            "start_at": self._serialize_datetime(start_at),
+            "end_at": self._serialize_datetime(end_at),
+            "total_credits": round(total_credits, 6),
+            "entry_count": entry_count,
+            "points": points,
+        }
+
     def issue_portal_oauth_state(
         self,
         *,
@@ -742,7 +1191,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
         self,
         *,
         email: str,
-        wordpress_url: str = "",
+        site_url: str = "",
         site_name: str = "",
         use_case: str = "",
         ttl_seconds: int,
@@ -750,11 +1199,11 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
         normalized_email = _normalize_principal_email(email)
         principal_id = _new_principal_id()
         account_id = f"acct_{principal_id.removeprefix('prn_')}"
-        canonical_wordpress_url = ""
+        canonical_site_url = ""
         site_id = ""
         resolved_site_name = ""
-        if str(wordpress_url or "").strip():
-            canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
+        if str(site_url or "").strip():
+            canonical_site_url, site_source = _normalize_portal_site_url(site_url)
             site_slug = _slugify_portal_site_segment(site_source)
             if not site_slug:
                 raise CommercialPermissionError(
@@ -764,7 +1213,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             site_id = f"site_{site_slug}"
             resolved_site_name = (
                 str(site_name or "").strip()
-                or urlsplit(canonical_wordpress_url).hostname
+                or urlsplit(canonical_site_url).hostname
                 or site_id
             )
         normalized_use_case = str(use_case or "").strip()[:500]
@@ -804,7 +1253,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                     "account_id": account_id,
                     "site_id": site_id,
                     "site_name": resolved_site_name,
-                    "wordpress_url": canonical_wordpress_url,
+                    "site_url": canonical_site_url,
                     "use_case": normalized_use_case,
                 },
             )
@@ -815,7 +1264,8 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             "account_id": account_id,
             "site_id": site_id,
             "site_name": resolved_site_name,
-            "wordpress_url": canonical_wordpress_url,
+            "site_url": canonical_site_url,
+            "platform_kind": PLATFORM_KIND_WORDPRESS,
             "code": code,
             "expires_at": self._serialize_datetime(expires_at),
             "expires_in_seconds": max(60, int(ttl_seconds or 0)),
@@ -894,13 +1344,13 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
 
             account_id = str(registration_metadata.get("account_id") or "").strip()
             site_id = str(registration_metadata.get("site_id") or "").strip()
-            wordpress_url = str(registration_metadata.get("wordpress_url") or "").strip()
+            site_url = str(registration_metadata.get("site_url") or "").strip()
             site_name = str(registration_metadata.get("site_name") or "").strip() or site_id
             if not principal_id:
                 principal_id = _new_principal_id()
             if not account_id:
                 account_id = f"acct_{principal_id.removeprefix('prn_')}"
-            if (site_id and not wordpress_url) or (wordpress_url and not site_id):
+            if (site_id and not site_url) or (site_url and not site_id):
                 raise CommercialPermissionError(
                     "service.portal_registration_payload_invalid",
                     "portal registration site request is incomplete",
@@ -941,15 +1391,16 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 last_login_at=now,
             )
             site = None
-            if site_id and wordpress_url:
+            if site_id and site_url:
                 site = repository.upsert_site(
                     site_id=site_id,
                     account_id=account.account_id,
                     name=site_name,
                     status=SITE_STATUS_ACTIVE,
+                    site_url=site_url,
+                    platform_kind=PLATFORM_KIND_WORDPRESS,
                     metadata_json={
                         "source": "portal_self_registration",
-                        "wordpress_url": wordpress_url,
                         "created_via": "portal_register",
                         "use_case": str(registration_metadata.get("use_case") or ""),
                     },

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ from app.domain.site_knowledge.backends import (
     build_vector_backend,
 )
 from app.domain.site_knowledge.contracts import (
+    ALLOWED_RESULT_GRANULARITIES,
     ALLOWED_SEARCH_INTENTS,
     ALLOWED_SYNC_MODES,
     PUBLIC_COMMENT_STATUSES,
@@ -44,6 +46,11 @@ from app.domain.site_knowledge.contracts import (
 from app.domain.site_knowledge.embedding import (
     cosine_similarity,
     embed_text_deterministic,
+)
+from app.domain.site_knowledge.maintenance import (
+    project_site_maintenance,
+    record_maintenance_batch,
+    validate_maintenance_batch,
 )
 from app.domain.site_knowledge.repository import SiteKnowledgeRepository
 from app.domain.site_knowledge.rerankers import (
@@ -70,7 +77,7 @@ EmbeddingUsageCallback = Callable[
 ]
 
 STYLE_SCRIPT_BLOCK_PATTERN = re.compile(
-    r"<(?:style|script)\b[^>]*>.*?</(?:style|script)>",
+    r"<(?:style|script)\b[^>]*>.*?</(?:style|script)\b[^>]*>",
     flags=re.IGNORECASE | re.DOTALL,
 )
 HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
@@ -101,6 +108,10 @@ class SiteKnowledgeService:
             self.settings.site_knowledge_embedding_provider or "deterministic"
         )
         self.embedding_model = str(self.settings.site_knowledge_embedding_model or "BAAI/bge-m3")
+        self.embedding_space_id = _embedding_space_id(
+            provider_id=self.embedding_provider_id,
+            model_id=self.embedding_model,
+        )
         self.embedding_dimensions = int(self.settings.site_knowledge_embedding_dimensions)
 
     def execute(
@@ -141,6 +152,12 @@ class SiteKnowledgeService:
                 "site_knowledge.invalid_sync_mode",
                 "site knowledge sync_mode must be refresh, rebuild, or delete",
             )
+        maintenance = validate_maintenance_batch(
+            session=self.repository.session,
+            site_id=site_id,
+            input_payload=input_payload,
+            sync_mode=sync_mode,
+        )
         post_ids = _coerce_post_ids(input_payload.get("post_ids"))
         documents = input_payload.get("documents")
         documents = documents if isinstance(documents, list) else []
@@ -409,6 +426,10 @@ class SiteKnowledgeService:
                     "max_chunks": MAX_CHUNKS_PER_DOCUMENT,
                     "effective_max_chunks": allowed_chunks,
                     "quota_limited": bool(quota_limited),
+                    "excerpt": str(normalized.get("excerpt") or "")[:1000],
+                    "taxonomies": normalized.get("taxonomies")
+                    if isinstance(normalized.get("taxonomies"), dict)
+                    else {"category": [], "post_tag": []},
                 },
                 chunks=chunks,
             )
@@ -456,6 +477,42 @@ class SiteKnowledgeService:
             deleted_entries=deleted_entries,
             percent=100,
         )
+        if maintenance is not None:
+            maintenance_status = "delivering"
+            if bool(maintenance["is_final"]):
+                try:
+                    from app.domain.site_knowledge.vector_profile import (
+                        SiteKnowledgeVectorProfileAdminError,
+                        SiteKnowledgeVectorProfileAdminService,
+                    )
+
+                    SiteKnowledgeVectorProfileAdminService(
+                        self.settings.database_url,
+                        self.settings,
+                    ).publish_site_index(
+                        site_id,
+                        source_session=self.repository.session,
+                    )
+                    maintenance_status = "ready"
+                except SiteKnowledgeVectorProfileAdminError as error:
+                    record_maintenance_batch(
+                        self.repository.session,
+                        site_id=site_id,
+                        maintenance=maintenance,
+                        status="blocked",
+                        last_error_code=error.error_code,
+                    )
+                    raise SiteKnowledgeContractViolation(
+                        "site_knowledge.maintenance_publish_failed",
+                        "site knowledge maintenance could not publish the rebuilt index",
+                    ) from error
+            record_maintenance_batch(
+                self.repository.session,
+                site_id=site_id,
+                maintenance=maintenance,
+                status=maintenance_status,
+            )
+
         self._emit_sync_progress(**progress)
 
         return self._sync_response(
@@ -485,6 +542,12 @@ class SiteKnowledgeService:
         indexed_chunks = self.repository.count_chunks(site_id)
         last_sync_at = self.repository.last_sync_at(site_id)
         active_run = self.repository.latest_active_sync(site_id)
+        indexed_embedding_models = self.repository.list_embedding_models(site_id)
+        maintenance = project_site_maintenance(
+            self.repository.session,
+            site_id=site_id,
+            indexed_embedding_models=indexed_embedding_models,
+        )
 
         status = "ready" if indexed_chunks > 0 else "empty"
         if active_run is not None:
@@ -528,6 +591,7 @@ class SiteKnowledgeService:
             "status": status,
             "coverage": coverage,
             "progress": progress,
+            "maintenance": maintenance,
             "active_run": _serialize_active_run(active_run) if active_run is not None else {},
             "ownership": _site_knowledge_ownership_contract(),
             "truth_boundaries": _site_knowledge_truth_boundaries(),
@@ -556,6 +620,9 @@ class SiteKnowledgeService:
             default=8,
             maximum=20,
         )
+        result_granularity = _normalize_result_granularity(
+            input_payload.get("result_granularity")
+        )
         evidence_policy = _resolve_evidence_policy(input_payload.get("evidence_policy"))
         filters = input_payload.get("filters")
         filters = filters if isinstance(filters, dict) else {}
@@ -569,6 +636,49 @@ class SiteKnowledgeService:
         else:
             source_types = [source_type for source_type in source_types if source_type != "comment"]
         current_post_id = _coerce_int(input_payload.get("current_post_id"), default=0)
+
+        indexed_embedding_models = self.repository.list_embedding_models(site_id)
+        retrieval_readiness = _embedding_space_readiness(
+            indexed_embedding_models=indexed_embedding_models,
+            query_embedding_model=self.embedding_space_id,
+        )
+        if retrieval_readiness["status"] == "embedding_space_mismatch":
+            workflow_support = _workflow_support_for_intent(intent)
+            evidence_gate = _evidence_gate([], evidence_policy)
+            return {
+                "artifact_type": "site_knowledge_results",
+                "composition_role": "site_knowledge_context",
+                "status": "not_ready",
+                "intent": intent,
+                "workflow_support": workflow_support,
+                "agent_handoff": _agent_handoff_for_search(
+                    intent=intent,
+                    workflow_support=workflow_support,
+                    evidence_gate=evidence_gate,
+                    results=[],
+                ),
+                "evidence_gate": evidence_gate,
+                "rerank": {
+                    "status": "skipped",
+                    "reason": "embedding_space_mismatch",
+                    "candidate_count": 0,
+                },
+                "retrieval_readiness": retrieval_readiness,
+                "result_granularity": result_granularity,
+                "result_grouping": {
+                    "strategy": (
+                        "best_ranked_chunk_per_document"
+                        if result_granularity == "document"
+                        else "ranked_chunks"
+                    ),
+                    "candidate_count": 0,
+                    "returned_count": 0,
+                    "duplicate_chunks_collapsed": 0,
+                },
+                "results": [],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            }
 
         query_embedding = self._embed_text(
             query,
@@ -588,11 +698,12 @@ class SiteKnowledgeService:
             query=query,
         )
         if results is not None:
-            results, rerank = self._prepare_search_results(
+            results, rerank, result_grouping = self._prepare_search_results(
                 query=query,
                 results=results,
                 evidence_policy=evidence_policy,
                 max_results=max_results,
+                result_granularity=result_granularity,
             )
             workflow_support = _workflow_support_for_intent(intent)
             evidence_gate = _evidence_gate(results, evidence_policy)
@@ -610,6 +721,9 @@ class SiteKnowledgeService:
                 ),
                 "evidence_gate": evidence_gate,
                 "rerank": rerank,
+                "retrieval_readiness": retrieval_readiness,
+                "result_granularity": result_granularity,
+                "result_grouping": result_grouping,
                 "results": results,
                 "write_posture": "suggestion_only",
                 "direct_wordpress_write": False,
@@ -636,6 +750,7 @@ class SiteKnowledgeService:
                 source_type=chunk.source_type,
                 source_id=chunk.source_id,
                 parent_post_id=chunk.parent_post_id or 0,
+                chunk_index=chunk.chunk_index,
                 title=chunk.title,
                 url=chunk.url,
                 chunk_text=chunk.chunk_text,
@@ -645,11 +760,12 @@ class SiteKnowledgeService:
             )
             for score, chunk in scored
         ]
-        results, rerank = self._prepare_search_results(
+        results, rerank, result_grouping = self._prepare_search_results(
             query=query,
             results=results,
             evidence_policy=evidence_policy,
             max_results=max_results,
+            result_granularity=result_granularity,
         )
         workflow_support = _workflow_support_for_intent(intent)
         evidence_gate = _evidence_gate(results, evidence_policy)
@@ -668,6 +784,9 @@ class SiteKnowledgeService:
             ),
             "evidence_gate": evidence_gate,
             "rerank": rerank,
+            "retrieval_readiness": retrieval_readiness,
+            "result_granularity": result_granularity,
+            "result_grouping": result_grouping,
             "results": results,
             "write_posture": "suggestion_only",
             "direct_wordpress_write": False,
@@ -717,7 +836,7 @@ class SiteKnowledgeService:
                             run_id=run_id,
                             ability_name=ability_name,
                         ),
-                        "embedding_model": self.embedding_model,
+                        "embedding_model": self.embedding_space_id,
                         "metadata": {
                             "source": "wordpress_public_excerpt",
                             "content_hash": str(document.get("content_hash") or ""),
@@ -843,11 +962,26 @@ class SiteKnowledgeService:
         results: list[dict[str, object]],
         evidence_policy: dict[str, object],
         max_results: int,
-    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        result_granularity: str,
+    ) -> tuple[list[dict[str, object]], dict[str, object], dict[str, object]]:
         filtered = _apply_evidence_policy(results, evidence_policy)
         ranked = _rank_search_results_for_query(query, filtered)
         reranked, rerank = self._maybe_rerank_results(query=query, results=ranked)
-        return reranked[:max_results], rerank
+        candidate_count = len(reranked)
+        collapsed_count = 0
+        if result_granularity == "document":
+            reranked, collapsed_count = _collapse_search_results_by_document(reranked)
+        returned = reranked[:max_results]
+        return returned, rerank, {
+            "strategy": (
+                "best_ranked_chunk_per_document"
+                if result_granularity == "document"
+                else "ranked_chunks"
+            ),
+            "candidate_count": candidate_count,
+            "returned_count": len(returned),
+            "duplicate_chunks_collapsed": collapsed_count,
+        }
 
     def _maybe_rerank_results(
         self,
@@ -1170,9 +1304,13 @@ def _normalize_public_document(document: dict[str, Any]) -> dict[str, object] | 
         remove_markup_noise=True,
     )
     indexed_content_chars = len(content_excerpt)
+    taxonomies = _normalize_public_taxonomies(document.get("taxonomies"))
     content_hash = str(document.get("content_hash") or "").strip()
     if not content_hash:
-        content_hash = hashlib.sha256(f"{title}|{excerpt}|{content_excerpt}".encode()).hexdigest()
+        taxonomy_hash_input = json.dumps(taxonomies, ensure_ascii=False, sort_keys=True)
+        content_hash = hashlib.sha256(
+            f"{title}|{excerpt}|{content_excerpt}|{taxonomy_hash_input}".encode()
+        ).hexdigest()
 
     return {
         "post_id": post_id,
@@ -1189,8 +1327,33 @@ def _normalize_public_document(document: dict[str, Any]) -> dict[str, object] | 
         "source_content_chars": source_content_chars,
         "indexed_content_chars": indexed_content_chars,
         "content_truncated": source_content_chars > indexed_content_chars,
+        "taxonomies": taxonomies,
         "content_hash": content_hash[:128],
     }
+
+
+def _normalize_public_taxonomies(value: Any) -> dict[str, list[str]]:
+    raw_taxonomies = value if isinstance(value, dict) else {}
+    normalized: dict[str, list[str]] = {"category": [], "post_tag": []}
+    for taxonomy in normalized:
+        raw_terms = raw_taxonomies.get(taxonomy)
+        if not isinstance(raw_terms, list):
+            continue
+        seen: set[str] = set()
+        for raw_term in raw_terms:
+            term = _normalize_site_knowledge_text(
+                raw_term,
+                max_chars=80,
+                remove_markup_noise=True,
+            )
+            key = term.casefold()
+            if not term or key in seen:
+                continue
+            normalized[taxonomy].append(term)
+            seen.add(key)
+            if len(normalized[taxonomy]) >= 20:
+                break
+    return normalized
 
 
 def _normalize_public_comment(document: dict[str, Any]) -> dict[str, object] | None:
@@ -1413,6 +1576,85 @@ def _lexical_bonus(query: str, chunk_text: str, title: str) -> float:
     return min(0.2, matches / max(1, len(query_terms)) * 0.2)
 
 
+def _normalize_result_granularity(value: Any) -> str:
+    normalized = str(value or "chunk").strip()
+    return normalized if normalized in ALLOWED_RESULT_GRANULARITIES else "chunk"
+
+
+def _embedding_space_readiness(
+    *,
+    indexed_embedding_models: list[str],
+    query_embedding_model: str,
+) -> dict[str, object]:
+    indexed_models = sorted(
+        {str(model).strip() for model in indexed_embedding_models if str(model).strip()}
+    )
+    query_model = str(query_embedding_model or "").strip()
+    if any(model != query_model for model in indexed_models):
+        return {
+            "status": "embedding_space_mismatch",
+            "query_embedding_model": query_model,
+            "indexed_embedding_models": indexed_models,
+            "action": "rebuild_index_with_current_embedding_model",
+        }
+    return {
+        "status": "ready" if indexed_models else "empty_index",
+        "query_embedding_model": query_model,
+        "indexed_embedding_models": indexed_models,
+        "action": "none" if indexed_models else "index_public_content",
+    }
+
+
+def _embedding_space_id(*, provider_id: str, model_id: str) -> str:
+    provider = str(provider_id or "").strip().lower()
+    model = str(model_id or "").strip()
+    return f"{provider}:{model}"[:191]
+
+
+def _collapse_search_results_by_document(
+    results: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], int]:
+    documents: list[dict[str, object]] = []
+    document_indexes: dict[str, int] = {}
+    matched_chunk_keys: dict[str, set[tuple[str, int, int]]] = {}
+
+    for result in results:
+        source_type = str(result.get("source_type") or result.get("post_type") or "post")
+        post_id = _coerce_int(result.get("post_id"), default=0)
+        source_id = _coerce_int(result.get("source_id"), default=post_id)
+        document_id = source_id if source_type == "comment" else post_id
+        document_key = f"{source_type}:{document_id}"
+        chunk_index = _coerce_int(result.get("chunk_index"), default=0)
+        chunk_ref = {
+            "source_type": source_type,
+            "source_id": source_id,
+            "chunk_index": chunk_index,
+            "score": _coerce_float(result.get("score"), default=0.0),
+        }
+        chunk_key = (source_type, source_id, chunk_index)
+
+        if document_key not in document_indexes:
+            document = dict(result)
+            document["document_key"] = document_key
+            document["matched_chunks"] = [chunk_ref]
+            document["matched_chunk_count"] = 1
+            document_indexes[document_key] = len(documents)
+            matched_chunk_keys[document_key] = {chunk_key}
+            documents.append(document)
+            continue
+
+        if chunk_key in matched_chunk_keys[document_key]:
+            continue
+        matched_chunk_keys[document_key].add(chunk_key)
+        document = documents[document_indexes[document_key]]
+        matched_chunks = document.get("matched_chunks")
+        if isinstance(matched_chunks, list):
+            matched_chunks.append(chunk_ref)
+            document["matched_chunk_count"] = len(matched_chunks)
+
+    return documents, max(0, len(results) - len(documents))
+
+
 def _query_match_info(query: str, chunk_text: str) -> dict[str, object]:
     normalized_query = " ".join(str(query or "").split())
     text = str(chunk_text or "")
@@ -1548,6 +1790,7 @@ def _serialize_vector_hit(
         source_type=hit.source_type,
         source_id=hit.source_id,
         parent_post_id=hit.parent_post_id,
+        chunk_index=hit.chunk_index,
         title=hit.title,
         url=hit.url,
         chunk_text=hit.chunk_text,
@@ -1563,6 +1806,7 @@ def _serialize_search_result(
     source_type: str,
     source_id: int,
     parent_post_id: int,
+    chunk_index: int,
     title: str,
     url: str,
     chunk_text: str,
@@ -1576,6 +1820,7 @@ def _serialize_search_result(
         "source_type": source_type,
         "source_id": source_id,
         "parent_post_id": parent_post_id,
+        "chunk_index": chunk_index,
         "title": title,
         "url": url,
         "chunk": chunk_text[:1200],

@@ -32,10 +32,16 @@ type PortalEmptyStateProps = {
 
 export function PortalLoadingState({ message }: PortalLoadingStateProps) {
   return (
-    <div className="flex min-h-[60vh] items-center justify-center">
-      <div className="text-center">
-        <div className="mb-4 text-4xl">⏳</div>
-        <p className="text-gray-600 dark:text-gray-400">{message}</p>
+    <div className="min-h-[60vh] py-6" role="status" aria-live="polite" aria-busy="true">
+      <span className="sr-only">{message}</span>
+      <div className="space-y-5 motion-safe:animate-pulse" aria-hidden="true">
+        <div className="h-8 w-44 rounded-xl bg-slate-200/80 dark:bg-slate-800" />
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="h-28 rounded-2xl bg-slate-200/70 dark:bg-slate-800/80" />
+          <div className="h-28 rounded-2xl bg-slate-200/70 dark:bg-slate-800/80" />
+          <div className="h-28 rounded-2xl bg-slate-200/70 dark:bg-slate-800/80" />
+        </div>
+        <div className="h-64 rounded-2xl bg-slate-200/60 dark:bg-slate-800/70" />
       </div>
     </div>
   );

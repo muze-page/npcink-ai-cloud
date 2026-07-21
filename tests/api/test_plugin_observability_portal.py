@@ -132,7 +132,15 @@ def test_portal_plugin_observability_returns_current_site_summary(tmp_path: Path
     data = envelope["data"]
     assert data["contract_version"] == "magick-plugin-observability-summary-v1"
     assert data["site_id"] == "site-portal-001"
-    assert data["account_id"] == "acct_site-portal-001"
+    assert {
+        "account_id",
+        "principal_id",
+        "identity_type",
+        "role",
+        "allowed_actions",
+        "site_admin_ref",
+        "member_ref",
+    }.isdisjoint(data)
     assert data["totals"]["events_total"] == 2
     assert data["totals"]["error_total"] == 1
     assert data["health"]["status"] == "error"

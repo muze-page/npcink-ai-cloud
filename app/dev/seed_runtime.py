@@ -75,7 +75,6 @@ def main() -> None:
 
     result: dict[str, object] = {
         "environment": settings.environment,
-        "database_url": settings.database_url,
     }
 
     if not args.skip_catalog_refresh:
@@ -83,7 +82,7 @@ def main() -> None:
     if not args.skip_health_scan:
         result["health"] = catalog_service.scan_provider_health()
 
-    result["auth"] = seed_site_auth(
+    auth_result = seed_site_auth(
         settings=settings,
         site_id=args.site_id,
         key_id=args.key_id,
@@ -91,6 +90,8 @@ def main() -> None:
         site_name=args.site_name,
         scopes=scopes,
     )
+    auth_result.pop("secret_hash", None)
+    result["auth"] = auth_result
 
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
 

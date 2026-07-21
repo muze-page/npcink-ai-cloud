@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.adapters.notifications.base import PortalEmailDeliveryError
 from app.adapters.notifications.smtp import build_portal_email_sender
@@ -16,7 +16,6 @@ from app.api.auth import authorize_internal_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.db import get_session
 from app.core.logging import get_logger
-from app.core.models import ProviderConnection
 from app.core.security import extract_trace_id
 from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.agent_feedback.service import AgentFeedbackService
@@ -41,17 +40,11 @@ from app.domain.observability.service import ObservabilityService
 from app.domain.provider_connections.model_allowlist import (
     build_provider_model_allowlist,
 )
-from app.domain.provider_connections.runtime_settings import (
-    apply_provider_connection_runtime_settings,
-)
 from app.domain.provider_connections.service import (
     ProviderConnectionAdminError,
     ProviderConnectionAdminService,
 )
-from app.domain.provider_resources import (
-    build_admin_ability_model_runtime_projection,
-    build_admin_ai_resource_projection,
-)
+from app.domain.provider_resources import build_admin_ai_resource_projection
 from app.domain.runtime.models import (
     RUNTIME_BACKLOG_SCOPE_KIND_PATTERN,
     RUNTIME_DIAGNOSTIC_ISSUE_KIND_PATTERN,
@@ -63,6 +56,14 @@ from app.domain.service_settings import (
     resolve_portal_public_base_url,
 )
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
+from app.domain.site_knowledge.vector_profile import (
+    SiteKnowledgeVectorProfileAdminError,
+    SiteKnowledgeVectorProfileAdminService,
+)
+from app.domain.site_knowledge.vector_profile_contract import (
+    SITE_KNOWLEDGE_VECTOR_PROFILE_ID,
+)
+from app.domain.wordpress_ai_connector.contracts import WORDPRESS_OPERATION_CONTRACT
 from app.domain.wordpress_ai_connector.routing_profiles import (
     WP_AI_CONNECTOR_PROFILE_SPECS,
     WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID,
@@ -136,10 +137,13 @@ class AdminSupportRequestAttachmentPayload(BaseModel):
 
 
 class SiteProvisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     site_id: str
     account_id: str
     name: str = ""
     status: str = "provisioning"
+    site_url: str | None = Field(default=None, max_length=2048)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -184,6 +188,7 @@ class PlanVersionPayload(BaseModel):
     concurrency: dict[str, Any] = Field(default_factory=dict)
     policy: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    sales_price_cny: float | None = Field(default=None, ge=0)
 
 
 class SubscriptionPayload(BaseModel):
@@ -306,6 +311,8 @@ class AudioWorkbenchCreatePayload(BaseModel):
 
 
 class ProviderConnectionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     connection_id: str | None = Field(default=None, max_length=64)
     provider_id: str | None = Field(default=None, max_length=64)
     provider_type: str | None = Field(default=None, max_length=64)
@@ -313,8 +320,6 @@ class ProviderConnectionPayload(BaseModel):
     display_name: str = Field(default="", max_length=191)
     enabled: bool = True
     base_url: str = Field(default="", max_length=500)
-    note: str = Field(default="", max_length=512)
-    priority: int = Field(default=100, ge=0, le=999)
     source_role: str = Field(default="execution_source", max_length=32)
     capability_ids: list[str] = Field(default_factory=list)
     runtime_profile_ids: list[str] = Field(default_factory=list)
@@ -323,6 +328,25 @@ class ProviderConnectionPayload(BaseModel):
     credential: str | None = None
     secret: str | None = None
     secretless: bool = False
+
+
+class SiteKnowledgeVectorProfilePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    credential: str | None = Field(default=None, max_length=500)
+
+
+class SiteKnowledgeVectorStorePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint: str | None = Field(default=None, max_length=500)
+    token: str | None = Field(default=None, max_length=1000)
+
+
+class SiteKnowledgeIndexRebuildPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: Literal["rebuild_site_knowledge_index"]
 
 
 class PortalPublicServiceSettingsPayload(BaseModel):
@@ -374,27 +398,30 @@ class ServiceSettingsEmailPreviewPayload(BaseModel):
 
 
 class ModelReferenceSyncPayload(BaseModel):
-    source_url: str = Field(default="", max_length=500)
+    model_config = ConfigDict(extra="forbid")
+
     payload: dict[str, Any] | None = None
 
 
-class WordPressAIRoutingProfilePayload(BaseModel):
+class HostedRuntimeProfilePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     profile_id: str = Field(max_length=64)
     candidate_instance_ids: list[str] = Field(default_factory=list)
-    timeout_ms: int = Field(default=30000, ge=1000, le=90000)
+    timeout_ms: int = Field(default=30000, ge=1000, le=120000)
     allow_fallback: bool = True
     max_retries: int = Field(default=0, ge=0, le=1)
     note: str = Field(default="", max_length=512)
 
 
-class WordPressAIRoutingSettingsPayload(BaseModel):
-    profiles: list[WordPressAIRoutingProfilePayload] = Field(default_factory=list)
+class HostedRuntimeProfileSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-
-class AbilityModelRuntimeBindingPayload(BaseModel):
-    ability_id: str = Field(max_length=64)
-    instance_id: str = Field(max_length=191)
-    note: str = Field(default="", max_length=512)
+    contract_version: Literal["cloud-hosted-runtime-profiles.v1"]
+    platform_kind: Literal["wordpress"]
+    connector_id: Literal["wordpress_ai_connector"]
+    operation_contract_version: Literal["wordpress_operation.v1"]
+    profiles: list[HostedRuntimeProfilePayload]
 
 
 class OpsSummaryDisclosureReviewPayload(BaseModel):
@@ -567,6 +594,45 @@ def _record_provider_connection_audit(
                 error_code=error_code,
                 message=message,
             ),
+        )
+    except Exception:
+        return None
+
+
+def _record_site_knowledge_vector_profile_audit(
+    request: Request,
+    *,
+    event_kind: str = "site_knowledge_vector_profile.save_and_verify",
+    outcome: str,
+    credential_present: bool,
+    result: dict[str, Any] | None = None,
+    error_code: str = "",
+    message: str = "",
+) -> dict[str, Any] | None:
+    try:
+        return _get_commercial_service(request).record_service_audit_event(
+            audit_context=_build_audit_context(request),
+            event_kind=event_kind,
+            outcome=outcome,
+            scope_kind="runtime_profile",
+            scope_id=SITE_KNOWLEDGE_VECTOR_PROFILE_ID,
+            payload_json={
+                "surface": "admin_site_knowledge_vector_profile",
+                "credential_present": credential_present,
+                "credential_value_exposure": "none",
+                "status": str((result or {}).get("status") or ""),
+                "provider_id": str(
+                    (result or {}).get("vector_store", {}).get("provider_id")
+                    or (result or {}).get("provider", {}).get("provider_id")
+                    or ""
+                ),
+                "model_id": str((result or {}).get("model_id") or ""),
+                "dimensions": int((result or {}).get("dimensions") or 0),
+                "error_code": error_code,
+                "message": message,
+                "content_exposed": False,
+                "direct_wordpress_write": False,
+            },
         )
     except Exception:
         return None
@@ -756,7 +822,7 @@ def _merge_receipt(data: Any, receipt: dict[str, Any]) -> Any:
     return {"value": data, "receipt": receipt}
 
 
-def _serialize_wordpress_ai_instance(
+def _serialize_hosted_runtime_instance(
     instance: Any,
     model: Any,
     provider: Any | None = None,
@@ -779,7 +845,19 @@ def _serialize_wordpress_ai_instance(
     }
 
 
-def _build_ability_model_plugin_routing_projection(
+def _hosted_runtime_instance_is_routing_eligible(
+    instance: Any,
+    model: Any | None,
+) -> bool:
+    return bool(
+        model is not None
+        and str(model.status or "") == "available"
+        and not bool(model.is_deprecated)
+        and str(instance.health_status or "unknown") != "unhealthy"
+    )
+
+
+def _build_hosted_runtime_profile_projection(
     database_url: str,
     *,
     settings: Any | None = None,
@@ -801,12 +879,12 @@ def _build_ability_model_plugin_routing_projection(
             "vision": [],
             "image_generation": [],
             "audio_generation": [],
-            "embedding": [],
         }
         for instance in instances:
             model = models_by_id.get(instance.model_id)
-            if model is None or model.status != "available":
+            if not _hosted_runtime_instance_is_routing_eligible(instance, model):
                 continue
+            assert model is not None
             if not provider_model_allowlist.allows(
                 provider_id=instance.provider_id,
                 model_id=instance.model_id,
@@ -815,7 +893,7 @@ def _build_ability_model_plugin_routing_projection(
             if model.feature not in available_instances_by_kind:
                 continue
             available_instances_by_kind[model.feature].append(
-                _serialize_wordpress_ai_instance(
+                _serialize_hosted_runtime_instance(
                     instance,
                     model,
                     providers_by_id.get(instance.provider_id),
@@ -832,17 +910,17 @@ def _build_ability_model_plugin_routing_projection(
             selection_policy = binding.selection_policy_json if binding is not None else {}
             if not isinstance(selection_policy, dict):
                 selection_policy = {}
+            note = str(selection_policy.get("operator_note") or policy.get("operator_note") or "")
             candidate_instance_ids = (
-                list(binding.candidate_instance_ids or []) if binding is not None else []
+                list(binding.candidate_instance_ids or [])[:2] if binding is not None else []
             )
-            candidate_items = []
             effective_candidate_instance_ids = []
             for instance_id in candidate_instance_ids:
                 if instance_id not in instances_by_id:
                     continue
                 instance = instances_by_id[instance_id]
                 model = models_by_id.get(instance.model_id)
-                if model is None:
+                if not _hosted_runtime_instance_is_routing_eligible(instance, model):
                     continue
                 if not provider_model_allowlist.allows(
                     provider_id=instance.provider_id,
@@ -850,16 +928,11 @@ def _build_ability_model_plugin_routing_projection(
                 ):
                     continue
                 effective_candidate_instance_ids.append(instance_id)
-                candidate_items.append(
-                    _serialize_wordpress_ai_instance(
-                        instance,
-                        model,
-                        providers_by_id.get(instance.provider_id),
-                    )
-                )
 
             profiles.append(
                 {
+                    "platform_kind": "wordpress",
+                    "connector_id": "wordpress_ai_connector",
                     "profile_id": spec.profile_id,
                     "group_id": spec.group_id,
                     "routing_intent": spec.routing_intent,
@@ -870,18 +943,17 @@ def _build_ability_model_plugin_routing_projection(
                         profile.execution_kind if profile is not None else spec.execution_kind
                     ),
                     "candidate_instance_ids": effective_candidate_instance_ids,
-                    "candidates": candidate_items,
                     "timeout_ms": int(policy.get("timeout_ms") or spec.timeout_ms),
                     "max_timeout_ms": spec.max_timeout_ms,
                     "allow_fallback": bool(policy.get("allow_fallback", spec.allow_fallback)),
                     "max_retries": int(policy.get("max_retries") or spec.max_retries),
+                    "note": note,
                     "revision": str(binding.revision if binding is not None else ""),
                     "updated_at": (
                         binding.updated_at.isoformat()
                         if binding is not None and binding.updated_at is not None
                         else ""
                     ),
-                    "selection_policy": selection_policy,
                     "status": (
                         "configured" if effective_candidate_instance_ids else "needs_candidates"
                     ),
@@ -889,38 +961,41 @@ def _build_ability_model_plugin_routing_projection(
             )
 
     return {
-        "contract_version": "cloud-ability-model-routing.v1",
-        "surface": "wordpress_ai_connector_routing",
-        "projection_kind": "runtime_profile_binding",
+        "contract_version": "cloud-hosted-runtime-profiles.v1",
+        "surface": "admin_hosted_runtime_profiles",
+        "projection_kind": "hosted_runtime_profile_configuration",
         "owner": "cloud_runtime",
-        "local_control_plane": "wordpress_plugin",
-        "customer_model_selection": False,
-        "direct_wordpress_write": False,
-        "prompt_or_preset_editor": False,
-        "available_text_instances": available_instances_by_kind["text"],
-        "available_vision_instances": available_instances_by_kind["vision"],
-        "available_image_instances": available_instances_by_kind["image_generation"],
-        "available_audio_instances": available_instances_by_kind["audio_generation"],
-        "available_embedding_instances": available_instances_by_kind["embedding"],
+        "platform_kind": "wordpress",
+        "connector_id": "wordpress_ai_connector",
+        "operation_contract_version": WORDPRESS_OPERATION_CONTRACT,
+        "available_instances": available_instances_by_kind,
         "profiles": profiles,
         "boundary": {
             "public_runtime_accepts_raw_model_instance": False,
             "results_write_posture": "suggestion_only",
             "admin_surface": "platform_admin_only",
-            "cloud_ability_registry": False,
-            "wordpress_ability_truth": "local_plugin",
+            "cloud_owns": ["hosted_candidate_chain"],
+            "local_plugin_owns": [
+                "ability_truth",
+                "workflow_truth",
+                "prompt_truth",
+                "router_truth",
+                "adoption_truth",
+                "final_write_truth",
+            ],
+            "direct_wordpress_write": False,
         },
     }
 
 
-def _validate_ability_model_plugin_routing_payload(
+def _validate_hosted_runtime_profile_payload(
     database_url: str,
-    payload: WordPressAIRoutingSettingsPayload,
+    payload: HostedRuntimeProfileSettingsPayload,
     *,
     settings: Any | None = None,
-) -> tuple[list[WordPressAIRoutingProfilePayload], str]:
+) -> tuple[list[HostedRuntimeProfilePayload], str]:
     if not payload.profiles:
-        return [], "at least one plugin ability-model routing profile is required"
+        return [], "at least one hosted runtime profile is required"
 
     known_profile_ids = set(WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID)
     seen_profile_ids: set[str] = set()
@@ -930,19 +1005,19 @@ def _validate_ability_model_plugin_routing_payload(
         for profile_payload in payload.profiles:
             profile_id = profile_payload.profile_id.strip()
             if profile_id not in known_profile_ids:
-                return [], f"unsupported plugin ability-model routing profile: {profile_id}"
+                return [], f"unsupported hosted runtime profile: {profile_id}"
             if profile_id in seen_profile_ids:
-                return [], f"duplicate plugin ability-model routing profile: {profile_id}"
+                return [], f"duplicate hosted runtime profile: {profile_id}"
             seen_profile_ids.add(profile_id)
             candidate_instance_ids = [
                 str(instance_id or "").strip()
                 for instance_id in profile_payload.candidate_instance_ids
                 if str(instance_id or "").strip()
             ]
-            if not candidate_instance_ids:
-                return [], f"profile {profile_id} requires at least one candidate instance"
             if len(candidate_instance_ids) != len(set(candidate_instance_ids)):
                 return [], f"profile {profile_id} includes duplicate candidate instances"
+            if len(candidate_instance_ids) > 2:
+                return [], f"profile {profile_id} supports at most two candidate instances"
             if (
                 profile_payload.timeout_ms
                 > WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id].max_timeout_ms
@@ -969,9 +1044,13 @@ def _validate_ability_model_plugin_routing_payload(
                 if model is None:
                     return [], f"profile {profile_id} references an instance without a model"
                 spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id]
-                if model.feature != spec.execution_kind or model.status != "available":
+                if model.feature != spec.execution_kind:
                     return [], (
-                        f"profile {profile_id} may only use available "
+                        f"profile {profile_id} may only use {spec.execution_kind} instances"
+                    )
+                if not _hosted_runtime_instance_is_routing_eligible(instance, model):
+                    return [], (
+                        f"profile {profile_id} may only use routing-eligible "
                         f"{spec.execution_kind} instances"
                     )
                 if not provider_model_allowlist.allows(
@@ -982,6 +1061,13 @@ def _validate_ability_model_plugin_routing_payload(
                         f"profile {profile_id} may only use models enabled "
                         f"for provider {instance.provider_id}: {instance.model_id}"
                     )
+
+    missing_profile_ids = sorted(known_profile_ids - seen_profile_ids)
+    if missing_profile_ids:
+        return [], (
+            "hosted runtime profiles must replace the complete catalog; missing: "
+            + ", ".join(missing_profile_ids)
+        )
 
     return payload.profiles, ""
 
@@ -999,54 +1085,6 @@ def _normalize_runtime_id_list(value: object) -> list[str]:
         if text and text not in normalized:
             normalized.append(text)
     return normalized
-
-
-def _merge_runtime_id_list(value: object, required_ids: list[str]) -> list[str]:
-    merged = _normalize_runtime_id_list(value)
-    for required_id in required_ids:
-        if required_id and required_id not in merged:
-            merged.append(required_id)
-    return merged
-
-
-def _provider_connection_supports_embedding(
-    row: ProviderConnection,
-    *,
-    provider_id: str,
-) -> bool:
-    config = _dict_value(row.config_json)
-    configured = bool(row.secret_ciphertext) or bool(config.get("secretless"))
-    if not row.enabled or not configured:
-        return False
-    row_provider_id = str(config.get("provider_id") or row.connection_id or "").strip().lower()
-    kind = str(config.get("kind") or row.provider_type or "").strip().lower()
-    capability_ids = _normalize_runtime_id_list(config.get("capability_ids"))
-    runtime_profile_ids = _normalize_runtime_id_list(config.get("runtime_profile_ids"))
-    if row_provider_id != provider_id.lower():
-        return False
-    if kind == "embedding_provider":
-        return True
-    return "embedding" in capability_ids and "embed.default" in runtime_profile_ids
-
-
-def _embedding_dimensions_for_model(model_id: str, config: dict[str, Any], default: int) -> int:
-    configured = config.get("dimensions")
-    if isinstance(configured, int) and configured > 0:
-        return configured
-    try:
-        parsed = int(str(configured))
-        if parsed > 0:
-            return parsed
-    except (TypeError, ValueError):
-        pass
-    normalized_model_id = model_id.lower()
-    if "bge-m3" in normalized_model_id:
-        return 1024
-    if "text-embedding-3-large" in normalized_model_id:
-        return 3072
-    if "text-embedding-3-small" in normalized_model_id:
-        return 1536
-    return default
 
 
 def _build_runtime_explanations(
@@ -1304,6 +1342,7 @@ async def provision_site(
             account_id=payload.account_id,
             name=payload.name,
             status=payload.status,
+            site_url=payload.site_url,
             metadata_json=payload.metadata,
             audit_context=audit_context,
         )
@@ -1647,6 +1686,7 @@ async def publish_plan_version(
             concurrency_json=payload.concurrency,
             policy_json=payload.policy,
             metadata_json=payload.metadata,
+            sales_price_cny=payload.sales_price_cny,
             audit_context=audit_context,
         )
     except CommercialServiceError as error:
@@ -2382,13 +2422,13 @@ async def get_routing_advisor(
             site_id=site_id,
             filters={"range": range_filter, "limit": limit},
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="advisor.invalid_routing_window",
-                message=str(error),
+                message="invalid routing advisor request",
                 data={"site_id": site_id, "range": range_filter, "limit": limit},
                 revision="m1",
             ),
@@ -2481,13 +2521,13 @@ async def get_ops_summary_advisor(
             force_refresh=force_refresh,
             cache_ttl_seconds=cache_ttl_seconds,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="advisor.invalid_ops_summary_request",
-                message=str(error),
+                message="invalid ops summary request",
                 data={"scope": scope, "site_id": site_id or ""},
                 revision="m1",
             ),
@@ -2534,13 +2574,13 @@ async def get_ops_summary_preview_advisor(
             force_refresh=force_refresh,
             cache_ttl_seconds=cache_ttl_seconds,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="advisor.invalid_ops_summary_preview_request",
-                message=str(error),
+                message="invalid ops summary preview request",
                 data={"scope": scope, "site_id": site_id or ""},
                 revision="m1",
             ),
@@ -2568,13 +2608,13 @@ async def review_ops_summary_disclosure(
             actor_ref=payload.actor_ref,
             note=payload.note,
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
                 error_code="advisor.invalid_ops_summary_review_request",
-                message=str(error),
+                message="invalid ops summary review request",
                 data={"cache_key": payload.cache_key},
                 revision="m1",
             ),
@@ -2645,7 +2685,7 @@ async def list_admin_accounts(
     package_kind: str | None = Query(default=None),
     top_plan_id: str | None = Query(default=None),
     exclude_internal: bool = Query(default=False),
-    sort: str = Query(default="created_at", pattern="^(created_at|display_name)$"),
+    sort: str = Query(default="created_at", pattern="^(created_at|display_name|risk)$"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> Any:
@@ -3928,6 +3968,214 @@ async def test_admin_alipay_payment_settings(request: Request) -> Any:
     )
 
 
+@router.get("/admin/site-knowledge-vector-profile")
+async def get_admin_site_knowledge_vector_profile(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = SiteKnowledgeVectorProfileAdminService(
+        services.settings.database_url,
+        services.settings,
+    ).get_profile()
+    return build_envelope(
+        status="ok",
+        message="Site Knowledge vector profile loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.put("/admin/site-knowledge-vector-profile")
+async def update_admin_site_knowledge_vector_profile(
+    request: Request,
+    payload: SiteKnowledgeVectorProfilePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    credential_present = bool(str(payload.credential or "").strip())
+    try:
+        result = SiteKnowledgeVectorProfileAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_and_verify(payload.credential)
+    except SiteKnowledgeVectorProfileAdminError as error:
+        _record_site_knowledge_vector_profile_audit(
+            request,
+            outcome="error",
+            credential_present=credential_present,
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    audit_event = _record_site_knowledge_vector_profile_audit(
+        request,
+        outcome="succeeded",
+        credential_present=credential_present,
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="Site Knowledge vector profile saved and verified",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="site_knowledge_vector_profile.save_and_verify",
+                scope_kind="runtime_profile",
+                scope_id=SITE_KNOWLEDGE_VECTOR_PROFILE_ID,
+                outcome="succeeded",
+                effective_summary=(
+                    "Site Knowledge vector profile was saved and verified with 1024 dimensions."
+                ),
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.put("/admin/site-knowledge-vector-profile/vector-store")
+async def update_admin_site_knowledge_vector_store(
+    request: Request,
+    payload: SiteKnowledgeVectorStorePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    token_present = bool(str(payload.token or "").strip())
+    event_kind = "site_knowledge_vector_profile.vector_store.save_and_verify"
+    try:
+        result = SiteKnowledgeVectorProfileAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_and_verify_vector_store(payload.endpoint, payload.token)
+    except SiteKnowledgeVectorProfileAdminError as error:
+        _record_site_knowledge_vector_profile_audit(
+            request,
+            event_kind=event_kind,
+            outcome="error",
+            credential_present=token_present,
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    audit_event = _record_site_knowledge_vector_profile_audit(
+        request,
+        event_kind=event_kind,
+        outcome="succeeded",
+        credential_present=token_present,
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="Site Knowledge vector store saved and verified",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind=event_kind,
+                scope_kind="runtime_profile",
+                scope_id=SITE_KNOWLEDGE_VECTOR_PROFILE_ID,
+                outcome="succeeded",
+                effective_summary=(
+                    "Zilliz Cloud was verified for the fixed 1024-dimension COSINE profile."
+                ),
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.post("/admin/site-knowledge-vector-profile/index-rebuilds")
+async def rebuild_admin_site_knowledge_vector_index(
+    request: Request,
+    payload: SiteKnowledgeIndexRebuildPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    del payload
+    services = get_cloud_services(request)
+    event_kind = "site_knowledge_vector_profile.index.rebuild"
+    try:
+        result = SiteKnowledgeVectorProfileAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).rebuild_index()
+    except SiteKnowledgeVectorProfileAdminError as error:
+        _record_site_knowledge_vector_profile_audit(
+            request,
+            event_kind=event_kind,
+            outcome="error",
+            credential_present=False,
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    audit_event = _record_site_knowledge_vector_profile_audit(
+        request,
+        event_kind=event_kind,
+        outcome="succeeded",
+        credential_present=False,
+        result=result,
+    )
+    awaiting_site_sync = (
+        str(((result.get("validation") or {}).get("index") or {}).get("status") or "")
+        == "awaiting_site_sync"
+    )
+    return build_envelope(
+        status="ok",
+        message=(
+            "Site Knowledge automatic site refresh requested"
+            if awaiting_site_sync
+            else "Site Knowledge vector index rebuilt"
+        ),
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind=event_kind,
+                scope_kind="runtime_profile",
+                scope_id=SITE_KNOWLEDGE_VECTOR_PROFILE_ID,
+                outcome="succeeded",
+                effective_summary=(
+                    "Sites will automatically resend public content for the fixed vector space."
+                    if awaiting_site_sync
+                    else "Compatible Cloud index chunks were rebuilt in Zilliz Cloud."
+                ),
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
 @router.get("/admin/provider-connections")
 async def list_admin_provider_connections(request: Request) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
@@ -4196,6 +4444,11 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
     )
     return build_envelope(
         status="ok" if result.get("ok") else "error",
+        error_code=(
+            ""
+            if result.get("ok")
+            else str(result.get("error_code") or "provider_connection.test_failed")
+        ),
         message=str(result.get("message") or "provider connection tested"),
         data=_merge_receipt(
             result,
@@ -4256,7 +4509,6 @@ async def sync_admin_model_references(
     try:
         result = ModelReferenceService(services.settings.database_url).sync_models_dev(
             payload=payload.payload,
-            source_url=payload.source_url,
         )
     except ModelReferenceError as error:
         return JSONResponse(
@@ -4298,206 +4550,16 @@ async def get_admin_ai_resources(request: Request) -> Any:
     )
 
 
-@router.get("/admin/ability-models/runtime-projection")
-async def get_admin_ability_model_runtime_projection(request: Request) -> Any:
+@router.get("/admin/runtime-profiles")
+async def get_admin_hosted_runtime_profiles(request: Request) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
     if auth is not None:
         return auth
     services = get_cloud_services(request)
     return build_envelope(
         status="ok",
-        message="Ability model runtime projection loaded",
-        data=build_admin_ability_model_runtime_projection(
-            services.settings,
-            providers=resolve_live_provider_adapters(
-                services.settings,
-                base_providers=services.providers,
-                include_enabled_connections=True,
-            ),
-            database_url=services.settings.database_url,
-        ),
-        revision="m6",
-    )
-
-
-@router.post("/admin/ability-models/runtime-binding")
-async def update_admin_ability_model_runtime_binding(
-    request: Request,
-    payload: AbilityModelRuntimeBindingPayload,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    ability_id = payload.ability_id.strip()
-    instance_id = payload.instance_id.strip()
-    if ability_id != "site_knowledge_embedding":
-        return JSONResponse(
-            status_code=400,
-            content=build_envelope(
-                status="error",
-                error_code="ability_model_runtime_binding.unsupported_ability",
-                message="Only Site Knowledge embedding runtime binding is supported.",
-                revision="m6",
-            ),
-        )
-    if not instance_id:
-        return JSONResponse(
-            status_code=400,
-            content=build_envelope(
-                status="error",
-                error_code="ability_model_runtime_binding.invalid_instance",
-                message="A runtime model instance is required.",
-                revision="m6",
-            ),
-        )
-
-    connection_id = ""
-    provider_id = ""
-    model_id = ""
-    with get_session(services.settings.database_url) as session:
-        repository = CatalogRepository(session)
-        instances = repository.list_instances_by_ids([instance_id])
-        instance = instances[0] if instances else None
-        if instance is None:
-            return JSONResponse(
-                status_code=400,
-                content=build_envelope(
-                    status="error",
-                    error_code="ability_model_runtime_binding.unknown_instance",
-                    message="The selected runtime model instance does not exist.",
-                    revision="m6",
-                ),
-            )
-        model = repository.get_model(instance.model_id)
-        if model is None or model.status != "available" or model.feature != "embedding":
-            return JSONResponse(
-                status_code=400,
-                content=build_envelope(
-                    status="error",
-                    error_code="ability_model_runtime_binding.invalid_model",
-                    message="Site Knowledge can only use available embedding model instances.",
-                    revision="m6",
-                ),
-            )
-
-        provider_id = str(instance.provider_id or "").strip()
-        model_id = str(instance.model_id or "").strip()
-        connections = list(
-            session.scalars(
-                select(ProviderConnection)
-                .where(ProviderConnection.enabled.is_(True))
-                .order_by(ProviderConnection.connection_id.asc())
-            )
-        )
-        connection = next(
-            (
-                row
-                for row in connections
-                if _provider_connection_supports_embedding(row, provider_id=provider_id)
-            ),
-            None,
-        )
-        if connection is None:
-            return JSONResponse(
-                status_code=400,
-                content=build_envelope(
-                    status="error",
-                    error_code="ability_model_runtime_binding.missing_provider_connection",
-                    message=(
-                        "The selected embedding model requires an enabled provider "
-                        "connection with embedding capability."
-                    ),
-                    revision="m6",
-                ),
-            )
-
-        config = dict(_dict_value(connection.config_json))
-        config["provider_id"] = provider_id
-        config["kind"] = str(config.get("kind") or connection.provider_type or provider_id)
-        config["model_id"] = model_id
-        config["capability_ids"] = _merge_runtime_id_list(
-            config.get("capability_ids"),
-            ["embedding"],
-        )
-        config["runtime_profile_ids"] = _merge_runtime_id_list(
-            config.get("runtime_profile_ids"),
-            ["embed.default"],
-        )
-        config["dimensions"] = _embedding_dimensions_for_model(
-            model_id,
-            config,
-            services.settings.site_knowledge_embedding_dimensions,
-        )
-        config["managed_surface"] = "admin_ability_model_runtime_binding"
-        if payload.note.strip():
-            config["operator_note"] = payload.note.strip()
-        connection.config_json = config
-        connection.status = "configured"
-        connection.updated_at = datetime.now(UTC)
-        connection_id = str(connection.connection_id or "").strip()
-        session.commit()
-
-    apply_provider_connection_runtime_settings(services.settings)
-    audit_event = None
-    try:
-        audit_event = _get_commercial_service(request).record_service_audit_event(
-            audit_context=_build_audit_context(request),
-            event_kind="ability_model_runtime_binding.update",
-            outcome="succeeded",
-            scope_kind="runtime_profile",
-            scope_id="embed.default",
-            payload_json={
-                "surface": "admin_ability_model_runtime_projection",
-                "ability_id": ability_id,
-                "provider_id": provider_id,
-                "model_id": model_id,
-                "instance_id": instance_id,
-                "connection_id": connection_id,
-                "credential_value_exposure": "none",
-                "content_exposed": False,
-            },
-        )
-    except Exception:
-        audit_event = None
-
-    result = build_admin_ability_model_runtime_projection(
-        services.settings,
-        providers=resolve_live_provider_adapters(
-            services.settings,
-            base_providers=services.providers,
-            include_enabled_connections=True,
-        ),
-        database_url=services.settings.database_url,
-    )
-    return build_envelope(
-        status="ok",
-        message="Ability model runtime binding saved",
-        data=_merge_receipt(
-            result,
-            _build_operator_receipt(
-                event_kind="ability_model_runtime_binding.update",
-                scope_kind="runtime_profile",
-                scope_id="embed.default",
-                outcome="succeeded",
-                effective_summary="Site Knowledge embedding runtime model was updated.",
-                audit_event=audit_event,
-            ),
-        ),
-        revision="m6",
-    )
-
-
-@router.get("/admin/ability-models/plugin-routing")
-async def get_admin_ability_model_plugin_routing(request: Request) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    return build_envelope(
-        status="ok",
-        message="Plugin ability-model routing loaded",
-        data=_build_ability_model_plugin_routing_projection(
+        message="Hosted runtime profiles loaded",
+        data=_build_hosted_runtime_profile_projection(
             services.settings.database_url,
             settings=services.settings,
         ),
@@ -4505,16 +4567,16 @@ async def get_admin_ability_model_plugin_routing(request: Request) -> Any:
     )
 
 
-@router.post("/admin/ability-models/plugin-routing")
-async def update_admin_ability_model_plugin_routing(
+@router.put("/admin/runtime-profiles")
+async def update_admin_hosted_runtime_profiles(
     request: Request,
-    payload: WordPressAIRoutingSettingsPayload,
+    payload: HostedRuntimeProfileSettingsPayload,
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
         return auth
     services = get_cloud_services(request)
-    profiles, error_message = _validate_ability_model_plugin_routing_payload(
+    profiles, error_message = _validate_hosted_runtime_profile_payload(
         services.settings.database_url,
         payload,
         settings=services.settings,
@@ -4524,13 +4586,13 @@ async def update_admin_ability_model_plugin_routing(
             status_code=400,
             content=build_envelope(
                 status="error",
-                error_code="ability_model_plugin_routing.invalid_profile",
+                error_code="runtime_profiles.invalid_profile",
                 message=error_message,
                 revision="m6",
             ),
         )
 
-    revision = f"ability-model-routing-admin-{int(datetime.now(UTC).timestamp())}"
+    revision = f"runtime-profiles-admin-{uuid4().hex}"
     with get_session(services.settings.database_url) as session:
         repository = CatalogRepository(session)
         for profile_payload in profiles:
@@ -4548,7 +4610,10 @@ async def update_admin_ability_model_plugin_routing(
                     "allow_fallback": profile_payload.allow_fallback,
                     "max_retries": profile_payload.max_retries,
                     "timeout_ms": profile_payload.timeout_ms,
-                    "managed_surface": "wordpress_ai_connector",
+                    "managed_surface": "hosted_runtime_profiles",
+                    "platform_kind": payload.platform_kind,
+                    "connector_id": payload.connector_id,
+                    "operation_contract_version": payload.operation_contract_version,
                     "task_group": spec.group_id,
                     "routing_intent": spec.routing_intent,
                     "tasks": list(spec.tasks),
@@ -4560,7 +4625,10 @@ async def update_admin_ability_model_plugin_routing(
                 candidate_instance_ids=candidate_instance_ids,
                 selection_policy_json={
                     "strategy": "ordered",
-                    "managed_surface": "wordpress_ai_connector",
+                    "managed_surface": "hosted_runtime_profiles",
+                    "platform_kind": payload.platform_kind,
+                    "connector_id": payload.connector_id,
+                    "operation_contract_version": payload.operation_contract_version,
                     "task_group": spec.group_id,
                     "routing_intent": spec.routing_intent,
                     "operator_note": profile_payload.note.strip(),
@@ -4573,11 +4641,15 @@ async def update_admin_ability_model_plugin_routing(
     try:
         audit_event = _get_commercial_service(request).record_service_audit_event(
             audit_context=_build_audit_context(request),
-            event_kind="ability_model_plugin_routing.update",
+            event_kind="runtime_profiles.update",
             outcome="succeeded",
-            scope_kind="runtime_profile",
+            scope_kind="runtime_profile_catalog",
             scope_id="wordpress_ai_connector",
             payload_json={
+                "contract_version": payload.contract_version,
+                "platform_kind": payload.platform_kind,
+                "connector_id": payload.connector_id,
+                "operation_contract_version": payload.operation_contract_version,
                 "profile_ids": [profile.profile_id for profile in profiles],
                 "revision": revision,
             },
@@ -4585,21 +4657,21 @@ async def update_admin_ability_model_plugin_routing(
     except Exception:
         audit_event = None
 
-    result = _build_ability_model_plugin_routing_projection(
+    result = _build_hosted_runtime_profile_projection(
         services.settings.database_url,
         settings=services.settings,
     )
     return build_envelope(
         status="ok",
-        message="Plugin ability-model routing saved",
+        message="Hosted runtime profiles saved",
         data=_merge_receipt(
             result,
             _build_operator_receipt(
-                event_kind="ability_model_plugin_routing.update",
-                scope_kind="runtime_profile",
+                event_kind="runtime_profiles.update",
+                scope_kind="runtime_profile_catalog",
                 scope_id="wordpress_ai_connector",
                 outcome="succeeded",
-                effective_summary="Plugin ability-model routing was updated.",
+                effective_summary="Hosted runtime profiles were updated.",
                 audit_event=audit_event,
             ),
         ),
@@ -4735,13 +4807,13 @@ async def update_admin_plugin_observability_attention_state(
             operator_note=payload.note.strip(),
             actor_ref="internal",
         )
-    except ValueError as error:
+    except ValueError:
         return JSONResponse(
             status_code=422,
             content=build_envelope(
                 status="error",
                 error_code="plugin_observability.attention_action_invalid",
-                message=str(error),
+                message="invalid plugin observability attention action",
                 trace_id=extract_trace_id(request.headers.get("traceparent", "")),
                 revision="m6",
             ),

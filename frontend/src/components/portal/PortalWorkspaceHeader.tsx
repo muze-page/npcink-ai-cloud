@@ -1,9 +1,14 @@
 'use client';
 
 import React from 'react';
-import { BackofficeMetricStrip } from '@/components/backoffice/BackofficeScaffold';
+import { PortalMetricStrip } from '@/components/portal/PortalScaffold';
 import { useLocale } from '@/contexts/LocaleContext';
-import { getPortalSiteWordPressUrl } from '@/lib/portal-site-display';
+import {
+  getPortalSiteDisplayName,
+  getPortalSiteSecondaryLabel,
+  getPortalSiteUrl,
+  getVisiblePortalSites,
+} from '@/lib/portal-site-display';
 import { cn } from '@/lib/utils';
 
 export type PortalWorkspacePage =
@@ -26,9 +31,10 @@ export type PortalWorkspaceMetric = {
 
 type PortalWorkspaceSite = {
   site_id: string;
-  site_name: string;
-  wordpress_url?: string;
-  metadata?: Record<string, unknown>;
+  name: string;
+  site_url: string;
+  platform_kind: string;
+  status: string;
 };
 
 type PortalWorkspaceHeaderProps = {
@@ -60,6 +66,7 @@ export function PortalWorkspaceHeader({
   selectedSiteName,
   showSiteContextSummary = false,
   sites = [],
+  onSiteChange,
   metrics = [],
   metricsColumnsClassName = 'lg:grid-cols-4',
   primaryAction,
@@ -76,26 +83,15 @@ export function PortalWorkspaceHeader({
       </>
     ) : null);
   const selectedSite = sites.find((site) => site.site_id === selectedSiteId) || null;
-  const selectedSiteWordPressUrl = getPortalSiteWordPressUrl(selectedSite);
+  const selectedSiteUrl = getPortalSiteUrl(selectedSite);
   const shouldShowEyebrow = eyebrow.trim().toLowerCase() !== title.trim().toLowerCase();
   const summary = (
     <div className="grid gap-4 xl:grid-cols-[minmax(16rem,0.8fr)_minmax(0,1.9fr)_auto] xl:items-center">
       <div className="min-w-0">
         {shouldShowEyebrow ? (
-          <div className="flex items-center gap-2">
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400">
-              {eyebrow}
-            </p>
-            {eyebrowInfo ? (
-              <span
-                aria-label={eyebrowInfo}
-                title={eyebrowInfo}
-                className="inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded-full border border-slate-200 bg-white text-[0.68rem] font-semibold text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
-              >
-                i
-              </span>
-            ) : null}
-          </div>
+          <p className="text-xs font-medium text-gray-500 dark:text-gray-400">
+            {eyebrow}
+          </p>
         ) : null}
         <h1 className={cn(
           'text-2xl font-semibold leading-tight text-gray-950 dark:text-white md:text-[1.75rem]',
@@ -103,18 +99,19 @@ export function PortalWorkspaceHeader({
         )}>
           {title}
         </h1>
+        {eyebrowInfo ? <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">{eyebrowInfo}</p> : null}
         {showSiteContextSummary ? (
           <p className="mt-2 max-w-md truncate text-sm text-gray-600 dark:text-gray-400">
-            {selectedSiteName || selectedSiteWordPressUrl || t('portal.current_site', {}, 'Site record')}
+            {selectedSiteName || selectedSiteUrl || t('portal.current_site', {}, 'Site record')}
             {' · '}
-            {selectedSiteWordPressUrl ||
+            {selectedSiteUrl ||
               t('portal.site_url_missing', {}, 'WordPress URL not configured')}
           </p>
         ) : null}
         {description ? <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">{description}</p> : null}
       </div>
       {metrics.length ? (
-        <BackofficeMetricStrip items={metrics} columnsClassName={metricsColumnsClassName} variant="portal" />
+        <PortalMetricStrip items={metrics} columnsClassName={metricsColumnsClassName} variant="portal" />
       ) : null}
       {resolvedActions ? <div className="flex flex-wrap gap-2 xl:justify-end">{resolvedActions}</div> : null}
     </div>
@@ -123,6 +120,25 @@ export function PortalWorkspaceHeader({
   return (
     <section className="space-y-4 border-b border-slate-200/75 pb-5 dark:border-slate-800">
       {summary}
+      {onSiteChange && getVisiblePortalSites(sites).length > 1 ? (
+        <div className="max-w-md">
+          <label htmlFor={`portal-${currentPage}-site-selector`} className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">
+            {t('portal.current_site', {}, 'Current site')}
+          </label>
+          <select
+            id={`portal-${currentPage}-site-selector`}
+            className="input"
+            value={selectedSiteId}
+            onChange={(event) => onSiteChange(event.target.value)}
+          >
+            {getVisiblePortalSites(sites).map((site) => (
+              <option key={site.site_id} value={site.site_id}>
+                {getPortalSiteDisplayName(site)} ({getPortalSiteSecondaryLabel(site)})
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       {children}
     </section>
   );

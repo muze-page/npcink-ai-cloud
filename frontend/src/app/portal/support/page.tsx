@@ -1,14 +1,14 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
-  BackofficePageStack,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+  PortalPageStack,
+  PortalSection,
+  PortalCard,
+} from '@/components/portal/PortalScaffold';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
 import {
   PortalEmptyState,
   PortalErrorState,
@@ -18,6 +18,7 @@ import {
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { ListPagination } from '@/components/ui/ListPagination';
+import { Modal } from '@/components/ui/Modal';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import {
@@ -26,6 +27,10 @@ import {
   type PortalSupportRequestStatus,
 } from '@/lib/portal-client';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
+import {
+  getPortalSiteDisplayName,
+  getPortalSiteSecondaryLabel,
+} from '@/lib/portal-site-display';
 import { formatDate } from '@/lib/utils';
 
 const SUPPORT_TOPICS = ['billing', 'payment', 'site', 'usage', 'account', 'general'] as const;
@@ -44,6 +49,8 @@ function PortalSupportContent() {
   const searchParams = useSearchParams();
   const { t } = useLocale();
   const { session, isLoading, isAuthenticated } = useSession();
+  const selectedContextSite = session?.selected_context?.site || null;
+  const contextSiteId = selectedContextSite?.site_id || '';
   const initialTopic = String(searchParams?.get('topic') || 'general').toLowerCase();
   const initialSiteId = searchParams?.get('site') || '';
   const shouldOpenForm = searchParams?.get('new') === '1';
@@ -61,18 +68,14 @@ function PortalSupportContent() {
   );
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [siteId, setSiteId] = useState(initialSiteId);
-
-  useEffect(() => {
-    if (shouldOpenForm) {
-      setShowForm(true);
-    }
-  }, [shouldOpenForm]);
+  const [siteId, setSiteId] = useState('');
+  const contextSiteIdRef = useRef(contextSiteId);
+  const requestVersionRef = useRef(0);
 
   const loadRequests = useCallback(async () => {
-    if (!isAuthenticated) {
-      return;
-    }
+    const requestContextSiteId = contextSiteIdRef.current;
+    if (!isAuthenticated || !requestContextSiteId) return;
+    const requestVersion = ++requestVersionRef.current;
     setIsListLoading(true);
     setError('');
     try {
@@ -81,23 +84,62 @@ function PortalSupportContent() {
         limit: PAGE_SIZE,
         offset,
       });
+      if (
+        requestVersion !== requestVersionRef.current
+        || requestContextSiteId !== contextSiteIdRef.current
+      ) return;
       setItems(response.data.items || []);
       setTotal(Number(response.data.pagination?.total || 0));
     } catch (err) {
+      if (
+        requestVersion !== requestVersionRef.current
+        || requestContextSiteId !== contextSiteIdRef.current
+      ) return;
       setError(formatPortalErrorMessage(err, t, t('error.failed_load', {}, 'Failed to load')));
     } finally {
-      setIsListLoading(false);
+      if (
+        requestVersion === requestVersionRef.current
+        && requestContextSiteId === contextSiteIdRef.current
+      ) setIsListLoading(false);
     }
   }, [isAuthenticated, offset, statusFilter, t]);
 
-  useEffect(() => {
-    void loadRequests();
-  }, [loadRequests]);
+  useLayoutEffect(() => {
+    const previousContextSiteId = contextSiteIdRef.current;
+    contextSiteIdRef.current = contextSiteId;
+    requestVersionRef.current += 1;
+    setItems([]);
+    setTotal(0);
+    setOffset(0);
+    setStatusFilter('');
+    setError('');
+    setNotice('');
+    setIsListLoading(Boolean(isAuthenticated && contextSiteId));
+    setIsSubmitting(false);
+    setShowForm(Boolean(
+      contextSiteId
+      && shouldOpenForm
+      && (!previousContextSiteId || previousContextSiteId === contextSiteId)
+    ));
+    setTopic(
+      SUPPORT_TOPICS.includes(initialTopic as (typeof SUPPORT_TOPICS)[number])
+        ? initialTopic
+        : 'general'
+    );
+    setTitle('');
+    setDescription('');
+    setSiteId(initialSiteId === contextSiteId ? contextSiteId : '');
+  }, [contextSiteId, initialSiteId, initialTopic, isAuthenticated, shouldOpenForm]);
 
-  const visibleSites = useMemo(
-    () => (session?.sites || []).filter((site) => site.status !== 'archived'),
-    [session?.sites]
-  );
+  useEffect(() => {
+    if (!isAuthenticated || !contextSiteId) return;
+    void loadRequests();
+    return () => {
+      requestVersionRef.current += 1;
+    };
+  }, [contextSiteId, isAuthenticated, loadRequests]);
+
+  const visibleSites = selectedContextSite ? [selectedContextSite] : [];
   const supportStatusRules = [
     {
       key: 'open',
@@ -131,7 +173,31 @@ function PortalSupportContent() {
     );
   }
 
+  if (!contextSiteId || !selectedContextSite) {
+    return (
+      <PortalPageStack>
+        <PortalWorkspaceHeader
+          eyebrow={t('portal.support_request_list_title', {}, 'Recent tickets')}
+          title={t('portal.support_requests_title', {}, 'Tickets')}
+          currentPage="support"
+        />
+        <PortalEmptyState
+          title={t('portal.site_selection_required_title', {}, 'Select a site context')}
+          description={t(
+            'portal.site_selection_required_desc',
+            {},
+            'Choose a current site before viewing or creating support tickets.'
+          )}
+          actionLabel={t('portal.select_site_action', {}, 'Select site')}
+          actionHref="/portal#sites"
+        />
+      </PortalPageStack>
+    );
+  }
+
   const handleSubmit = async () => {
+    const requestContextSiteId = contextSiteIdRef.current;
+    if (!isAuthenticated || !requestContextSiteId) return;
     setIsSubmitting(true);
     setError('');
     setNotice('');
@@ -140,28 +206,31 @@ function PortalSupportContent() {
         topic,
         title,
         description,
-        site_id: siteId,
+        site_id: siteId === requestContextSiteId ? requestContextSiteId : '',
         source_path: '/portal/support',
         context: {
           source: 'portal_support_tab',
         },
       });
+      if (requestContextSiteId !== contextSiteIdRef.current) return;
       setItems((current) => [response.data.request, ...current]);
+      setTotal((current) => current + 1);
       setNotice(t('portal.support_request_created', {}, 'Ticket submitted.'));
       setTitle('');
       setDescription('');
       setShowForm(false);
     } catch (err) {
+      if (requestContextSiteId !== contextSiteIdRef.current) return;
       setError(formatPortalErrorMessage(err, t, t('error.failed_save', {}, 'Failed to save')));
     } finally {
-      setIsSubmitting(false);
+      if (requestContextSiteId === contextSiteIdRef.current) setIsSubmitting(false);
     }
   };
 
   return (
-    <BackofficePageStack>
+    <PortalPageStack>
       <PortalWorkspaceHeader
-        eyebrow={t('portal.workspace_label', {}, 'Portal')}
+        eyebrow={t('portal.support_request_list_title', {}, 'Recent tickets')}
         title={t('portal.support_requests_title', {}, 'Tickets')}
         description={t(
           'portal.support_requests_desc',
@@ -171,38 +240,11 @@ function PortalSupportContent() {
         currentPage="support"
         sites={visibleSites}
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => setShowForm((current) => !current)}>
-            {showForm
-              ? t('common.cancel', {}, 'Cancel')
-              : t('portal.support_request_new_action', {}, 'Submit ticket')}
+          <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)}>
+            {t('portal.support_request_new_action', {}, 'Submit ticket')}
           </button>
         }
       />
-
-      <BackofficeSectionPanel className="space-y-3" variant="portal" data-portal-support="status-rules">
-        <div>
-          <p className="text-sm font-semibold text-slate-950 dark:text-white">
-            {t('portal.support_status_rules_title', {}, 'Ticket status')}
-          </p>
-          <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {t(
-              'portal.support_status_rules_desc',
-              {},
-              'Use tickets for package, payment, site, usage, or account issues; support updates the status as the issue moves.'
-            )}
-          </p>
-        </div>
-        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-          {supportStatusRules.map((rule) => (
-            <div key={rule.key} className="rounded-xl border border-slate-200 bg-white/70 px-3 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/35 dark:text-slate-300">
-              <p className="font-semibold text-slate-950 dark:text-white">
-                {t(`portal.support_status_${rule.key}`, {}, rule.key)}
-              </p>
-              <p className="mt-1 text-xs leading-5">{rule.label}</p>
-            </div>
-          ))}
-        </div>
-      </BackofficeSectionPanel>
 
       {notice ? (
         <div className="rounded-[1rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">
@@ -210,20 +252,24 @@ function PortalSupportContent() {
         </div>
       ) : null}
 
-      {showForm ? (
-        <BackofficeSectionPanel>
-          <div className="mb-5">
-            <p className="text-sm font-semibold text-slate-950 dark:text-white">
-              {t('portal.support_request_form_title', {}, 'Submit ticket')}
+      <Modal
+        isOpen={showForm}
+        onClose={() => setShowForm(false)}
+        closeLabel={t('common.close', {}, 'Close')}
+        size="lg"
+        title={t('portal.support_request_form_title', {}, 'Submit ticket')}
+        description={t(
+          'portal.support_request_form_desc',
+          {},
+          'Include the affected page, order, or site so support can inspect the right Cloud record.'
+        )}
+      >
+        <div data-portal-support="new-ticket-dialog">
+          {error ? (
+            <p className="mb-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950/30 dark:text-rose-200" role="alert">
+              {error}
             </p>
-            <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {t(
-                'portal.support_request_form_desc',
-                {},
-                'Include the affected page, order, or site so support can inspect the right Cloud record.'
-              )}
-            </p>
-          </div>
+          ) : null}
           <div className="grid gap-4 md:grid-cols-2">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
               {t('portal.support_request_topic', {}, 'Topic')}
@@ -241,7 +287,7 @@ function PortalSupportContent() {
                 <option value="">{t('portal.support_request_no_site', {}, 'Account-level issue')}</option>
                 {visibleSites.map((site) => (
                   <option key={site.site_id} value={site.site_id}>
-                    {site.site_name || site.wordpress_url || site.site_id}
+                    {getPortalSiteDisplayName(site)} ({getPortalSiteSecondaryLabel(site)})
                   </option>
                 ))}
               </select>
@@ -260,6 +306,7 @@ function PortalSupportContent() {
           <label className="mt-4 block text-sm font-medium text-slate-700 dark:text-slate-200">
             {t('portal.support_request_desc_label', {}, 'Description')}
             <textarea
+              aria-describedby="portal-support-description-help"
               className="input mt-2 min-h-32"
               value={description}
               maxLength={4000}
@@ -267,7 +314,14 @@ function PortalSupportContent() {
               placeholder={t('portal.support_request_desc_placeholder', {}, 'Describe what happened and which page or order should be checked.')}
             />
           </label>
-          <div className="mt-5 flex flex-wrap gap-2">
+          <p id="portal-support-description-help" className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+            {t(
+              'portal.support_request_desc_help',
+              { count: String(description.trim().length) },
+              'Enter at least 10 characters. Current length: {{count}}.'
+            )}
+          </p>
+          <div className="mt-5 flex flex-wrap justify-end gap-2">
             <button
               type="button"
               className="btn btn-primary"
@@ -280,8 +334,8 @@ function PortalSupportContent() {
               {t('common.cancel', {}, 'Cancel')}
             </button>
           </div>
-        </BackofficeSectionPanel>
-      ) : null}
+        </div>
+      </Modal>
 
       {error ? (
         <PortalErrorState
@@ -292,11 +346,11 @@ function PortalSupportContent() {
         />
       ) : null}
 
-      <BackofficeSectionPanel>
+      <PortalSection>
         <div className="mb-5">
-          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+          <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
             {t('portal.support_request_list_title', {}, 'Recent tickets')}
-          </p>
+          </h2>
           <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
             {t('portal.support_request_list_desc', {}, 'Open and in-progress tickets stay visible until support resolves them.')}
           </p>
@@ -307,6 +361,7 @@ function PortalSupportContent() {
               key={status || 'all'}
               type="button"
               className={statusFilter === status ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+              aria-pressed={statusFilter === status}
               onClick={() => {
                 setOffset(0);
                 setStatusFilter(status);
@@ -322,12 +377,12 @@ function PortalSupportContent() {
         ) : items.length ? (
           <div className="space-y-3">
             {items.map((item) => (
-              <BackofficeStackCard key={item.request_id} variant="portal" className="bg-white/70 dark:bg-slate-950/35">
+              <PortalCard key={item.request_id} variant="portal" className="bg-white/70 dark:bg-slate-950/35">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-semibold text-slate-950 dark:text-white">{item.title}</p>
-                      <BackofficeStatusBadge
+                      <PortalStatusBadge
                         status={statusTone(item.status)}
                         label={t(`portal.support_status_${item.status}`, {}, item.status)}
                       />
@@ -336,7 +391,7 @@ function PortalSupportContent() {
                       {item.description}
                     </p>
                     <Link
-                      className="mt-3 inline-flex text-sm font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
+                      className="mt-3 inline-flex min-h-11 items-center text-sm font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
                       href={`/portal/support/${encodeURIComponent(item.request_id)}`}
                     >
                       {t('portal.support_request_view_detail', {}, 'View detail')}
@@ -347,7 +402,7 @@ function PortalSupportContent() {
                     <p className="mt-1">{item.updated_at ? formatDate(item.updated_at) : item.request_id}</p>
                   </div>
                 </div>
-              </BackofficeStackCard>
+              </PortalCard>
             ))}
           </div>
         ) : (
@@ -369,8 +424,33 @@ function PortalSupportContent() {
           onOffsetChange={setOffset}
           className="mt-4 px-0 pb-0"
         />
-      </BackofficeSectionPanel>
-    </BackofficePageStack>
+      </PortalSection>
+
+      <details className="rounded-[1rem] border border-slate-200/80 bg-white/70 dark:border-slate-800 dark:bg-slate-950/35" data-portal-support="status-rules">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-950 dark:text-white">
+          {t('portal.support_status_rules_title', {}, 'Ticket status')}
+        </summary>
+        <div className="space-y-3 border-t border-slate-200/80 p-4 dark:border-slate-800">
+          <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {t(
+              'portal.support_status_rules_desc',
+              {},
+              'Use tickets for package, payment, site, usage, or account issues; support updates the status as the issue moves.'
+            )}
+          </p>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {supportStatusRules.map((rule) => (
+              <div key={rule.key} className="rounded-xl border border-slate-200 bg-white/70 px-3 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/35 dark:text-slate-300">
+                <p className="font-semibold text-slate-950 dark:text-white">
+                  {t(`portal.support_status_${rule.key}`, {}, rule.key)}
+                </p>
+                <p className="mt-1 text-xs leading-5">{rule.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </details>
+    </PortalPageStack>
   );
 }
 

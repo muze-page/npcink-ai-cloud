@@ -67,6 +67,35 @@ def test_list_admin_accounts_sorts_and_paginates_after_filtering(tmp_path: Path)
     dispose_engine(database_url)
 
 
+def test_list_admin_accounts_prioritizes_service_risk_before_pagination(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = CommercialService(database_url)
+
+    service.upsert_account(
+        account_id="acct_alpha",
+        name="Alpha Stable",
+        status="active",
+    )
+    service.upsert_account(
+        account_id="acct_zeta",
+        name="Zeta Suspended",
+        status="suspended",
+    )
+
+    result = service.list_admin_accounts(sort="risk", offset=0, limit=1)
+
+    assert result["filters"]["sort"] == "risk"
+    assert result["total"] == 2
+    assert [item["account"]["account_id"] for item in result["items"]] == [
+        "acct_zeta"
+    ]
+
+    dispose_engine(database_url)
+
+
 def test_list_admin_accounts_can_exclude_internal_records_before_pagination(
     tmp_path: Path,
 ) -> None:

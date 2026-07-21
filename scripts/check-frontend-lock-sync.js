@@ -2,112 +2,82 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
-const rootDir = process.cwd();
+const rootDir = path.resolve(__dirname, '..');
+const rootPackagePath = path.join(rootDir, 'package.json');
 const frontendPackagePath = path.join(rootDir, 'frontend', 'package.json');
 const rootLockPath = path.join(rootDir, 'pnpm-lock.yaml');
 const frontendLockPath = path.join(rootDir, 'frontend', 'pnpm-lock.yaml');
+const workspacePath = path.join(rootDir, 'pnpm-workspace.yaml');
 
 function readJson(filePath) {
 	return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
-function readText(filePath) {
-	return fs.readFileSync(filePath, 'utf8');
-}
-
-function escapeRegExp(value) {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function getImporterBlock(lockText, importerName) {
-	const lines = lockText.split(/\r?\n/);
-	const importersIndex = lines.findIndex((line) => line === 'importers:');
-	if (importersIndex === -1) {
-		return '';
-	}
-
-	const importerHeader = `  ${importerName}:`;
-	let startIndex = -1;
-	for (let index = importersIndex + 1; index < lines.length; index += 1) {
-		if (lines[index] === importerHeader) {
-			startIndex = index;
-			break;
-		}
-		if (/^\S/.test(lines[index]) && lines[index] !== 'importers:') {
-			break;
-		}
-	}
-
-	if (startIndex === -1) {
-		return '';
-	}
-
-	let endIndex = lines.length;
-	for (let index = startIndex + 1; index < lines.length; index += 1) {
-		if (/^  [^ ].*:$/.test(lines[index]) || (/^\S/.test(lines[index]) && lines[index] !== 'importers:')) {
-			endIndex = index;
-			break;
-		}
-	}
-
-	return lines.slice(startIndex, endIndex).join('\n');
-}
-
-function hasDependency(importerBlock, dependencyName) {
-	const escapedName = escapeRegExp(dependencyName);
-	return new RegExp(`^[ \\t]{6}['"]?${escapedName}['"]?:`, 'm').test(importerBlock);
-}
-
-const frontendPackage = readJson(frontendPackagePath);
-const dependencyNames = Object.keys({
-	...(frontendPackage.dependencies || {}),
-	...(frontendPackage.devDependencies || {}),
-}).sort();
-
-const lockChecks = [
-	{
-		label: 'root pnpm-lock.yaml importer frontend',
-		filePath: rootLockPath,
-		importerName: 'frontend',
-	},
-	{
-		label: 'frontend/pnpm-lock.yaml importer .',
-		filePath: frontendLockPath,
-		importerName: '.',
-	},
-];
-
 const problems = [];
-for (const check of lockChecks) {
-	if (!fs.existsSync(check.filePath)) {
-		problems.push(`${check.label}: missing file ${path.relative(rootDir, check.filePath)}`);
-		continue;
+for (const requiredPath of [rootPackagePath, frontendPackagePath, rootLockPath, workspacePath]) {
+	if (!fs.existsSync(requiredPath)) {
+		problems.push(`missing required workspace file: ${path.relative(rootDir, requiredPath)}`);
 	}
+}
 
-	const importerBlock = getImporterBlock(readText(check.filePath), check.importerName);
-	if (!importerBlock) {
-		problems.push(`${check.label}: missing importer ${check.importerName}`);
-		continue;
-	}
+if (fs.existsSync(frontendLockPath)) {
+	problems.push('frontend/pnpm-lock.yaml must not exist; pnpm-lock.yaml is the only dependency lock');
+}
 
-	for (const dependencyName of dependencyNames) {
-		if (!hasDependency(importerBlock, dependencyName)) {
-			problems.push(`${check.label}: missing ${dependencyName}`);
-		}
-	}
+const rootPackage = fs.existsSync(rootPackagePath) ? readJson(rootPackagePath) : {};
+const packageManager = String(rootPackage.packageManager || '');
+const packageManagerMatch = /^pnpm@(\d+\.\d+\.\d+)\+sha512\.([0-9a-f]{128})$/.exec(
+	packageManager
+);
+if (!packageManagerMatch) {
+	problems.push('package.json packageManager must pin pnpm with an exact sha512 integrity');
 }
 
 if (problems.length > 0) {
-	console.error('Frontend dependency lock mismatch detected.');
+	console.error('Frontend dependency lock contract failed.');
 	for (const problem of problems) {
 		console.error(`- ${problem}`);
 	}
-	console.error('');
-	console.error('After changing frontend/package.json dependencies, refresh both lockfiles:');
-	console.error('  pnpm install --lockfile-only --no-frozen-lockfile');
-	console.error('  pnpm --dir frontend install --lockfile-only --ignore-workspace --no-frozen-lockfile');
 	process.exit(1);
 }
 
-console.log(`Frontend dependency locks are in sync (${dependencyNames.length} dependencies checked).`);
+const expectedPnpmVersion = packageManagerMatch[1];
+const versionCheck = spawnSync('pnpm', ['--version'], {
+	cwd: rootDir,
+	encoding: 'utf8',
+	shell: false,
+});
+const actualPnpmVersion = typeof versionCheck.stdout === 'string' ? versionCheck.stdout.trim() : '';
+if (versionCheck.status !== 0 || actualPnpmVersion !== expectedPnpmVersion) {
+	console.error(
+		`Frontend lock verification requires ${packageManager}; run \`corepack enable && corepack install\` from the repository root.`
+	);
+	process.exit(1);
+}
+
+const frozenCheck = spawnSync(
+	'pnpm',
+	['install', '--frozen-lockfile', '--lockfile-only', '--ignore-scripts'],
+	{
+		cwd: rootDir,
+		encoding: 'utf8',
+		env: { ...process.env, CI: 'true' },
+		shell: false,
+	}
+);
+if (frozenCheck.status !== 0) {
+	console.error('Root pnpm-lock.yaml does not satisfy the frontend workspace package.');
+	const failureOutput = [frozenCheck.stdout, frozenCheck.stderr]
+		.filter((value) => typeof value === 'string' && value.trim())
+		.map((value) => value.trim())
+		.join('\n');
+	if (failureOutput) {
+		console.error(failureOutput);
+	}
+	console.error('Refresh the root lock from the repository root, then rerun this check.');
+	process.exit(1);
+}
+
+console.log(`Frontend dependency lock is valid (${packageManager}; root pnpm-lock.yaml).`);

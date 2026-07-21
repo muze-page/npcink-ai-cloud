@@ -111,6 +111,16 @@ From the repository root:
 pnpm run dev
 ```
 
+The root `pnpm-lock.yaml` is the only dependency lock. Do not create a
+`frontend/pnpm-lock.yaml`. Corepack reads the pinned pnpm version from the root
+`packageManager` field, and dependency installs run from the repository root:
+
+```bash
+corepack enable
+corepack install
+pnpm install --frozen-lockfile --filter frontend...
+```
+
 Unified local dev entry:
 
 - `http://127.0.0.1:8010`

@@ -14,7 +14,6 @@ from app.domain.commercial.errors import CommercialPermissionError
 
 USER_ROLE_USER = "user"
 USER_ALLOWED_ROLES = {USER_ROLE_USER}
-USER_SITE_KEY_WRITE_ROLES = {USER_ROLE_USER}
 PLATFORM_ADMIN_ALLOWED_ROLES = {
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
 }
@@ -31,7 +30,6 @@ USER_ALLOWED_ACTION_VIEW_USAGE = "view_usage"
 USER_ALLOWED_ACTION_VIEW_BILLING = "view_billing"
 USER_ALLOWED_ACTION_VIEW_AUDIT = "view_audit"
 USER_ALLOWED_ACTION_PROVISION_SITES = "provision_sites"
-USER_ALLOWED_ACTION_MANAGE_SITE_KEYS = "manage_site_keys"
 USER_ALLOWED_ACTION_REMOVE_SITES = "remove_sites"
 
 
@@ -53,7 +51,6 @@ def resolve_principal_allowed_actions() -> list[str]:
         USER_ALLOWED_ACTION_VIEW_BILLING,
         USER_ALLOWED_ACTION_VIEW_AUDIT,
         USER_ALLOWED_ACTION_PROVISION_SITES,
-        USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
         USER_ALLOWED_ACTION_REMOVE_SITES,
     ]
 
@@ -123,10 +120,8 @@ def _normalize_portal_site_url(value: str) -> tuple[str, str]:
     )
 
 
-def _extract_site_wordpress_url(site: Site) -> str:
-    metadata = site.metadata_json if isinstance(site.metadata_json, dict) else {}
-    raw_value = metadata.get("wordpress_url", "")
-    return str(raw_value).strip() if raw_value is not None else ""
+def _extract_site_url(site: Site) -> str:
+    return str(site.site_url or "").strip()
 
 
 def assert_platform_admin_role_allowed(

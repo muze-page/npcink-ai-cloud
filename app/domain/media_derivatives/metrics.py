@@ -4,16 +4,69 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import case, desc, func, select
+from sqlalchemy import and_, case, desc, func, select
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
 from app.core.models import (
-    MediaDerivativeArtifact,
+    MediaArtifact,
+    MediaArtifactDelivery,
     MediaDerivativeJobMetric,
     RunRecord,
 )
 from app.domain.media_derivatives.processor import MediaDerivativeResult
+
+
+def _delivery_completed_predicate(current_time: datetime) -> Any:
+    return and_(
+        MediaArtifactDelivery.completed_at.is_not(None),
+        MediaArtifactDelivery.completed_at <= current_time,
+        MediaArtifactDelivery.completed_byte_size
+        == MediaArtifactDelivery.expected_byte_size,
+        MediaArtifactDelivery.completed_checksum == MediaArtifactDelivery.expected_checksum,
+    )
+
+
+def _delivery_acknowledged_predicate(current_time: datetime) -> Any:
+    return and_(
+        _delivery_completed_predicate(current_time),
+        MediaArtifactDelivery.acked_at.is_not(None),
+        MediaArtifactDelivery.acked_at <= current_time,
+        MediaArtifactDelivery.acked_at >= MediaArtifactDelivery.completed_at,
+        MediaArtifactDelivery.byte_size_verified.is_(True),
+        MediaArtifactDelivery.checksum_verified.is_(True),
+        MediaArtifactDelivery.received_byte_size
+        == MediaArtifactDelivery.expected_byte_size,
+        MediaArtifactDelivery.received_checksum == MediaArtifactDelivery.expected_checksum,
+    )
+
+
+def _delivery_count_columns(current_time: datetime) -> tuple[Any, Any, Any]:
+    return (
+        func.count(func.distinct(MediaArtifactDelivery.delivery_id)),
+        func.count(
+            func.distinct(
+                case(
+                    (
+                        _delivery_completed_predicate(current_time),
+                        MediaArtifactDelivery.delivery_id,
+                    ),
+                    else_=None,
+                )
+            )
+        ),
+        func.count(
+            func.distinct(
+                case(
+                    (
+                        _delivery_acknowledged_predicate(current_time),
+                        MediaArtifactDelivery.delivery_id,
+                    ),
+                    else_=None,
+                )
+            )
+        ),
+    )
 
 
 def record_media_derivative_job_metric(
@@ -25,7 +78,7 @@ def record_media_derivative_job_metric(
     source_bytes: int,
     processing_started_at: datetime,
     result: MediaDerivativeResult | None = None,
-    artifact: MediaDerivativeArtifact | None = None,
+    artifact: MediaArtifact | None = None,
     error_code: str = "",
     watermark_applied: bool = False,
 ) -> MediaDerivativeJobMetric:
@@ -70,23 +123,6 @@ def record_media_derivative_job_metric(
     return metric
 
 
-def record_media_derivative_artifact_download(
-    *,
-    session: Session,
-    artifact_id: str,
-    downloaded_at: datetime | None = None,
-) -> None:
-    current_time = downloaded_at or datetime.now(UTC)
-    metric = session.scalar(
-        select(MediaDerivativeJobMetric).where(MediaDerivativeJobMetric.artifact_id == artifact_id)
-    )
-    if metric is None:
-        return
-    metric.artifact_download_count = int(metric.artifact_download_count or 0) + 1
-    metric.artifact_last_downloaded_at = current_time
-    session.flush()
-
-
 class MediaDerivativeObservabilityService:
     def __init__(
         self,
@@ -119,15 +155,85 @@ class MediaDerivativeObservabilityService:
                 MediaDerivativeJobMetric.created_at <= current_time,
             ]
             artifact_conditions = [
-                MediaDerivativeArtifact.created_at <= current_time,
-                MediaDerivativeArtifact.expires_at > current_time,
-                MediaDerivativeArtifact.purged_at.is_(None),
+                MediaArtifact.operation == "image.transform.v1",
+                MediaArtifact.created_at <= current_time,
+                MediaArtifact.expires_at > current_time,
+                MediaArtifact.purged_at.is_(None),
             ]
             if site_id:
                 base_conditions.append(MediaDerivativeJobMetric.site_id == site_id)
-                artifact_conditions.append(MediaDerivativeArtifact.site_id == site_id)
+                artifact_conditions.append(MediaArtifact.site_id == site_id)
             if target_format:
                 base_conditions.append(MediaDerivativeJobMetric.target_format == target_format)
+
+            delivery_conditions = [
+                MediaArtifactDelivery.started_at >= start_at,
+                MediaArtifactDelivery.started_at <= current_time,
+            ]
+            if site_id:
+                delivery_conditions.append(MediaArtifactDelivery.site_id == site_id)
+
+            def delivery_statement(*columns: Any) -> Any:
+                statement = (
+                    select(*columns)
+                    .select_from(MediaArtifactDelivery)
+                    .join(
+                        MediaArtifact,
+                        and_(
+                            MediaArtifact.artifact_id == MediaArtifactDelivery.artifact_id,
+                            MediaArtifact.site_id == MediaArtifactDelivery.site_id,
+                        ),
+                    )
+                    .where(*delivery_conditions)
+                )
+                if target_format:
+                    statement = statement.join(
+                        MediaDerivativeJobMetric,
+                        MediaDerivativeJobMetric.artifact_id == MediaArtifact.artifact_id,
+                    ).where(MediaDerivativeJobMetric.target_format == target_format)
+                return statement
+
+            delivery_totals_row = session.execute(
+                delivery_statement(*_delivery_count_columns(current_time))
+            ).one()
+            delivery_operation_rows = session.execute(
+                delivery_statement(
+                    MediaArtifact.operation,
+                    *_delivery_count_columns(current_time),
+                )
+                .group_by(MediaArtifact.operation)
+                .order_by(MediaArtifact.operation.asc())
+            ).all()
+            delivery_site_count_columns = _delivery_count_columns(current_time)
+            delivery_site_rows = session.execute(
+                delivery_statement(
+                    MediaArtifactDelivery.site_id,
+                    *delivery_site_count_columns,
+                )
+                .group_by(MediaArtifactDelivery.site_id)
+                .order_by(
+                    delivery_site_count_columns[0].desc(),
+                    MediaArtifactDelivery.site_id.asc(),
+                )
+                .limit(51)
+            ).all()
+            delivery_site_truncated = len(delivery_site_rows) > 50
+            delivery_site_rows = delivery_site_rows[:50]
+            if session.get_bind().dialect.name == "postgresql":
+                delivery_utc_date = func.date(
+                    func.timezone("UTC", MediaArtifactDelivery.started_at)
+                )
+            else:
+                # SQLite tests persist application-normalized UTC timestamps.
+                delivery_utc_date = func.date(MediaArtifactDelivery.started_at)
+            delivery_date_rows = session.execute(
+                delivery_statement(
+                    delivery_utc_date,
+                    *_delivery_count_columns(current_time),
+                )
+                .group_by(delivery_utc_date)
+                .order_by(delivery_utc_date.asc())
+            ).all()
 
             totals_row = session.execute(
                 select(
@@ -138,7 +244,6 @@ class MediaDerivativeObservabilityService:
                     func.avg(MediaDerivativeJobMetric.queue_wait_ms),
                     func.sum(MediaDerivativeJobMetric.source_bytes),
                     func.sum(MediaDerivativeJobMetric.output_bytes),
-                    func.sum(MediaDerivativeJobMetric.artifact_download_count),
                     func.max(MediaDerivativeJobMetric.finished_at),
                     func.count(func.distinct(MediaDerivativeJobMetric.site_id)),
                     func.count(func.distinct(MediaDerivativeJobMetric.account_id)),
@@ -149,13 +254,13 @@ class MediaDerivativeObservabilityService:
             ).one()
 
             storage_statement = select(
-                func.count(MediaDerivativeArtifact.artifact_id),
-                func.sum(MediaDerivativeArtifact.filesize_bytes),
+                func.count(MediaArtifact.artifact_id),
+                func.sum(MediaArtifact.byte_size),
             ).where(*artifact_conditions)
             if target_format:
                 storage_statement = storage_statement.join(
                     MediaDerivativeJobMetric,
-                    MediaDerivativeJobMetric.artifact_id == MediaDerivativeArtifact.artifact_id,
+                    MediaDerivativeJobMetric.artifact_id == MediaArtifact.artifact_id,
                 ).where(MediaDerivativeJobMetric.target_format == target_format)
             storage_row = session.execute(storage_statement).one()
 
@@ -257,12 +362,13 @@ class MediaDerivativeObservabilityService:
             totals_row,
             storage_row=storage_row,
             timeline_metrics=timeline_metrics,
+            delivery_totals_row=delivery_totals_row,
         )
         formats = [self._format_summary(row) for row in format_rows]
         sites = [self._site_summary(row) for row in site_rows]
         errors = [self._error_summary(row) for row in error_rows]
         return {
-            "contract_version": "magick-media-observability-summary-v1",
+            "contract_version": "magick-media-observability-summary-v2",
             "generated_at": self._format_datetime(current_time),
             "window": {
                 "hours": bounded_hours,
@@ -270,6 +376,25 @@ class MediaDerivativeObservabilityService:
                 "end_at": self._format_datetime(current_time),
             },
             "totals": totals,
+            "delivery_evidence": {
+                "evidence_scope": "verified_transfer_only",
+                "cohort_time_field": "started_at",
+                "stream_completed_semantics": "cloud_stream_completed",
+                "acknowledged_semantics": "verified_client_receipt",
+                "cms_write_evidence": False,
+                "by_site_limit": 50,
+                "by_site_truncated": delivery_site_truncated,
+                "by_operation": [
+                    self._delivery_breakdown(row, dimension="operation")
+                    for row in delivery_operation_rows
+                ],
+                "by_site": [
+                    self._delivery_breakdown(row, dimension="site_id") for row in delivery_site_rows
+                ],
+                "by_date": [
+                    self._delivery_breakdown(row, dimension="date") for row in delivery_date_rows
+                ],
+            },
             "health": self._build_health(totals),
             "queue": self._queue_summary(active_runs),
             "batch": self._batch_summary(batch_runs, target_format=target_format),
@@ -399,6 +524,7 @@ class MediaDerivativeObservabilityService:
         *,
         storage_row: Any,
         timeline_metrics: list[MediaDerivativeJobMetric],
+        delivery_totals_row: Any,
     ) -> dict[str, object]:
         jobs_total = int(row[0] or 0)
         succeeded_total = int(row[1] or 0)
@@ -406,6 +532,7 @@ class MediaDerivativeObservabilityService:
         source_bytes = int(row[5] or 0)
         output_bytes = int(row[6] or 0)
         bytes_saved = source_bytes - output_bytes
+        delivery_counts = self._delivery_counts(delivery_totals_row)
         return {
             "jobs_total": jobs_total,
             "succeeded_total": succeeded_total,
@@ -420,14 +547,45 @@ class MediaDerivativeObservabilityService:
             "output_bytes_total": output_bytes,
             "bytes_saved_total": bytes_saved,
             "compression_ratio": bytes_saved / max(1, source_bytes) if source_bytes else 0.0,
-            "artifact_download_count": int(row[7] or 0),
-            "last_finished_at": self._format_datetime(row[8]),
-            "active_site_count": int(row[9] or 0),
-            "active_account_count": int(row[10] or 0),
-            "watermark_job_count": int(row[11] or 0),
+            **delivery_counts,
+            "last_finished_at": self._format_datetime(row[7]),
+            "active_site_count": int(row[8] or 0),
+            "active_account_count": int(row[9] or 0),
+            "watermark_job_count": int(row[10] or 0),
             "active_artifact_count": int(storage_row[0] or 0),
             "active_artifact_bytes": int(storage_row[1] or 0),
         }
+
+    def _delivery_breakdown(self, row: Any, *, dimension: str) -> dict[str, object]:
+        return {
+            dimension: str(row[0] or ""),
+            **self._delivery_counts(row, offset=1),
+        }
+
+    def _delivery_counts(self, row: Any, *, offset: int = 0) -> dict[str, object]:
+        started = int(row[offset] or 0)
+        completed = int(row[offset + 1] or 0)
+        acknowledged = int(row[offset + 2] or 0)
+        return self._delivery_counts_from_values(started, completed, acknowledged)
+
+    def _delivery_counts_from_values(
+        self,
+        started: int,
+        completed: int,
+        acknowledged: int,
+    ) -> dict[str, object]:
+        return {
+            "delivery_started_count": started,
+            "delivery_stream_completed_count": completed,
+            "delivery_acknowledged_count": acknowledged,
+            "stream_completion_rate": self._ratio(completed, started),
+            "acknowledgement_rate": self._ratio(acknowledged, completed),
+        }
+
+    def _ratio(self, numerator: int, denominator: int) -> float:
+        if denominator <= 0:
+            return 0.0
+        return round(numerator / denominator, 4)
 
     def _format_summary(self, row: Any) -> dict[str, object]:
         jobs_total = int(row[1] or 0)

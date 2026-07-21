@@ -90,7 +90,10 @@ export function ToastContainer() {
   const { toasts, removeToast } = useContext(ToastContext)!;
 
   return (
-    <div className="fixed top-4 right-4 z-50 space-y-2 max-w-sm">
+    <div
+      className="pointer-events-none fixed inset-x-4 top-16 z-[70] w-auto space-y-2 sm:left-1/2 sm:right-auto sm:w-full sm:max-w-sm sm:-translate-x-1/2"
+      aria-label="Notifications"
+    >
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
       ))}
@@ -138,12 +141,13 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   return (
     <div
       className={cn(
-        'flex items-start gap-3 p-4 rounded-lg border shadow-lg',
+        'pointer-events-auto flex items-start gap-3 rounded-xl border p-4 shadow-lg',
         'animate-slide-in-right',
         style.bg,
         style.border
       )}
-      role="alert"
+      role={toast.type === 'error' || toast.type === 'warning' ? 'alert' : 'status'}
+      aria-live={toast.type === 'error' || toast.type === 'warning' ? 'assertive' : 'polite'}
     >
       <span className={cn('text-xl flex-shrink-0', style.icon)}>{icons[toast.type]}</span>
       <div className="flex-1 min-w-0">

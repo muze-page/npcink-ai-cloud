@@ -1,33 +1,29 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import {
-  getPortalSiteDisplayName,
-  getPortalSiteWordPressUrl,
+  getPortalSiteUrl,
+  getVisiblePortalSites,
+  portalSiteNeedsAttention,
 } from '@/lib/portal-site-display';
-import { cn, formatDate, formatNumber } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 import {
   portalClient,
   type Entitlements,
-  type PortalIdentityProviderStatus,
-  type PortalSiteDiagnostics,
-  type PortalSiteSummaryRecord,
-  type Site,
 } from '@/lib/portal-client';
 import {
-  BackofficeMetricStrip,
-  BackofficePageStack,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
-import { BackofficeTag } from '@/components/backoffice/BackofficeTag';
-import { PortalEmptyState } from '@/components/portal/PortalPageState';
-import { PortalSiteInspectorDrawer } from '@/components/portal/PortalSiteInspectorDrawer';
+  PortalMetricStrip,
+  PortalPageStack,
+  PortalSection,
+  PortalCard,
+} from '@/components/portal/PortalScaffold';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
+import { PortalTag } from '@/components/portal/PortalTag';
+import { PortalSitesWorkspace } from '@/components/portal/PortalSitesWorkspace';
 
 type RestrictionItem = {
   tone: 'warn' | 'info';
@@ -39,14 +35,10 @@ function buildRestrictionItems({
   t,
   siteStatus,
   subscriptionStatus,
-  requestLimit,
-  tokenLimit,
 }: {
   t: (key: string, params?: Record<string, string>, fallback?: string) => string;
   siteStatus: string;
   subscriptionStatus: string;
-  requestLimit: number;
-  tokenLimit: number;
 }): RestrictionItem[] {
   return [
     siteStatus !== 'active'
@@ -71,228 +63,49 @@ function buildRestrictionItems({
           ),
         }
       : null,
-    requestLimit > 0 || tokenLimit > 0
-      ? {
-          tone: 'info',
-          label: t('portal.home.restriction_limit_label', {}, 'Package usage is limited'),
-          detail: t(
-            'portal.home.restriction_limit_desc',
-            {},
-            'Open Usage to see what is left in the current package period.'
-          ),
-        }
-      : null,
   ].filter(Boolean) as RestrictionItem[];
 }
 
 export default function PortalPage() {
   const { t } = useLocale();
   const { session, isLoading, isAuthenticated } = useSession();
-  const [inspectedSiteId, setInspectedSiteId] = useState('');
-  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
-  const [siteSummaryCache, setSiteSummaryCache] = useState<Record<string, PortalSiteSummaryRecord>>({});
-  const [isInspectorLoading, setIsInspectorLoading] = useState(false);
-  const [inspectorError, setInspectorError] = useState('');
-  const [currentSiteDiagnostics, setCurrentSiteDiagnostics] = useState<PortalSiteDiagnostics | null>(null);
-  const [identityProviders, setIdentityProviders] = useState<PortalIdentityProviderStatus[]>([]);
-  const [openTicketCount, setOpenTicketCount] = useState<number | null>(null);
   const [accountEntitlements, setAccountEntitlements] = useState<Entitlements | null>(null);
-  const sessionSiteIdsKey = session?.sites?.map((site) => site.site_id).join('|') || '';
+  const contextSiteId = session?.selected_context?.site.site_id || '';
+  const contextSiteIdRef = useRef(contextSiteId);
+  const accountEntitlementsRequestVersionRef = useRef(0);
 
-  useEffect(() => {
-    if (!isInspectorOpen || !inspectedSiteId || siteSummaryCache[inspectedSiteId]) {
-      return;
-    }
-
-    let isCancelled = false;
-    setIsInspectorLoading(true);
-    setInspectorError('');
-
-    void portalClient
-      .getSiteSummary(inspectedSiteId)
-      .then((response) => {
-        if (isCancelled) {
-          return;
-        }
-        setSiteSummaryCache((current) => ({
-          ...current,
-          [inspectedSiteId]: response.data as PortalSiteSummaryRecord,
-        }));
-      })
-      .catch((error) => {
-        if (isCancelled) {
-          return;
-        }
-        console.error('Failed to load site summary:', error);
-        setInspectorError(
-          t(
-            'portal.home.drawer_load_failed',
-            {},
-            'Failed to load the site summary. Open the full page if you need more detail.'
-          )
-        );
-      })
-      .finally(() => {
-        if (!isCancelled) {
-          setIsInspectorLoading(false);
-        }
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [inspectedSiteId, isInspectorOpen, siteSummaryCache, t]);
-
-  const selectedSiteForContext =
-    session?.sites?.find((site) => site.site_id === session.site_id) || session?.sites?.[0] || null;
-  const selectedSiteForMonitoringId = selectedSiteForContext?.site_id || '';
-
-  useEffect(() => {
-    if (!selectedSiteForMonitoringId) {
-      setCurrentSiteDiagnostics(null);
-      return;
-    }
-
-    let isCancelled = false;
-    setCurrentSiteDiagnostics(null);
-
-    void portalClient
-      .getSiteDiagnostics(selectedSiteForMonitoringId)
-      .then((response) => {
-        if (!isCancelled) {
-          setCurrentSiteDiagnostics(response.data);
-        }
-      })
-      .catch((error) => {
-        if (!isCancelled) {
-          console.error('Failed to load current site diagnostics:', error);
-          setCurrentSiteDiagnostics(null);
-        }
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [selectedSiteForMonitoringId]);
-
-  useEffect(() => {
-    if (!isAuthenticated || !sessionSiteIdsKey || !session?.sites?.length) {
-      return;
-    }
-
-    let isCancelled = false;
-    const siteIds = session.sites
-      .filter((site) => site.status !== 'archived')
-      .slice(0, 12)
-      .map((site) => site.site_id);
-
-    void Promise.allSettled(siteIds.map((siteId) => portalClient.getSiteSummary(siteId))).then((results) => {
-      if (isCancelled) {
-        return;
-      }
-      setSiteSummaryCache((current) => {
-        const next = { ...current };
-        results.forEach((result, index) => {
-          if (result.status === 'fulfilled') {
-            next[siteIds[index]] = result.value.data as PortalSiteSummaryRecord;
-          }
-        });
-        return next;
-      });
-    });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [isAuthenticated, session?.sites, sessionSiteIdsKey]);
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setIdentityProviders([]);
-      return;
-    }
-
-    let isCancelled = false;
-
-    void portalClient
-      .getIdentityProviders()
-      .then((response) => {
-        if (!isCancelled) {
-          setIdentityProviders(response.data?.providers || []);
-        }
-      })
-      .catch((error) => {
-        if (!isCancelled) {
-          console.error('Failed to load identity provider status:', error);
-          setIdentityProviders([]);
-        }
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [isAuthenticated]);
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setOpenTicketCount(null);
-      return;
-    }
-
-    let isCancelled = false;
-
-    void portalClient
-      .listSupportRequests({ limit: 10 })
-      .then((response) => {
-        if (isCancelled) {
-          return;
-        }
-        const summary = response.data?.summary || {};
-        const fallbackTotal = (response.data?.items || []).filter((item) =>
-          item.status === 'open' || item.status === 'in_progress'
-        ).length;
-        setOpenTicketCount(
-          Number(summary.open || 0) + Number(summary.in_progress || 0) || fallbackTotal
-        );
-      })
-      .catch((error) => {
-        if (!isCancelled) {
-          console.error('Failed to load support request summary:', error);
-          setOpenTicketCount(null);
-        }
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [isAuthenticated]);
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setAccountEntitlements(null);
-      return;
-    }
-
-    let isCancelled = false;
+  useLayoutEffect(() => {
+    contextSiteIdRef.current = contextSiteId;
+    const requestVersion = ++accountEntitlementsRequestVersionRef.current;
+    setAccountEntitlements(null);
+    if (!isAuthenticated || !contextSiteId) return;
 
     void portalClient
       .getAccountEntitlements()
       .then((response) => {
-        if (!isCancelled) {
+        if (
+          requestVersion === accountEntitlementsRequestVersionRef.current
+          && contextSiteId === contextSiteIdRef.current
+        ) {
           setAccountEntitlements(response.data);
         }
       })
       .catch((error) => {
-        if (!isCancelled) {
+        if (
+          requestVersion === accountEntitlementsRequestVersionRef.current
+          && contextSiteId === contextSiteIdRef.current
+        ) {
           console.error('Failed to load account entitlements:', error);
           setAccountEntitlements(null);
         }
       });
 
     return () => {
-      isCancelled = true;
+      if (requestVersion === accountEntitlementsRequestVersionRef.current) {
+        accountEntitlementsRequestVersionRef.current += 1;
+      }
     };
-  }, [isAuthenticated]);
+  }, [contextSiteId, isAuthenticated]);
 
   if (isLoading) {
     return (
@@ -319,11 +132,10 @@ export default function PortalPage() {
     );
   }
 
-  const visibleSites = (session.sites || []).filter((site) => site.status !== 'archived');
-  const selectedSite =
-    visibleSites.find((s) => s.site_id === session.site_id) || visibleSites[0] || null;
-  const currentSubscription = session.current_subscription;
-  const selectedSiteWordPressUrl = selectedSite ? getPortalSiteWordPressUrl(selectedSite) : '';
+  const visibleSites = getVisiblePortalSites(session.sites);
+  const selectedSite = session.selected_context?.site || null;
+  const currentSubscription = session.selected_context?.current_subscription || null;
+  const selectedSiteUrl = selectedSite ? getPortalSiteUrl(selectedSite) : '';
   const currentPackageDisplay = resolveCustomerPackageDisplay(t, {
     planId: currentSubscription?.plan_id,
     planVersionId: currentSubscription?.plan_version_id,
@@ -331,19 +143,11 @@ export default function PortalPage() {
     planKind: currentSubscription?.plan_kind,
     coverageState: currentSubscription ? 'covered' : 'uncovered',
   });
-  const requestLimit = Number(session.entitlements?.requests_limit || 0);
-  const tokenLimit = Number(session.entitlements?.tokens_limit || 0);
-  const currentSiteActiveKeyCount =
-    typeof currentSiteDiagnostics?.active_key_count === 'number'
-      ? currentSiteDiagnostics.active_key_count
-      : null;
   const restrictionItems = selectedSite
     ? buildRestrictionItems({
         t,
         siteStatus: selectedSite.status,
         subscriptionStatus: currentSubscription?.status || '',
-        requestLimit,
-        tokenLimit,
       })
     : [
         {
@@ -356,62 +160,15 @@ export default function PortalPage() {
           ),
         },
       ];
-  const inspectedSite = (session.sites || []).find((site) => site.site_id === inspectedSiteId) || null;
-  const inspectedSummary = inspectedSiteId ? siteSummaryCache[inspectedSiteId] || null : null;
-  const inspectorRestrictions = inspectedSite
-    ? buildRestrictionItems({
-        t,
-        siteStatus: inspectedSummary?.site.status || inspectedSite.status,
-        subscriptionStatus: inspectedSummary?.subscription_status || inspectedSummary?.coverage?.status || '',
-        requestLimit: Number(inspectedSummary?.entitlement_snapshot?.requests_limit || 0),
-        tokenLimit: Number(inspectedSummary?.entitlement_snapshot?.tokens_limit || 0),
-      })
-    : [];
-
-  const openInspector = (siteId: string) => {
-    setInspectedSiteId(siteId);
-    setIsInspectorOpen(true);
-  };
-
-  const allSites = session.sites || [];
-  const inspectedIndex = allSites.findIndex((site) => site.site_id === inspectedSiteId);
-  const previousSiteId = inspectedIndex > 0 ? allSites[inspectedIndex - 1]?.site_id || '' : '';
-  const nextSiteId =
-    inspectedIndex >= 0 && inspectedIndex < allSites.length - 1
-      ? allSites[inspectedIndex + 1]?.site_id || ''
-      : '';
-
-  const closeInspector = () => {
-    setIsInspectorOpen(false);
-    setInspectorError('');
-  };
-
-  const restrictedCount = visibleSites.filter((site) => site.status !== 'active' || !getPortalSiteWordPressUrl(site)).length;
-  const clearCount = visibleSites.length - restrictedCount;
-  const missingUrlCount = visibleSites.filter((site) => !getPortalSiteWordPressUrl(site)).length;
-  const sitePreviewLimit = 3;
-  const previewSites = [...visibleSites]
-    .sort((left, right) => {
-      const leftPriority =
-        left.status !== 'active' || !getPortalSiteWordPressUrl(left) ? 0 : 1;
-      const rightPriority =
-        right.status !== 'active' || !getPortalSiteWordPressUrl(right) ? 0 : 1;
-      if (leftPriority !== rightPriority) {
-        return leftPriority - rightPriority;
-      }
-      return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
-    })
-    .slice(0, sitePreviewLimit);
-  const hasHiddenSites = visibleSites.length > previewSites.length;
-  const qqProvider = identityProviders.find((provider) => provider.provider === 'qq') || null;
+  const restrictedCount = visibleSites.filter((site) => portalSiteNeedsAttention(site)).length;
   const hasPackageLabel = Boolean(currentPackageDisplay.display_package_label);
-  const selectedSiteRecordHref = selectedSite ? `/portal/sites/${selectedSite.site_id}` : '/portal/sites';
+  const selectedSiteRecordHref = selectedSite
+    ? `/portal/sites/${encodeURIComponent(selectedSite.site_id)}#service-status`
+    : '/portal#sites';
   const isSelectedSiteConnected =
     Boolean(selectedSite) &&
     selectedSite?.status === 'active' &&
-    Boolean(selectedSiteWordPressUrl) &&
-    currentSiteActiveKeyCount !== null &&
-    currentSiteActiveKeyCount > 0;
+    Boolean(selectedSiteUrl);
   const setupChecklistItems = [
     {
       key: 'site',
@@ -434,19 +191,8 @@ export default function PortalPage() {
       href: '/portal/billing',
       action: t('portal.home.onboarding_package_action', {}, 'View package'),
     },
-    {
-      key: 'qq',
-      done: Boolean(qqProvider?.bound),
-      title: t('portal.home.onboarding_qq_title', {}, 'Bind QQ quick login'),
-      detail: qqProvider?.bound
-        ? t('portal.home.onboarding_qq_ready', {}, 'QQ quick login is bound, so future sign-ins can use QQ directly.')
-        : t('portal.home.onboarding_qq_needed', {}, 'Email remains the primary identity. Bind QQ for easier login.'),
-      href: '/portal/account',
-      action: t('portal.home.onboarding_qq_action', {}, 'Account center'),
-    },
   ];
-  const requiredSetupItems = setupChecklistItems.filter((item) => item.key !== 'qq');
-  const requiredAttentionItems = requiredSetupItems.filter((item) => !item.done);
+  const requiredAttentionItems = setupChecklistItems.filter((item) => !item.done);
   const shouldShowOnboardingChecklist = requiredAttentionItems.length > 0;
   const currentSubscriptionStatusLabel = currentSubscription?.status === 'active' || hasPackageLabel
       ? t('portal.home.package_available_label', {}, 'Available')
@@ -454,27 +200,16 @@ export default function PortalPage() {
   const remainingCredits = Number(accountEntitlements?.quota_summary?.credit?.remaining ?? 0);
   const accountQuotaStatus = String(accountEntitlements?.quota_summary?.status || '');
   const currentServiceStatusToken =
-    visibleSites.length === 0 ||
+    !selectedSite ||
     restrictedCount > 0 ||
     accountQuotaStatus === 'limited' ||
-    (currentSubscription?.status && currentSubscription.status !== 'active') ||
-    currentSiteActiveKeyCount === 0
+    (currentSubscription?.status && currentSubscription.status !== 'active')
       ? 'warning'
       : 'active';
   const currentServiceStatusLabel =
     currentServiceStatusToken === 'active'
       ? t('portal.home.service_status_live', {}, 'Ready')
       : t('portal.home.service_status_attention', {}, 'Needs attention');
-  const activeKeySummaryLabel =
-    currentSiteActiveKeyCount === null
-      ? t('common.loading')
-      : currentSiteActiveKeyCount > 0
-        ? t('portal.home.connection_ready_label', {}, 'Connected')
-        : t('portal.home.connection_needed_label', {}, 'Needs setup');
-  const activeKeySummaryDetail =
-    currentSiteActiveKeyCount !== null && currentSiteActiveKeyCount > 0
-      ? t('portal.home.onboarding_site_ready', {}, 'The WordPress site is connected and can use the service.')
-      : t('portal.home.onboarding_site_needed', {}, 'Open the WordPress plugin to reconnect the site if the address or service connection is not ready.');
   const operationSummaryItems = [
     {
       label: t('portal.home.package_card_label', {}, 'Current package'),
@@ -496,34 +231,15 @@ export default function PortalPage() {
         : t('portal.home.no_sites_empty_desc', {}, 'Open npcink-cloud-addon in WordPress and start the connection there.'),
       size: 'compact' as const,
     },
-    {
-      label: t('portal.nav_support_requests', {}, 'Tickets'),
-      value: openTicketCount ?? t('common.loading'),
-      detail: t('portal.home.open_ticket_detail', {}, 'Open or in-progress support tickets.'),
-      size: 'compact' as const,
-    },
   ];
   const operationFocusItems = restrictionItems;
   const shouldShowFollowUpSection =
     operationFocusItems.length > 0 || shouldShowOnboardingChecklist;
 
   return (
-    <BackofficePageStack>
-      <PortalSiteInspectorDrawer
-        isOpen={isInspectorOpen}
-        onClose={closeInspector}
-        site={inspectedSite}
-        summary={inspectedSummary}
-        isLoading={isInspectorLoading}
-        error={inspectorError}
-        restrictions={inspectorRestrictions}
-        previousSiteId={previousSiteId}
-        nextSiteId={nextSiteId}
-        onNavigateSite={openInspector}
-        t={t}
-      />
+    <PortalPageStack>
       <section className="space-y-5" data-portal-home="operation-overview">
-        <BackofficeSectionPanel className="space-y-5" variant="portal">
+        <PortalSection className="space-y-5" variant="portal">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
               <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -533,7 +249,7 @@ export default function PortalPage() {
                 <h1 className="text-2xl font-semibold text-gray-950 dark:text-white">
                   {t('portal.home.title', {}, 'My service')}
                 </h1>
-                <BackofficeStatusBadge
+                <PortalStatusBadge
                   status={currentServiceStatusToken}
                   label={currentServiceStatusLabel}
                   className="shrink-0 text-[0.68rem]"
@@ -547,12 +263,12 @@ export default function PortalPage() {
             </div>
           </div>
 
-          <BackofficeMetricStrip items={operationSummaryItems} columnsClassName="md:grid-cols-2 xl:grid-cols-4" variant="portal" />
+          <PortalMetricStrip items={operationSummaryItems} columnsClassName="md:grid-cols-3" variant="portal" />
 
           {shouldShowFollowUpSection ? (
             <div className="grid items-start gap-4 xl:grid-cols-[1.1fr_0.9fr]">
               {operationFocusItems.length > 0 ? (
-                <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="current-focus">
+                <PortalCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="current-focus">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -562,9 +278,9 @@ export default function PortalPage() {
                         {t('portal.home.current_status_title', {}, 'Service status')}
                       </h2>
                     </div>
-                    <BackofficeTag tone={currentServiceStatusToken === 'active' ? 'success' : 'warning'}>
+                    <PortalTag tone={currentServiceStatusToken === 'active' ? 'success' : 'warning'}>
                       {currentServiceStatusLabel}
-                    </BackofficeTag>
+                    </PortalTag>
                   </div>
                   <div className="mt-4 space-y-3">
                     {operationFocusItems.slice(0, 3).map((item) => (
@@ -582,11 +298,11 @@ export default function PortalPage() {
                       </div>
                     ))}
                   </div>
-                </BackofficeStackCard>
+                </PortalCard>
               ) : null}
 
               {shouldShowOnboardingChecklist ? (
-                <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="setup-checklist">
+                <PortalCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="setup-checklist">
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -596,9 +312,9 @@ export default function PortalPage() {
                         {t('portal.home.onboarding_title', {}, 'Before you continue')}
                       </h2>
                     </div>
-                    <BackofficeTag tone="warning">
+                    <PortalTag tone="warning">
                       {requiredAttentionItems.length} {t('portal.home.filter_attention_only', {}, 'Needs attention')}
-                    </BackofficeTag>
+                    </PortalTag>
                   </div>
                   <div className="mt-4 divide-y divide-slate-200/80 dark:divide-slate-800">
                     {requiredAttentionItems.map((item, index) => (
@@ -624,146 +340,14 @@ export default function PortalPage() {
                       </Link>
                     ))}
                   </div>
-                </BackofficeStackCard>
+                </PortalCard>
               ) : null}
             </div>
           ) : null}
-        </BackofficeSectionPanel>
+        </PortalSection>
       </section>
 
-      <div className="space-y-5">
-        <BackofficeSectionPanel className="space-y-4" variant="portal">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400">
-                {t('portal.site_register', {}, 'Sites')}
-              </p>
-              <h2 className="mt-1 text-xl font-semibold text-gray-950 dark:text-white">
-                {t('portal.home.my_sites_title', {}, 'My sites')}
-              </h2>
-            </div>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                <BackofficeTag>
-                {previewSites.length} / {visibleSites.length} {t('common.site')}
-                </BackofficeTag>
-                <BackofficeTag tone="warning">
-                  {restrictedCount} {t('portal.home.filter_attention_only', {}, 'Needs attention')}
-                </BackofficeTag>
-                <BackofficeTag tone="success">
-                  {clearCount} {t('portal.home.filter_clear', {}, 'Clear')}
-                </BackofficeTag>
-              </div>
-            </div>
-
-          <div className={cn(
-            'overflow-hidden rounded-[1.4rem] border border-slate-200/80 transition-shadow dark:border-slate-800'
-          )}>
-            <div className="hidden grid-cols-[minmax(0,1.8fr)_120px_240px] gap-4 border-b border-slate-200/80 bg-slate-50/70 px-4 py-3 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:border-slate-800 dark:bg-slate-950/45 dark:text-gray-400 lg:grid">
-              <span>{t('common.site')}</span>
-              <span>{t('portal.home.service_state_label', {}, 'Service status')}</span>
-              <span>{t('portal.home.view_label', {}, 'View')}</span>
-            </div>
-
-            <div className="divide-y divide-slate-200/80 dark:divide-slate-800">
-              {previewSites.length > 0 ? previewSites.map((site) => {
-                const hasAttention = site.status !== 'active' || !getPortalSiteWordPressUrl(site);
-                return (
-                  <div
-                    key={site.site_id}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`${getPortalSiteDisplayName(site)} ${t('common.view', {}, 'View')}`}
-                    onClick={() => openInspector(site.site_id)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        openInspector(site.site_id);
-                      }
-                    }}
-                    className={cn(
-                      'group grid cursor-pointer gap-3 px-4 py-4 transition-all active:translate-y-px lg:grid-cols-[minmax(0,1.8fr)_120px_240px] lg:items-center',
-                      hasAttention
-                          ? 'border-l-4 border-amber-300 bg-amber-50/40 hover:bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/10 dark:hover:bg-amber-950/20'
-                          : 'border-l-4 border-transparent bg-white/80 hover:bg-slate-50/90 dark:bg-slate-950/35 dark:hover:bg-slate-900/60'
-                    )}
-                  >
-                    <div className="min-w-0 text-left">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate font-semibold text-gray-950 dark:text-white">
-                          {getPortalSiteDisplayName(site)}
-                        </p>
-                        {hasAttention ? (
-                          <BackofficeTag tone="warning" className="uppercase tracking-[0.16em]">
-                            {t('portal.home.filter_attention_only', {}, 'Needs attention')}
-                          </BackofficeTag>
-                        ) : null}
-                      </div>
-                      <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                        {getPortalSiteWordPressUrl(site) ||
-                          t('portal.site_url_missing', {}, 'WordPress URL not configured')}
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400 lg:hidden">
-                        <span>{t('portal.home.service_state_label', {}, 'Service status')}: {hasAttention ? t('portal.home.service_status_attention', {}, 'Needs attention') : t('portal.home.risk_level_normal', {}, 'Normal')}</span>
-                        <span>{t('common.connected_on', { date: formatDate(site.created_at) })}</span>
-                      </div>
-                      <p className="mt-2 hidden text-xs text-gray-500 dark:text-gray-400 lg:block">
-                        {t('common.connected_on', { date: formatDate(site.created_at) })}
-                      </p>
-                    </div>
-
-                    <div className="hidden lg:block">
-                      <BackofficeStatusBadge
-                        status={site.status}
-                        label={hasAttention ? t('portal.home.service_status_attention', {}, 'Needs attention') : t('portal.home.risk_level_normal', {}, 'Normal')}
-                        className="text-[0.68rem]"
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 lg:justify-end">
-                      <Link
-                        href={`/portal/sites/${site.site_id}`}
-                        onClick={(event) => event.stopPropagation()}
-                        className="btn btn-secondary btn-sm"
-                      >
-                        {t('portal.home.view_site_record_action', {}, 'View site')}
-                      </Link>
-                    </div>
-                  </div>
-                );
-              }) : (
-                <div className="px-4 py-6">
-                  <PortalEmptyState
-                    title={t('portal.no_sites', {}, 'No sites')}
-                    description={t(
-                      'portal.home.no_sites_empty_desc',
-                      {},
-                      'Open npcink-cloud-addon in WordPress and start the connection there. After binding, this page will show your package, usage, and site status.'
-                    )}
-                    actionLabel={t('portal.nav_sites', {}, 'Sites')}
-                    actionHref="/portal/sites"
-                  />
-                </div>
-              )}
-            </div>
-            {hasHiddenSites ? (
-              <div className="border-t border-slate-200/80 bg-slate-50/60 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/35">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-sm text-gray-600 dark:text-gray-300">
-                    {t(
-                      'portal.home.view_all_sites_desc',
-                      { count: String(visibleSites.length - previewSites.length) },
-                      `There are ${visibleSites.length - previewSites.length} more sites in the full register.`
-                    )}
-                  </p>
-                  <Link href="/portal/sites" className="btn btn-secondary btn-sm">
-                    {t('portal.home.view_all_sites', {}, 'View all sites')}
-                  </Link>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </BackofficeSectionPanel>
-      </div>
-    </BackofficePageStack>
+      <PortalSitesWorkspace />
+    </PortalPageStack>
   );
 }

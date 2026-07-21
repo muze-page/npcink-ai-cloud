@@ -29,15 +29,44 @@ Current repository status is a strong-contraction cleanup baseline:
   have been removed
 - admin surface is bounded to accounts, sites, plans, subscriptions, billing
   inspect, provider ops, runtime diagnostics, audit, and commercial decisions
-- portal surface is bounded to login, session, sites, keys, usage, entitlements,
-  billing, and audit
+- portal surface is bounded to login, session, site connection, usage,
+  entitlements, billing, support, Cloud audit, health, and diagnostics; runtime
+  keys are system-managed through the WordPress addon connection exchange
 - addon projection/repair surfaces are not part of this baseline; they remain
   deferred to a separate proposal with independent review
+
+## Target Refactor Contracts
+
+These documents are the accepted target contracts for the P0-P5 refactor. They
+define the intended destination and acceptance boundaries; they are not evidence
+that implementation is complete. Delivery remains WordPress-first through P5,
+and other CMS adapters are post-P5 validation work.
+
+- [docs/refactor-master-plan-v1.md](docs/refactor-master-plan-v1.md)
+- [docs/decisions/004-wordpress-first-cloud-runtime-refactor.md](docs/decisions/004-wordpress-first-cloud-runtime-refactor.md)
+- [docs/multi-platform-connector-boundary-v1.md](docs/multi-platform-connector-boundary-v1.md)
+- [docs/media-runtime-boundary-v1.md](docs/media-runtime-boundary-v1.md)
+- [docs/cloud-hosted-runtime-profiles-v1.md](docs/cloud-hosted-runtime-profiles-v1.md)
+- [docs/refactor-deletion-inventory-v1.md](docs/refactor-deletion-inventory-v1.md)
+- [docs/p4-portal-admin-surface-inventory-2026-07-16.md](docs/p4-portal-admin-surface-inventory-2026-07-16.md)
+- [docs/decisions/016-fail-closed-portal-admin-service-boundaries.md](docs/decisions/016-fail-closed-portal-admin-service-boundaries.md)
+- [docs/decisions/018-cloud-hosted-runtime-profile-admin-surface.md](docs/decisions/018-cloud-hosted-runtime-profile-admin-surface.md)
+- [docs/decisions/019-dedicated-runtime-data-encryption-domain.md](docs/decisions/019-dedicated-runtime-data-encryption-domain.md)
+- [docs/decisions/020-external-tls-single-bundled-nginx.md](docs/decisions/020-external-tls-single-bundled-nginx.md)
+
+Evidence records (not target-contract completion proof):
+
+- [docs/refactor-baseline-2026-07-14.md](docs/refactor-baseline-2026-07-14.md)
+- [docs/p5-hardening-release-audit-2026-07-17.md](docs/p5-hardening-release-audit-2026-07-17.md)
+- [docs/p5-b1-hosted-profile-contract-cutover-2026-07-17.md](docs/p5-b1-hosted-profile-contract-cutover-2026-07-17.md)
+- [docs/p5-b2-security-hardening-2026-07-17.md](docs/p5-b2-security-hardening-2026-07-17.md)
+- [docs/p5-b4-runtime-load-soak-closeout-2026-07-19.md](docs/p5-b4-runtime-load-soak-closeout-2026-07-19.md)
 
 Operational references:
 
 - [deploy/OPS_PLAYBOOK.md](deploy/OPS_PLAYBOOK.md)
 - [deploy/RELEASE_CHECKLIST.md](deploy/RELEASE_CHECKLIST.md)
+- [docs/portal-commerce-production-development-history-2026-07-11.md](docs/portal-commerce-production-development-history-2026-07-11.md)
 - [deploy/PROJECTION_DRILL_EVIDENCE_2026-04-15.md](deploy/PROJECTION_DRILL_EVIDENCE_2026-04-15.md)
 - [docs/internal-alpha-execution-plan.md](docs/internal-alpha-execution-plan.md)
 - [docs/internal-alpha-operator-checklist.md](docs/internal-alpha-operator-checklist.md)
@@ -57,6 +86,10 @@ Operational references:
 - [docs/cloud-ai-data-handling-standard-v1.md](docs/cloud-ai-data-handling-standard-v1.md)
 - [docs/cloud-production-release-policy-v1.md](docs/cloud-production-release-policy-v1.md)
 - [docs/cloud-content-generation-boundary-v1.md](docs/cloud-content-generation-boundary-v1.md)
+- [docs/cloud-admin-information-architecture-v2.md](docs/cloud-admin-information-architecture-v2.md)
+- [docs/cloud-admin-site-knowledge-development-summary-2026-07-14.md](docs/cloud-admin-site-knowledge-development-summary-2026-07-14.md)
+- [docs/decisions/002-cloud-admin-task-oriented-information-architecture.md](docs/decisions/002-cloud-admin-task-oriented-information-architecture.md)
+- [docs/source-extraction-preview-v1.md](docs/source-extraction-preview-v1.md)
 - [docs/cloud-open-callback-boundary-v1.md](docs/cloud-open-callback-boundary-v1.md)
 - [docs/cloud-bulk-article-run-v1.md](docs/cloud-bulk-article-run-v1.md)
 - [docs/nightly-site-inspection-morning-brief-v1.md](docs/nightly-site-inspection-morning-brief-v1.md)
@@ -66,9 +99,12 @@ Operational references:
 - [docs/site-ops-cloud-analysis-runtime-v1.md](docs/site-ops-cloud-analysis-runtime-v1.md)
 - [docs/writing-assistance-evidence-history-2026-06.md](docs/writing-assistance-evidence-history-2026-06.md)
 - [docs/cloud-production-deployment-history-2026-06-24.md](docs/cloud-production-deployment-history-2026-06-24.md)
+- [docs/alipay-payment-and-portal-entry-hardening-2026-07-11.md](docs/alipay-payment-and-portal-entry-hardening-2026-07-11.md)
 - [docs/ai-provider-env-config-retirement-2026-06-26.md](docs/ai-provider-env-config-retirement-2026-06-26.md)
+- [docs/text-model-provider-integration-decision-2026-07-11.md](docs/text-model-provider-integration-decision-2026-07-11.md)
 - [docs/cloud-runtime-reference-notes-2026-07.md](docs/cloud-runtime-reference-notes-2026-07.md)
 - [docs/wordpress-ai-editor-runtime-closeout-2026-07-07.md](docs/wordpress-ai-editor-runtime-closeout-2026-07-07.md)
+- [docs/wordpress-ai-generation-reference-stage-closeout-2026-07-12.md](docs/wordpress-ai-generation-reference-stage-closeout-2026-07-12.md)
 
 ## Test Entry For Agents
 
@@ -139,10 +175,11 @@ health, and cloud service entitlements, but they must not duplicate plugin
 admin surfaces such as abilities, workflows, MCP, OpenClaw, or other
 feature-control pages.
 
-Model operations admin surfaces (provider connections, model intelligence,
-recognition review, and platform model ops console) have been removed.
-`catalog/platform-models` is retained only as runtime metadata, not as a
-platform model operations console.
+Broad model-intelligence, recognition-review, and platform model-operations
+consoles have been removed. Bounded provider-connection operations and hosted
+runtime-profile configuration remain available to platform admins as Cloud
+runtime configuration. `catalog/platform-models` is retained only as runtime
+metadata, not as a platform model-operations console.
 
 ## Identity Contract
 
@@ -163,6 +200,23 @@ Boundaries:
 
 Permission differences may continue to exist, but they must be expressed as
 bounded actions or capability flags rather than new product identity labels.
+
+Internal identity is frozen separately from those product labels:
+
+- `principals.principal_id` is the single stable Cloud user identity. It is
+  generated by the server as `prn_<uuid4 hex>` and is not changed when a user
+  changes email, binds or unbinds a provider, joins another account, changes
+  sites, or changes package.
+- email and provider subjects are login aliases, not permanent identity keys.
+  Email remains mutable on `principals`; QQ/OpenID/UnionID-style subjects belong
+  only in `identity_provider_bindings`, where they map back to one
+  `principal_id`.
+- `account_id` identifies a commercial account/tenant, while `membership_id`
+  identifies the relationship between a principal and an account. Neither is a
+  user identity.
+- sites are a separate resource dimension. A WordPress `wp_user_id`, when
+  present as site-scoped integration metadata, is only an external reference;
+  Cloud does not own the WordPress user directory or local permission truth.
 
 ## Current Status
 
@@ -201,7 +255,9 @@ Current repository status is:
 - bounded portal auth seam is now landed for:
   - invited `user` email verification-code login
   - cookie-backed `/portal/*` member session
-  - account/site-scoped read-only portal workspace for sites, keys, usage, billing, and audit
+  - account/site-scoped portal workspace for site connection, usage, billing,
+    Cloud audit, health, and diagnostics; signing keys are not a customer
+    self-service surface
 
 Still deferred in the current phase:
 
@@ -398,6 +454,13 @@ docker compose -f docker-compose.prod.yml config >/dev/null
 docker build -t npcink-cloud-prod-check -f Dockerfile .
 ```
 
+For Python dependency changes, also run the blocking locked default and Zilliz
+audit:
+
+```bash
+pnpm run check:python-dependency-audit
+```
+
 ## Approved Feature Base
 
 The next Cloud feature branch should start from the verified standalone Cloud
@@ -445,6 +508,13 @@ pnpm run dev
 `pnpm run dev` starts the local core stack only: `postgres`, `redis`, `api`,
 `frontend`, and `proxy`.
 
+The development Compose wrapper loads `.env` and then `.env.local` for variable
+interpolation, so local values win. Backend services still receive their
+declared env files. The frontend receives only its explicit allowlist, including
+the internal token required by the server-side Admin BFF; Admin, Portal,
+database, provider, service-setting, and runtime-data encryption secrets are
+not injected into it.
+
 Use the worker profiles only when the current task needs them:
 
 ```bash
@@ -461,10 +531,10 @@ Cloud stack after Docker Desktop or the Docker daemon starts again, as long as
 the containers were not intentionally stopped with `docker compose stop` or
 removed with `docker compose down`.
 
-The dev stack services covered by this policy are `postgres`, `redis`, `api`,
+The dev and production restart policy covers `postgres`, `redis`, `api`,
 `frontend`, `proxy`, `worker`, `callback-worker`, and `ops-worker`. The
-production compose file applies the same policy to those services plus
-`otel-collector` and `jaeger`.
+production bundle does not start a second TLS edge, trace collector, or trace
+store.
 
 After changing restart policy or after finding stale exited containers, recreate
 the stack once so existing containers pick up the compose policy:
@@ -496,11 +566,11 @@ and `migrations`, excludes `app/workers/*`, and sets
 `--timeout-graceful-shutdown 5` so a stale in-process background task cannot
 hold reload forever.
 
-If an admin page such as `/admin/ability-models` keeps showing a loading state
+If an admin page such as `/admin/runtime-profiles` keeps showing a loading state
 but has no visible error, first separate auth and API latency:
 
 ```bash
-curl -i http://127.0.0.1:8010/admin/ability-models
+curl -i http://127.0.0.1:8010/admin/runtime-profiles
 docker compose -f docker-compose.dev.yml logs --tail=120 api
 docker compose -f docker-compose.dev.yml logs --tail=120 frontend
 ```
@@ -519,10 +589,9 @@ not treat this as a Cloud runtime routing bug unless the API has restarted and
 the specific endpoint still returns an application error.
 
 Worker-only edits should not reload the API. If `frontend` logs show
-`/api/admin/ability-models/runtime-projection`,
-`/api/admin/ai-resources`, and `/api/admin/wordpress-ai-routing` all taking
-tens of seconds after a worker file edit, confirm the compose command still
-contains `--reload-exclude app/workers/*` and recreate the dev API container:
+`/api/admin/runtime-profiles` taking tens of seconds after a worker file edit,
+confirm the compose command still contains `--reload-exclude app/workers/*`
+and recreate the dev API container:
 
 ```bash
 docker compose -f docker-compose.dev.yml up -d api
@@ -580,6 +649,8 @@ config now fails fast when these are missing:
 - `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is recommended for new production
   deploys so service-setting credentials are not tied to the admin session
   secret.
+- `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET`
+- `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID`
 - `NPCINK_CLOUD_PORTAL_JWT_SECRET`
 - `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST`
 - `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST`
@@ -587,11 +658,16 @@ config now fails fast when these are missing:
 After the first platform-admin login, configure Portal public URL, QQ login,
 and Portal email delivery in `/admin/service-settings`. These service settings
 are stored by Cloud runtime storage and are no longer read from `.env`.
-Secret values saved through `/admin/service-settings` are encrypted with
-`NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` when it is configured. Older rows saved
-before this setting are still readable through the previous runtime secret
-chain, and re-saving the email configuration migrates the SMTP password onto
-the dedicated service-settings secret.
+Secret values saved through `/admin/service-settings` use the active `sse.v1`
+key family. Legacy raw rows are not read through a compatibility chain; they
+must be migrated by the stopped-writer P1-E06 procedure before ordinary
+runtime resumes.
+
+The runtime-data secret and key ID are not ordinary configuration-only rotation
+values. Changing them requires the stopped-writer inventory, backup,
+re-encryption, verification, and matched rollback procedure in
+[`deploy/OPS_PLAYBOOK.md`](deploy/OPS_PLAYBOOK.md). Normal runtime has no old-key
+or raw-ciphertext fallback.
 
 If a development deploy still has Portal public URL, QQ login, or SMTP values
 in `.env`, import the current `NPCINK_CLOUD_*` values once before removing
@@ -790,7 +866,9 @@ The real-site bootstrap path reuses:
 
 - one already provisioned account + site + subscription
 - current usage meter events and billing state for that site
-- existing site keys, unless you explicitly pass `--issue-key`
+- existing site keys; `--issue-key` is host-local only and requires
+  `NPCINK_CLOUD_SECRET` from a protected process environment. The remote
+  `portal:bind:ssh` wrapper intentionally rejects key issuance.
 
 The runtime seed command creates a minimal site + subscription baseline for
 operator smoke, and does not create portal members or portal-facing sample data.
@@ -992,6 +1070,9 @@ Provider execution modes:
 - default: sample mode, no external provider calls
 - configure model provider channels in `/admin/ai-resources`;
   provider keys are stored as DB provider connections, not `.env.local` values
+- the OpenAI provider ceiling defaults to 60 seconds so an explicitly bounded
+  long-form runtime request can complete; each runtime request still supplies
+  its own timeout and shorter tasks remain constrained by the smaller value
 
 Provider integration boundary:
 
@@ -1112,9 +1193,10 @@ Catalog query extras:
 
 Deploy perimeter:
 
-- `docker-compose.prod.yml` now ships a bundled perimeter proxy; only the proxy
-  publishes the public port and the raw `api` container is no longer mapped to
-  the host.
+- production uses `trusted external Edge -> bundled NGINX -> Gunicorn`; the
+  operator-owned Edge terminates public TLS and owns public `80/443`.
+- the bundled NGINX publishes only the loopback deployment port. Neither the
+  exact release bundle nor the raw `api` container publishes public `80/443`.
 - Keep `/internal/*` behind allowlist or private ingress; the bundled proxy only
   forwards those paths for loopback/private callers and does not expose them as
   public routes.
@@ -1122,9 +1204,12 @@ Deploy perimeter:
   `/internal/*`; only `GET /health/live` remains a minimal public liveness
   probe.
 - Keep `/docs` and `/redoc` disabled in production.
-- The bundled proxy adds only the minimum perimeter split and basic rate
-  limiting. TLS termination, source restriction, IP allowlist, WAF, and stronger
-  edge controls still depend on deployment.
+- The bundled proxy owns the Cloud route, media-transfer, rate, connection,
+  timeout, and sanitized-log policy. TLS termination, source restriction, IP
+  allowlist, WAF, and stronger edge controls belong to the external Edge.
+- The external Edge must replace incoming client-controlled forwarded headers.
+  NGINX trusts real-client headers only from the pinned Compose gateway, and
+  Gunicorn trusts forwarded headers only from the pinned NGINX address.
 - `remote-smoke.sh` also verifies `/docs`, `/redoc`, and internal POST fail
   closed without `X-Npcink-Internal-Token`.
 
@@ -1244,7 +1329,6 @@ make bundle
 make deploy-smoke
 make deploy-ssh
 make provider-status
-make env-ssh
 ```
 
 `make deploy-smoke` currently reuses
@@ -1253,14 +1337,15 @@ test asset. This is a temporary test dependency for deploy verification only;
 it does not move control-plane ownership, settings truth, or runtime authorship
 back into the plugin workspace.
 
-Example dev seed:
+Example dev seed (local development only; never reuse this sample secret in a
+deployed environment):
 
 ```bash
 docker compose -f docker-compose.dev.yml run --rm api alembic upgrade head
 docker compose -f docker-compose.dev.yml run --rm api python -m app.dev.seed_runtime \
   --site-id site_smoke \
   --key-id key_default \
-  --secret npcink-cloud-test-secret
+  --secret local-dev-only-change-me
 ```
 
 If cross-arch Docker builds are unstable from your network, you can also export
@@ -1270,6 +1355,10 @@ optional pip mirror args before `make bundle` or `deploy-to-ssh-host.sh`:
 export NPCINK_CLOUD_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 export NPCINK_CLOUD_PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 ```
+
+`deploy/bundle-images.sh` passes these optional values to BuildKit as secret
+mounts. Do not translate them into Docker `--build-arg` values; index URLs can
+contain credentials and build arguments may be retained in image provenance.
 
 With a real API key, `POST /internal/catalog/refresh` plus a valid
 `X-Npcink-Internal-Token`, and
@@ -1357,14 +1446,14 @@ surface:
 - whether `worker`, `callback-worker`, and `ops-worker` are alive
 - whether execution backlog or callback backlog is under pressure
 - whether provider health freshness is stale and which providers are degraded
-- whether OTLP tracing is wired to the collector endpoint
+- whether OTLP tracing is wired to the configured external exporter endpoint
 
-Production-style compose now includes a minimal `otel-collector` sidecar using
-[`deploy/otel-collector.config.yml`](deploy/otel-collector.config.yml).
-By default, `NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT` points at
-`http://otel-collector:4318/v1/traces` and the collector forwards to the
-default Jaeger sink at `NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT=jaeger:4317`.
-`otel-collector debug exporter` no longer counts as release-complete state.
+Production Compose does not bundle an OpenTelemetry Collector or Jaeger.
+Ordinary runtime may leave `NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT` and
+`NPCINK_CLOUD_OTEL_TRACE_QUERY_URL` empty. A formal release must configure both
+against operator-owned observability infrastructure and prove that a fresh
+Cloud trace is queryable. Starting a debug exporter is not release-complete
+evidence.
 
 Formal operator procedures now live in
 [`deploy/OPS_PLAYBOOK.md`](deploy/OPS_PLAYBOOK.md).
@@ -1381,7 +1470,6 @@ pnpm run lint
 pnpm run build
 pnpm run bundle
 pnpm run deploy:ssh -- --ssh-host your-cloud-host
-pnpm run env:ssh -- --ssh-host your-cloud-host
 ```
 
 From the repository root, you can also run:
@@ -1416,16 +1504,12 @@ Bundle contents:
 - `dist/api.tar.gz`
 - `dist/worker.tar.gz`
 
-Remote bootstrap order:
-
-```bash
-tar xzf deploy-bundle.tgz
-bash deploy/remote-load-and-up.sh
-bash deploy/remote-migrate.sh
-bash deploy/remote-baseline-status.sh
-bash deploy/remote-seed-runtime.sh --site-id site_smoke --key-id key_default --secret npcink-cloud-test-secret
-bash deploy/remote-smoke.sh --base-url http://127.0.0.1:8010
-```
+Remote phase helpers are not standalone bootstrap commands. Use
+`deploy/deploy-to-ssh-host.sh`, which freezes the exact bundle and enforces the
+only supported sequence: prepare images, stop/prove public and write services,
+start data services, migrate with the staged image, activate the pointer, then
+start API, workers, and traffic in separate proved batches. Directly invoking
+`remote-load-and-up.sh` without an explicit governed phase is rejected.
 
 `remote-smoke.sh` now expects `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` from the deploy
 env file so it can verify `GET /health/ready`, `/docs`, `/redoc`, and internal
@@ -1442,6 +1526,17 @@ smoke.
 
 Remote SSH deploy from your local machine:
 
+Every full deploy example below requires the signed-smoke HMAC secret in the
+protected process environment. It is intentionally not accepted on argv and
+is not read from `.env.deploy`. In an interactive shell, read it without echo
+before invoking the deploy:
+
+```bash
+IFS= read -r -s NPCINK_CLOUD_SECRET
+printf '\n'
+export NPCINK_CLOUD_SECRET
+```
+
 ```bash
 pnpm run deploy:ssh -- \
   --ssh-host your-cloud-host \
@@ -1449,8 +1544,7 @@ pnpm run deploy:ssh -- \
   --remote-dir /opt/npcink-ai-cloud \
   --env-file .env.deploy \
   --site-id site_smoke \
-  --key-id key_default \
-  --secret npcink-cloud-test-secret
+  --key-id key_default
 ```
 
 To also run the buyer-facing portal verification after the standard runtime smoke,
@@ -1479,11 +1573,13 @@ pnpm run deploy:ssh -- \
   --env-file .env.deploy \
   --site-id site_smoke \
   --key-id key_default \
-  --secret npcink-cloud-test-secret \
   --profile-id text.balanced \
   --prompt-text "anthropic remote smoke request" \
   --expected-provider-id anthropic
 ```
+
+After the deploy command finishes, remove the secret from the interactive
+shell with `unset NPCINK_CLOUD_SECRET`.
 
 Notes:
 
@@ -1521,10 +1617,9 @@ Notes:
 - If remote deploy fails while local Docker checks still pass, suspect
   `.env.deploy`, persisted database drift, release carry-forward behavior, or
   provider reachability before suspecting the local source tree.
-- `env-to-ssh-host.sh` updates the remote release `.env.deploy` in place,
-  carries the same values into the shared `/opt/npcink-ai-cloud/.env.deploy`
-  file, and restarts `api,worker` by default so new provider env takes effect
-  immediately without a full redeploy.
+- Ad-hoc remote env mutation is retired. Supply the protected production env
+  file to `deploy/deploy-to-ssh-host.sh`; configuration is applied only inside
+  the same governed release transaction as exact image activation.
 - Final off-machine deploy evidence still requires a real external host; this
   workspace currently records the active target in
   `deploy/WORKSPACE_TARGET.md`, but SSH user, base URL, and deploy env

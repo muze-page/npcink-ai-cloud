@@ -29,7 +29,7 @@ from app.dev.live_site_identity_provision import (
     DEFAULT_SCOPES,
     DEFAULT_SITE_ID,
     DEFAULT_SITE_NAME,
-    DEFAULT_WORDPRESS_URL,
+    DEFAULT_SITE_URL,
     build_request_plan,
 )
 from app.dev.live_site_preflight import (
@@ -129,7 +129,7 @@ def identity_plan_failures(
     account_id: str,
     site_id: str,
     site_name: str,
-    wordpress_url: str,
+    site_url: str,
     key_label: str,
     scopes: list[str],
 ) -> list[str]:
@@ -138,7 +138,7 @@ def identity_plan_failures(
         "account_id": account_id,
         "site_id": site_id,
         "site_name": site_name,
-        "wordpress_url": wordpress_url,
+        "site_url": site_url,
         "key_label": key_label,
     }
     for field, value in fields.items():
@@ -177,7 +177,7 @@ def build_readiness_report(
     account_id: str,
     site_id: str,
     site_name: str,
-    wordpress_url: str,
+    site_url: str,
     key_label: str,
     scopes: list[str],
     timeout_seconds: int,
@@ -199,7 +199,7 @@ def build_readiness_report(
         account_id=account_id,
         site_id=site_id,
         site_name=site_name,
-        wordpress_url=wordpress_url,
+        site_url=site_url,
         key_label=key_label,
         scopes=scopes,
     )
@@ -207,7 +207,7 @@ def build_readiness_report(
         account_id=account_id,
         site_id=site_id,
         site_name=site_name,
-        wordpress_url=wordpress_url,
+        site_url=site_url,
         key_label=key_label,
         scopes=scopes,
         idempotency_prefix="npcink-live-readiness",
@@ -261,7 +261,7 @@ def build_readiness_report(
             "account_id": account_id,
             "site_id": site_id,
             "site_name": site_name,
-            "wordpress_url": wordpress_url,
+            "site_url": site_url,
             "key_label": key_label,
             "scopes": scopes,
             "request_paths": [item.path for item in request_plan],
@@ -398,7 +398,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
     parser.add_argument("--site-id", default=DEFAULT_SITE_ID)
     parser.add_argument("--site-name", default=DEFAULT_SITE_NAME)
-    parser.add_argument("--wordpress-url", default=DEFAULT_WORDPRESS_URL)
+    parser.add_argument("--site-url", default=DEFAULT_SITE_URL)
     parser.add_argument("--key-label", default=DEFAULT_KEY_LABEL)
     parser.add_argument("--scopes", default=",".join(DEFAULT_SCOPES))
     parser.add_argument("--timeout-seconds", type=int, default=20)
@@ -436,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
         account_id=args.account_id,
         site_id=args.site_id,
         site_name=args.site_name,
-        wordpress_url=args.wordpress_url,
+        site_url=args.site_url,
         key_label=args.key_label,
         scopes=parse_scopes(args.scopes),
         timeout_seconds=args.timeout_seconds,

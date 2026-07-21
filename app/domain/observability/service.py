@@ -59,10 +59,9 @@ class ObservabilityService:
                 "otlp_configured": bool(
                     str(self.settings.otel_exporter_otlp_endpoint or "").strip()
                 ),
-                "trace_sink_otlp_endpoint": str(self.settings.otel_trace_sink_otlp_endpoint or ""),
-                "trace_sink_query_url": str(self.settings.otel_trace_query_url or ""),
-                "trace_sink_configured": bool(
-                    str(self.settings.otel_trace_sink_otlp_endpoint or "").strip()
+                "trace_query_url": str(self.settings.otel_trace_query_url or ""),
+                "trace_query_configured": bool(
+                    str(self.settings.otel_trace_query_url or "").strip()
                 ),
             },
             "workers": workers,
