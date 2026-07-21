@@ -643,7 +643,11 @@ def _runtime_network_contract_environment(
     managed_root = state_file.parents[2]
     release = managed_root / state_file.parent.name
     env_file = state_file.parent / "env.deploy"
-    environment = os.environ.copy()
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("NPCINK_CLOUD_")
+    }
     environment.update(
         {
             "PATH": f"{tmp_path / 'bin'}{os.pathsep}{environment['PATH']}",
@@ -664,6 +668,43 @@ def _runtime_network_contract_environment(
         }
     )
     return environment
+
+
+def test_runtime_network_contract_environment_drops_inherited_cloud_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NPCINK_CLOUD_BASE_URL", "http://unsafe-local.example")
+    monkeypatch.setenv(
+        "NPCINK_CLOUD_DATABASE_URL", "postgresql://inherited-secret.example/db"
+    )
+    state_file = (
+        tmp_path
+        / "managed"
+        / ".release-state"
+        / "release-network-contract"
+        / "runtime-network.env"
+    )
+
+    environment = _runtime_network_contract_environment(
+        tmp_path,
+        state_file,
+        subnet="172.28.0.0/24",
+        gateway="172.28.0.1",
+        endpoints=[],
+    )
+
+    assert "NPCINK_CLOUD_BASE_URL" not in environment
+    assert "NPCINK_CLOUD_DATABASE_URL" not in environment
+    assert {key for key in environment if key.startswith("NPCINK_CLOUD_")} == {
+        "NPCINK_CLOUD_BACKEND_ENV_FILE",
+        "NPCINK_CLOUD_COMPOSE_FILE",
+        "NPCINK_CLOUD_DEPLOY_LOCK_OWNER",
+        "NPCINK_CLOUD_ENV_FILE",
+        "NPCINK_CLOUD_LOAD_MODE",
+        "NPCINK_CLOUD_RELEASE_TOOL_PYTHON",
+        "NPCINK_CLOUD_ROLLBACK_IMAGE_MAP",
+        "NPCINK_CLOUD_ROLLBACK_TAG_SUFFIX",
+    }
 
 
 @pytest.mark.parametrize(

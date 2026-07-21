@@ -46,6 +46,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: development
       args:
         PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-api:dev
@@ -88,6 +89,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: development
       args:
         PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-worker:dev
@@ -118,6 +120,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: development
       args:
         PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-callback-worker:dev
@@ -146,6 +149,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: development
       args:
         PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-ops-worker:dev

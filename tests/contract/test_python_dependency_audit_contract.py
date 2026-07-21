@@ -177,6 +177,32 @@ def test_dockerfile_locks_supported_package_extras_and_rejects_unknown_values() 
     assert "exit 64" in dockerfile
 
 
+def test_runtime_image_installs_shell_contract_tools_only_for_dev_package_extras() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    runtime_stage, development_and_production = dockerfile.rsplit(
+        "FROM python:3.14-alpine@sha256:", maxsplit=1
+    )[1].split("FROM runtime AS development", maxsplit=1)
+    development_stage, production_stage = development_and_production.split(
+        "FROM runtime AS production", maxsplit=1
+    )
+    dev_branch = re.search(
+        r'"\[dev\]"\|"\[dev,zilliz\]"\)(?P<body>.*?) ;;',
+        development_stage,
+        re.DOTALL,
+    )
+    development_compose = (ROOT / "docker-compose.dev.yml").read_text()
+
+    assert dev_branch is not None
+    package_install = "apk add --no-cache bash coreutils curl git openssl"
+    assert package_install in dev_branch.group("body")
+    assert development_stage.count(package_install) == 1
+    assert package_install not in runtime_stage
+    assert package_install not in production_stage
+    assert production_stage.strip() == ""
+    assert development_compose.count("target: development") == 4
+    assert development_compose.count('PACKAGE_EXTRAS: "[dev,zilliz]"') == 4
+
+
 def test_production_lock_verifier_compares_the_complete_distribution_set() -> None:
     verifier = (ROOT / "scripts" / "verify-production-python-lock.py").read_text()
 

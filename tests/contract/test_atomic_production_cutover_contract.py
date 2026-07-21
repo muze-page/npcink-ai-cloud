@@ -468,20 +468,23 @@ fi
 
 
 def _fake_linux_file_commands(fake_bin: Path) -> None:
+    real_stat = shutil.which("stat")
+    assert real_stat is not None
+    quoted_real_stat = shlex.quote(real_stat)
     stat = r"""#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = "-c" ] && [ "${2:-}" = "%a" ]; then
-    if /usr/bin/stat -c %a "$3" >/dev/null 2>&1; then
-        exec /usr/bin/stat -c %a "$3"
+    if __REAL_STAT__ -c %a "$3" >/dev/null 2>&1; then
+        exec __REAL_STAT__ -c %a "$3"
     fi
-    exec /usr/bin/stat -f %Lp "$3"
+    exec __REAL_STAT__ -f %Lp "$3"
 fi
 if [ "${1:-}" = "-c" ] && [ "${2:-}" = "%u" ]; then
     printf '0\n'
     exit 0
 fi
-exec /usr/bin/stat "$@"
-"""
+exec __REAL_STAT__ "$@"
+""".replace("__REAL_STAT__", quoted_real_stat)
     identity = r"""#!/usr/bin/env bash
 set -euo pipefail
 [ "${1:-}" = "-u" ] || exit 2

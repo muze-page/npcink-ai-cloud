@@ -95,7 +95,7 @@ RUN --mount=type=secret,id=pip_index_url,required=false \
         --uv-version "${UV_VERSION}" \
         --write-manifest /tmp/production-python-lock.json
 
-FROM python:3.14-alpine@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92
+FROM python:3.14-alpine@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92 AS runtime
 
 ARG PACKAGE_EXTRAS=
 
@@ -144,3 +144,23 @@ RUN PYTHONPATH=/app python scripts/verify-production-python-lock.py \
 USER app
 
 CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM runtime AS development
+
+ARG PACKAGE_EXTRAS=
+
+USER root
+
+# Shell and release commands below are development contract-test tooling.
+# Production images remain on `runtime` and never inherit this package layer.
+RUN set -eu; \
+    case "${PACKAGE_EXTRAS}" in \
+        "[dev]"|"[dev,zilliz]") \
+            apk add --no-cache bash coreutils curl git openssl; \
+            ;; \
+        *) echo "The development image target requires [dev] or [dev,zilliz]." >&2; exit 64 ;; \
+    esac
+
+USER app
+
+FROM runtime AS production
