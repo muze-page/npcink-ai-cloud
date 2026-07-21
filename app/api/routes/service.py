@@ -398,7 +398,8 @@ class ServiceSettingsEmailPreviewPayload(BaseModel):
 
 
 class ModelReferenceSyncPayload(BaseModel):
-    source_url: str = Field(default="", max_length=500)
+    model_config = ConfigDict(extra="forbid")
+
     payload: dict[str, Any] | None = None
 
 
@@ -4508,7 +4509,6 @@ async def sync_admin_model_references(
     try:
         result = ModelReferenceService(services.settings.database_url).sync_models_dev(
             payload=payload.payload,
-            source_url=payload.source_url,
         )
     except ModelReferenceError as error:
         return JSONResponse(

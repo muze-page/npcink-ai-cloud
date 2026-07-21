@@ -67,6 +67,7 @@ from app.domain.hosted_model_defaults import (
     AUDIO_NARRATION_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
 )
+from app.domain.model_references import MODELS_DEV_API_URL
 from app.domain.provider_connections.service import ProviderConnectionAdminService
 from app.domain.runtime.service import RuntimeService
 from app.domain.site_knowledge import vector_profile as vector_profile_module
@@ -2202,6 +2203,83 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
         )
         assert row is not None
         assert row.context_window == 256000
+
+
+def test_admin_model_references_sync_rejects_caller_controlled_source_url_before_http(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    class UnexpectedHttpClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("caller-controlled source URL reached the HTTP client")
+
+    monkeypatch.setattr("app.domain.model_references.httpx.Client", UnexpectedHttpClient)
+
+    response = client.post(
+        "/internal/service/admin/model-references/sync",
+        headers=build_internal_headers(idempotency_key="model-references-reject-source-url"),
+        json={"source_url": "http://127.0.0.1:8000/internal/service/observability/summary"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"][0]["type"] == "extra_forbidden"
+
+
+def test_admin_model_references_sync_fetches_only_fixed_models_dev_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client = _build_client(tmp_path)
+    requested_urls: list[str] = []
+
+    class FixedSourceHttpClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> FixedSourceHttpClient:
+            return self
+
+        def __exit__(
+            self,
+            _exc_type: object,
+            _exc_value: object,
+            _traceback: object,
+        ) -> None:
+            return None
+
+        def get(self, source_url: str) -> httpx.Response:
+            requested_urls.append(source_url)
+            return httpx.Response(
+                200,
+                request=httpx.Request("GET", source_url),
+                json={
+                    "providers": {
+                        "openai": {
+                            "models": {
+                                "gpt-fixed-source": {
+                                    "id": "gpt-fixed-source",
+                                    "name": "GPT Fixed Source",
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+
+    monkeypatch.setattr("app.domain.model_references.httpx.Client", FixedSourceHttpClient)
+
+    response = client.post(
+        "/internal/service/admin/model-references/sync",
+        headers=build_internal_headers(idempotency_key="model-references-fixed-source"),
+        json={},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["model_count"] == 1
+    assert response.json()["data"]["source_url"] == MODELS_DEV_API_URL
+    assert requested_urls == [MODELS_DEV_API_URL]
 
 
 def test_admin_ai_resources_lists_only_added_capability_provider_connections(
