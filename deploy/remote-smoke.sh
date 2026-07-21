@@ -109,15 +109,45 @@ if [ -z "${SECRET}" ]; then
 	fail "NPCINK_CLOUD_SECRET is required for signed runtime smoke"
 fi
 
+OBSERVABILITY_CADENCE_WAIT_ATTEMPTS="${NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_ATTEMPTS:-8}"
+OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS="${NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS:-5}"
+OBSERVABILITY_CADENCE_CONNECT_TIMEOUT_SECONDS=3
+OBSERVABILITY_CADENCE_MAX_TIME_SECONDS=10
+case "${OBSERVABILITY_CADENCE_WAIT_ATTEMPTS}" in
+	[1-9]|1[0-9]|20)
+		;;
+	*)
+		fail "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_ATTEMPTS must be a canonical integer between 1 and 20"
+		;;
+esac
+case "${OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS}" in
+	[0-9]|10)
+		;;
+	*)
+		fail "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS must be a canonical integer between 0 and 10"
+		;;
+esac
+OBSERVABILITY_CADENCE_WAIT_WINDOW_SECONDS="$((
+	(OBSERVABILITY_CADENCE_WAIT_ATTEMPTS - 1) * OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS
+))"
+OBSERVABILITY_CADENCE_WALL_CLOCK_LIMIT_SECONDS="$((
+	OBSERVABILITY_CADENCE_WAIT_ATTEMPTS * OBSERVABILITY_CADENCE_MAX_TIME_SECONDS +
+		OBSERVABILITY_CADENCE_WAIT_WINDOW_SECONDS
+))"
+if [ "${NPCINK_CLOUD_ENVIRONMENT:-}" != "test" ] && \
+	[ "${OBSERVABILITY_CADENCE_WAIT_WINDOW_SECONDS}" -lt 35 ]; then
+	fail "Observability cadence wait window must cover at least 35 seconds outside test environments"
+fi
+
 json_read_path() {
 	local json_payload="$1"
 	local json_path="$2"
-	JSON_PAYLOAD="${json_payload}" JSON_PATH="${json_path}" python3 - <<'PY'
+	printf '%s' "${json_payload}" | JSON_PATH="${json_path}" python3 -c '
 import json
 import os
 import sys
 
-payload = os.environ.get("JSON_PAYLOAD", "")
+payload = sys.stdin.read()
 path = os.environ.get("JSON_PATH", "")
 
 try:
@@ -141,7 +171,7 @@ elif isinstance(current, (dict, list)):
     print(json.dumps(current, ensure_ascii=True, separators=(",", ":")))
 else:
     print(str(current))
-PY
+'
 }
 
 assert_status() {
@@ -187,6 +217,98 @@ assert_body_contains() {
 	if ! printf '%s' "${body}" | grep -Fq "${needle}"; then
 		fail "${message} (missing '${needle}')"
 	fi
+}
+
+print_cadence_wait_diagnostics() {
+	local json_payload="$1"
+	printf '%s' "${json_payload}" | python3 -c '
+import json
+import sys
+
+payload = sys.stdin.read()
+try:
+    data = json.loads(payload)
+except json.JSONDecodeError:
+    raise SystemExit(0)
+
+if not isinstance(data, dict):
+    raise SystemExit(0)
+data_value = data.get("data")
+if not isinstance(data_value, dict):
+    raise SystemExit(0)
+cadence = data_value.get("cadence")
+if not isinstance(cadence, dict):
+    raise SystemExit(0)
+items = cadence.get("items", [])
+if not isinstance(items, list):
+    raise SystemExit(0)
+
+task_id_values = {
+    "retention_cleanup",
+    "plugin_observability_cleanup",
+    "usage_rollup",
+    "router_diagnostics_summary",
+    "latency_probe_summary",
+    "alert_provider_degradation",
+    "provider_health_scan",
+    "artifact_cleanup",
+    "artifact_inventory_reconciliation",
+    "payment_order_expiration",
+}
+freshness_values = {"attention", "stale", "missing"}
+last_outcome_values = {"succeeded", "error"}
+
+
+def safe_task_id(value):
+    if isinstance(value, str) and value in task_id_values:
+        return value
+    return "unknown"
+
+
+def safe_enum(value, allowed_values):
+    if isinstance(value, str) and value in allowed_values:
+        return value
+    return "unknown"
+
+
+def safe_non_negative_integer(value):
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return -1
+
+
+diagnostics = []
+for item in items:
+    if not isinstance(item, dict) or item.get("freshness") == "fresh":
+        continue
+    diagnostics.append(
+        {
+            "task_id": safe_task_id(item.get("task_id")),
+            "freshness": safe_enum(item.get("freshness"), freshness_values),
+            "age_seconds": safe_non_negative_integer(item.get("age_seconds")),
+            "interval_seconds": safe_non_negative_integer(
+                item.get("interval_seconds")
+            ),
+            "last_outcome": safe_enum(
+                item.get("last_outcome"), last_outcome_values
+            ),
+        }
+    )
+    if len(diagnostics) >= 10:
+        break
+
+for diagnostic in sorted(diagnostics, key=lambda item: str(item.get("task_id") or "")):
+    print(
+        "cadence_diagnostic="
+        + json.dumps(
+            diagnostic,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+'
 }
 
 build_traceparent() {
@@ -270,11 +392,13 @@ cleanup_tmp_dir() {
 trap cleanup_tmp_dir EXIT
 chmod 0700 "${TMP_DIR}"
 
-http_request() {
-	local method="$1"
-	local url="$2"
-	local body="${3:-}"
-	shift 3
+_http_request() {
+	local connect_timeout="$1"
+	local max_time="$2"
+	local method="$3"
+	local url="$4"
+	local body="${5:-}"
+	shift 5
 
 	local request_id="${RANDOM:-0}-$$"
 	local tmp_body="${TMP_DIR}/response-${request_id}.txt"
@@ -286,9 +410,14 @@ http_request() {
 		-o "${tmp_body}"
 		-w "%{http_code}"
 		-X "${method}"
-		"${url}"
-		--header "@${request_headers}"
 	)
+	if [ -n "${connect_timeout}" ]; then
+		curl_args+=(--connect-timeout "${connect_timeout}")
+	fi
+	if [ -n "${max_time}" ]; then
+		curl_args+=(--max-time "${max_time}")
+	fi
+	curl_args+=("${url}" --header "@${request_headers}")
 	local header=""
 	(
 		umask 077
@@ -318,6 +447,20 @@ http_request() {
 	if ! rm -f -- "${tmp_body}" "${request_headers}" "${request_body}"; then
 		fail "Remote smoke request-file cleanup failed"
 	fi
+}
+
+http_request() {
+	_http_request "" "" "$@"
+}
+
+observability_summary_request() {
+	_http_request \
+		"${OBSERVABILITY_CADENCE_CONNECT_TIMEOUT_SECONDS}" \
+		"${OBSERVABILITY_CADENCE_MAX_TIME_SECONDS}" \
+		"GET" \
+		"${BASE_URL%/}/internal/service/observability/summary" \
+		"" \
+		"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 }
 
 signed_request() {
@@ -425,8 +568,35 @@ done
 assert_status "${HTTP_STATUS}" "200" "health/operational-ready with internal token should succeed"
 assert_json_non_empty "${HTTP_BODY}" "data.required_workers" "operational readiness should expose required workers"
 
-http_request "GET" "${BASE_URL%/}/internal/service/observability/summary" "" \
-	"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
+OBSERVABILITY_CADENCE_FRESH=0
+for ((attempt = 1; attempt <= OBSERVABILITY_CADENCE_WAIT_ATTEMPTS; attempt++)); do
+	observability_summary_request
+	assert_status "${HTTP_STATUS}" "200" "observability summary with internal token should succeed"
+	if ! CADENCE_NON_FRESH_TOTAL="$(
+		json_read_path "${HTTP_BODY}" "data.cadence.totals.non_fresh_total"
+	)"; then
+		fail "observability summary should expose cadence non-fresh total"
+	fi
+	case "${CADENCE_NON_FRESH_TOTAL}" in
+		''|*[!0-9]*)
+			fail "observability cadence non-fresh total must be a non-negative integer"
+			;;
+	esac
+	if [ "${CADENCE_NON_FRESH_TOTAL}" = "0" ]; then
+		OBSERVABILITY_CADENCE_FRESH=1
+		break
+	fi
+	if [ "${attempt}" -lt "${OBSERVABILITY_CADENCE_WAIT_ATTEMPTS}" ]; then
+		sleep "${OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS}"
+	fi
+done
+if [ "${OBSERVABILITY_CADENCE_FRESH}" -ne 1 ]; then
+	print_cadence_wait_diagnostics "${HTTP_BODY}"
+	fail "observability cadence did not become fresh before the bounded wait expired (wall-clock ceiling ${OBSERVABILITY_CADENCE_WALL_CLOCK_LIMIT_SECONDS}s)"
+fi
+
+# Revalidate every requirement against the same final response that proved
+# aggregate cadence freshness. A prior non-fresh response is never accepted.
 assert_status "${HTTP_STATUS}" "200" "observability summary with internal token should succeed"
 assert_json_equals "${HTTP_BODY}" "data.workers.totals.missing_total" "0" "observability summary should not report missing workers"
 assert_json_equals "${HTTP_BODY}" "data.cadence.totals.non_fresh_total" "0" "observability summary should not report non-fresh cadence tasks"

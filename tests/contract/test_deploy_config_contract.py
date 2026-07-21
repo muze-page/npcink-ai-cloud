@@ -1108,6 +1108,84 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert 'NPCINK_CLOUD_HMAC_SECRET="${SECRET}" python3 -c' in remote_smoke_script
     assert 'os.environ.pop("NPCINK_CLOUD_HMAC_SECRET", "")' in remote_smoke_script
     assert "max_retries" not in remote_smoke_script
+    assert (
+        'NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_ATTEMPTS:-8'
+        in remote_smoke_script
+    )
+    assert (
+        'NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS:-5'
+        in remote_smoke_script
+    )
+    assert "OBSERVABILITY_CADENCE_CONNECT_TIMEOUT_SECONDS=3" in remote_smoke_script
+    assert "OBSERVABILITY_CADENCE_MAX_TIME_SECONDS=10" in remote_smoke_script
+    assert "OBSERVABILITY_CADENCE_WAIT_WINDOW_SECONDS" in remote_smoke_script
+    assert "OBSERVABILITY_CADENCE_WALL_CLOCK_LIMIT_SECONDS" in remote_smoke_script
+    assert '"${OBSERVABILITY_CADENCE_WAIT_WINDOW_SECONDS}" -lt 35' in remote_smoke_script
+    assert "canonical integer between 1 and 20" in remote_smoke_script
+    assert "canonical integer between 0 and 10" in remote_smoke_script
+    assert "print_cadence_wait_diagnostics" in remote_smoke_script
+    diagnostics_block = remote_smoke_script.split(
+        "print_cadence_wait_diagnostics() {", 1
+    )[1].split("build_traceparent() {", 1)[0]
+    for allowed_diagnostic_field in (
+        "task_id",
+        "freshness",
+        "age_seconds",
+        "interval_seconds",
+        "last_outcome",
+    ):
+        assert allowed_diagnostic_field in diagnostics_block
+    for cadence_task_id in (
+        "retention_cleanup",
+        "plugin_observability_cleanup",
+        "usage_rollup",
+        "router_diagnostics_summary",
+        "latency_probe_summary",
+        "alert_provider_degradation",
+        "provider_health_scan",
+        "artifact_cleanup",
+        "artifact_inventory_reconciliation",
+        "payment_order_expiration",
+    ):
+        assert f'"{cadence_task_id}"' in diagnostics_block
+    assert "safe_task_id_pattern" not in diagnostics_block
+    assert 'freshness_values = {"attention", "stale", "missing"}' in diagnostics_block
+    assert 'last_outcome_values = {"succeeded", "error"}' in diagnostics_block
+    assert 'return "unknown"' in diagnostics_block
+    assert "return -1" in diagnostics_block
+    assert "if len(diagnostics) >= 10" in diagnostics_block
+    assert "payload = sys.stdin.read()" in diagnostics_block
+    assert remote_smoke_script.count("payload = sys.stdin.read()") >= 2
+    assert "JSON_PAYLOAD" not in remote_smoke_script
+    assert 'item.get("payload")' not in diagnostics_block
+    assert 'item.get("last_error_message")' not in diagnostics_block
+    plain_http_request_block = remote_smoke_script.split("\nhttp_request() {", 1)[
+        1
+    ].split("\nobservability_summary_request() {", 1)[0]
+    assert '_http_request "" "" "$@"' in plain_http_request_block
+    observability_request_block = remote_smoke_script.split(
+        "\nobservability_summary_request() {", 1
+    )[1].split("\nsigned_request() {", 1)[0]
+    assert "OBSERVABILITY_CADENCE_CONNECT_TIMEOUT_SECONDS" in (
+        observability_request_block
+    )
+    assert "OBSERVABILITY_CADENCE_MAX_TIME_SECONDS" in observability_request_block
+    final_response_marker = remote_smoke_script.index(
+        "# Revalidate every requirement against the same final response"
+    )
+    assert remote_smoke_script.index(
+        'assert_status "${HTTP_STATUS}" "200"', final_response_marker
+    ) < remote_smoke_script.index(
+        'data.workers.totals.missing_total', final_response_marker
+    )
+    assert remote_smoke_script.index(
+        'data.cadence.totals.non_fresh_total', final_response_marker
+    ) < remote_smoke_script.index('data.providers.freshness', final_response_marker)
+    assert remote_smoke_script.index(
+        'data.runtime.summary.callback.pressure_state', final_response_marker
+    ) < remote_smoke_script.index(
+        'data.tracing.otlp_configured', final_response_marker
+    )
     assert "/internal/service/observability/summary" in secret_rotation_script
     assert not (_cloud_root() / "deploy" / "env-to-ssh-host.sh").exists()
     assert not (_cloud_root() / "deploy" / "remote-env-upsert.sh").exists()

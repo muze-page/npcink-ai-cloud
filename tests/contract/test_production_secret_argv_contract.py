@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -104,21 +106,86 @@ elif path == "/internal/catalog/refresh":
 elif path == "/health/operational-ready":
     body = {"status": "ok", "data": {"required_workers": ["runtime_queue"]}}
 elif path == "/internal/service/observability/summary":
+    observability_failure_mode = os.environ.get("OBSERVABILITY_FAILURE_MODE", "")
+    if observability_failure_mode == "transport_timeout":
+        raise SystemExit(28)
+    sequence = [
+        int(value)
+        for value in os.environ.get("OBSERVABILITY_CADENCE_SEQUENCE", "0").split(",")
+    ]
+    state_value = 0
+    state_location = os.environ.get("OBSERVABILITY_CADENCE_STATE_PATH", "")
+    if state_location:
+        observability_state = Path(state_location)
+        if observability_state.exists():
+            state_value = int(observability_state.read_text(encoding="utf-8") or "0")
+        observability_state.write_text(str(state_value + 1), encoding="utf-8")
+    non_fresh_total = sequence[min(state_value, len(sequence) - 1)]
+    is_fresh = non_fresh_total == 0
+    diagnostic_secret = os.environ.get("OBSERVABILITY_DIAGNOSTIC_SECRET", "")
+    malicious_diagnostics = (
+        os.environ.get("OBSERVABILITY_MALICIOUS_DIAGNOSTICS", "") == "1"
+    )
+    diagnostic_item = {
+        "task_id": (
+            diagnostic_secret
+            if malicious_diagnostics
+            else "payment_order_expiration"
+        ),
+        "freshness": (
+            diagnostic_secret
+            if malicious_diagnostics
+            else ("fresh" if is_fresh else "attention")
+        ),
+        "age_seconds": (
+            diagnostic_secret
+            if malicious_diagnostics
+            else (0 if is_fresh else 61)
+        ),
+        "interval_seconds": True if malicious_diagnostics else 60,
+        "last_outcome": (
+            diagnostic_secret if malicious_diagnostics else "succeeded"
+        ),
+        "last_error_message": diagnostic_secret,
+        "payload": {"private": diagnostic_secret},
+    }
     body = {
         "status": "ok",
         "data": {
-            "workers": {"totals": {"missing_total": 0}},
-            "cadence": {"totals": {"tasks_total": 1, "non_fresh_total": 0}},
-            "providers": {"freshness": "fresh"},
-            "runtime": {"summary": {"callback": {"pressure_state": "healthy"}}},
+            "workers": {"totals": {"missing_total": 0 if is_fresh else 9}},
+            "cadence": {
+                "totals": {
+                    "tasks_total": 1,
+                    "non_fresh_total": non_fresh_total,
+                },
+                "items": [diagnostic_item] * (11 if malicious_diagnostics else 1),
+            },
+            "providers": {"freshness": "fresh" if is_fresh else "stale"},
+            "runtime": {
+                "summary": {
+                    "callback": {
+                        "pressure_state": "healthy" if is_fresh else "critical"
+                    }
+                }
+            },
             "tracing": {
-                "otlp_configured": True,
+                "otlp_configured": is_fresh,
                 "otlp_endpoint": "https://otel.example.test",
-                "trace_query_configured": True,
+                "trace_query_configured": is_fresh,
                 "trace_query_url": "https://trace.example.test",
             },
         },
     }
+    if observability_failure_mode == "http_non_200":
+        status = "503"
+    elif observability_failure_mode == "malformed_json":
+        body = "{"
+    elif observability_failure_mode == "missing_field":
+        del body["data"]["cadence"]["totals"]["non_fresh_total"]
+    elif observability_failure_mode == "wrong_type":
+        body["data"]["cadence"]["totals"]["non_fresh_total"] = {
+            "unexpected": True
+        }
 elif path == "/v1/catalog/models":
     body = {"status": "ok", "data": {"items": [{"id": "model"}]}}
 elif path == "/v1/runtime/execute":
@@ -546,6 +613,377 @@ exec /bin/bash "$@"
     assert "remote-internal-token-sentinel" not in remote_evidence
     assert "remote-runtime-secret-sentinel" not in remote_evidence
     assert "X-Npcink-Signature:" not in curl_log.read_text(encoding="utf-8")
+    assert list(temp_root.iterdir()) == []
+
+
+def test_remote_smoke_waits_for_final_fresh_observability_response(
+    tmp_path: Path,
+) -> None:
+    fixture = _copy_fixture(
+        tmp_path,
+        "deploy/common.sh",
+        "deploy/remote-smoke.sh",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _install_fake_curl(fake_bin)
+    curl_log = tmp_path / "curl.log"
+    observability_state = tmp_path / "observability-state"
+    temp_root = tmp_path / "request-tmp"
+    temp_root.mkdir()
+    diagnostic_secret = "observability-private-payload-sentinel"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
+            "TMPDIR": str(temp_root),
+            "CURL_ARGV_LOG": str(curl_log),
+            "CURL_STATE_PATH": str(tmp_path / "curl-state"),
+            "OBSERVABILITY_CADENCE_SEQUENCE": "1,0",
+            "OBSERVABILITY_CADENCE_STATE_PATH": str(observability_state),
+            "OBSERVABILITY_DIAGNOSTIC_SECRET": diagnostic_secret,
+            "NPCINK_CLOUD_ENVIRONMENT": "test",
+            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN": "remote-internal-token-sentinel",
+            "NPCINK_CLOUD_SECRET": "remote-runtime-secret-sentinel",
+            "NPCINK_CLOUD_SKIP_FRONTEND_IMAGE": "1",
+            "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_ATTEMPTS": "2",
+            "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS": "0",
+            "FORBIDDEN_CURL_ENV_KEYS": (
+                "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN,NPCINK_CLOUD_SECRET"
+            ),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            "/bin/bash",
+            str(fixture / "deploy/remote-smoke.sh"),
+            "--base-url",
+            "http://cloud.example.test",
+            "--site-id",
+            "site_runtime",
+            "--key-id",
+            "key_runtime",
+            "--skip-terms-checks",
+        ],
+        cwd=fixture,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    curl_argv = curl_log.read_text(encoding="utf-8")
+    evidence = "\n".join((completed.stdout, completed.stderr, curl_argv))
+    assert completed.returncode == 0, evidence
+    assert observability_state.read_text(encoding="utf-8") == "2"
+    assert curl_argv.count("/internal/service/observability/summary") == 2
+    observability_requests = [
+        line
+        for line in curl_argv.splitlines()
+        if "/internal/service/observability/summary" in line
+    ]
+    assert all("\t--connect-timeout\t3" in line for line in observability_requests)
+    assert all("\t--max-time\t10" in line for line in observability_requests)
+    for unbounded_request_path in ("/v1/catalog/models", "/v1/runtime/execute"):
+        matching_requests = [
+            line
+            for line in curl_argv.splitlines()
+            if unbounded_request_path in line
+        ]
+        assert matching_requests
+        assert all(
+            "--connect-timeout" not in line and "--max-time" not in line
+            for line in matching_requests
+        )
+    assert "/v1/catalog/models" in curl_argv
+    assert "cadence_diagnostic=" not in evidence
+    assert diagnostic_secret not in evidence
+    assert list(temp_root.iterdir()) == []
+
+
+def test_remote_smoke_cadence_timeout_is_fail_closed_and_redacted(
+    tmp_path: Path,
+) -> None:
+    fixture = _copy_fixture(
+        tmp_path,
+        "deploy/common.sh",
+        "deploy/remote-smoke.sh",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _install_fake_curl(fake_bin)
+    curl_log = tmp_path / "curl.log"
+    observability_state = tmp_path / "observability-state"
+    temp_root = tmp_path / "request-tmp"
+    temp_root.mkdir()
+    diagnostic_secret = "a" * 64
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
+            "TMPDIR": str(temp_root),
+            "CURL_ARGV_LOG": str(curl_log),
+            "CURL_STATE_PATH": str(tmp_path / "curl-state"),
+            "OBSERVABILITY_CADENCE_SEQUENCE": "1,1",
+            "OBSERVABILITY_CADENCE_STATE_PATH": str(observability_state),
+            "OBSERVABILITY_DIAGNOSTIC_SECRET": diagnostic_secret,
+            "OBSERVABILITY_MALICIOUS_DIAGNOSTICS": "1",
+            "NPCINK_CLOUD_ENVIRONMENT": "test",
+            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN": "remote-internal-token-sentinel",
+            "NPCINK_CLOUD_SECRET": "remote-runtime-secret-sentinel",
+            "NPCINK_CLOUD_SKIP_FRONTEND_IMAGE": "1",
+            "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_ATTEMPTS": "2",
+            "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS": "0",
+            "FORBIDDEN_CURL_ENV_KEYS": (
+                "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN,NPCINK_CLOUD_SECRET"
+            ),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            "/bin/bash",
+            str(fixture / "deploy/remote-smoke.sh"),
+            "--base-url",
+            "http://cloud.example.test",
+            "--site-id",
+            "site_runtime",
+            "--key-id",
+            "key_runtime",
+            "--skip-terms-checks",
+        ],
+        cwd=fixture,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    curl_argv = curl_log.read_text(encoding="utf-8")
+    evidence = "\n".join((completed.stdout, completed.stderr, curl_argv))
+    assert completed.returncode == 1, evidence
+    assert observability_state.read_text(encoding="utf-8") == "2"
+    assert curl_argv.count("/internal/service/observability/summary") == 2
+    assert "/v1/catalog/models" not in curl_argv
+    diagnostic_lines = [
+        line
+        for line in completed.stderr.splitlines()
+        if line.startswith("cadence_diagnostic=")
+    ]
+    assert len(diagnostic_lines) == 10
+    expected_diagnostic = {
+        "task_id": "unknown",
+        "freshness": "unknown",
+        "age_seconds": -1,
+        "interval_seconds": -1,
+        "last_outcome": "unknown",
+    }
+    assert [
+        json.loads(diagnostic_line.split("=", 1)[1])
+        for diagnostic_line in diagnostic_lines
+    ] == [expected_diagnostic] * 10
+    assert "bounded wait expired" in completed.stderr
+    assert diagnostic_secret not in evidence
+    assert "last_error_message" not in completed.stderr
+    assert '"payload"' not in completed.stderr
+    assert list(temp_root.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "expected_error"),
+    (
+        pytest.param(
+            "transport_timeout",
+            "HTTP request failed",
+            id="transport-timeout",
+        ),
+        pytest.param(
+            "http_non_200",
+            "observability summary with internal token should succeed",
+            id="http-non-200",
+        ),
+        pytest.param(
+            "malformed_json",
+            "observability summary should expose cadence non-fresh total",
+            id="malformed-json",
+        ),
+        pytest.param(
+            "missing_field",
+            "observability summary should expose cadence non-fresh total",
+            id="missing-field",
+        ),
+        pytest.param(
+            "wrong_type",
+            "observability cadence non-fresh total must be a non-negative integer",
+            id="wrong-type",
+        ),
+    ),
+)
+def test_remote_smoke_observability_failures_stop_before_runtime(
+    tmp_path: Path,
+    failure_mode: str,
+    expected_error: str,
+) -> None:
+    fixture = _copy_fixture(
+        tmp_path,
+        "deploy/common.sh",
+        "deploy/remote-smoke.sh",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _install_fake_curl(fake_bin)
+    curl_log = tmp_path / "curl.log"
+    temp_root = tmp_path / "request-tmp"
+    temp_root.mkdir()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
+            "TMPDIR": str(temp_root),
+            "CURL_ARGV_LOG": str(curl_log),
+            "CURL_STATE_PATH": str(tmp_path / "curl-state"),
+            "OBSERVABILITY_FAILURE_MODE": failure_mode,
+            "NPCINK_CLOUD_ENVIRONMENT": "test",
+            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN": "remote-internal-token-sentinel",
+            "NPCINK_CLOUD_SECRET": "remote-runtime-secret-sentinel",
+            "NPCINK_CLOUD_SKIP_FRONTEND_IMAGE": "1",
+            "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_ATTEMPTS": "2",
+            "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS": "0",
+            "FORBIDDEN_CURL_ENV_KEYS": (
+                "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN,NPCINK_CLOUD_SECRET"
+            ),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            "/bin/bash",
+            str(fixture / "deploy/remote-smoke.sh"),
+            "--base-url",
+            "http://cloud.example.test",
+            "--site-id",
+            "site_runtime",
+            "--key-id",
+            "key_runtime",
+            "--skip-terms-checks",
+        ],
+        cwd=fixture,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    curl_argv = curl_log.read_text(encoding="utf-8")
+    observability_requests = [
+        line
+        for line in curl_argv.splitlines()
+        if "/internal/service/observability/summary" in line
+    ]
+    assert completed.returncode == 1
+    assert expected_error in completed.stderr
+    assert len(observability_requests) == 1
+    assert "\t--connect-timeout\t3" in observability_requests[0]
+    assert "\t--max-time\t10" in observability_requests[0]
+    assert "/v1/catalog/models" not in curl_argv
+    assert "/v1/runtime/execute" not in curl_argv
+    assert list(temp_root.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("attempts", "delay_seconds", "expected_error"),
+    (
+        pytest.param(
+            "7",
+            "5",
+            "wait window must cover at least 35 seconds",
+            id="short-production-window",
+        ),
+        pytest.param(
+            "08",
+            "5",
+            "WAIT_ATTEMPTS must be a canonical integer between 1 and 20",
+            id="non-canonical-attempts",
+        ),
+        pytest.param(
+            "21",
+            "5",
+            "WAIT_ATTEMPTS must be a canonical integer between 1 and 20",
+            id="attempts-above-bound",
+        ),
+        pytest.param(
+            "8",
+            "00",
+            "WAIT_DELAY_SECONDS must be a canonical integer between 0 and 10",
+            id="non-canonical-delay",
+        ),
+        pytest.param(
+            "8",
+            "11",
+            "WAIT_DELAY_SECONDS must be a canonical integer between 0 and 10",
+            id="delay-above-bound",
+        ),
+    ),
+)
+def test_remote_smoke_rejects_invalid_observability_wait_configuration(
+    tmp_path: Path,
+    attempts: str,
+    delay_seconds: str,
+    expected_error: str,
+) -> None:
+    fixture = _copy_fixture(
+        tmp_path,
+        "deploy/common.sh",
+        "deploy/remote-smoke.sh",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _install_fake_curl(fake_bin)
+    curl_log = tmp_path / "curl.log"
+    temp_root = tmp_path / "request-tmp"
+    temp_root.mkdir()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
+            "TMPDIR": str(temp_root),
+            "CURL_ARGV_LOG": str(curl_log),
+            "CURL_STATE_PATH": str(tmp_path / "curl-state"),
+            "NPCINK_CLOUD_ENVIRONMENT": "production",
+            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN": "remote-internal-token-sentinel",
+            "NPCINK_CLOUD_SECRET": "remote-runtime-secret-sentinel",
+            "NPCINK_CLOUD_SKIP_FRONTEND_IMAGE": "1",
+            "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_ATTEMPTS": attempts,
+            "NPCINK_CLOUD_OBSERVABILITY_CADENCE_WAIT_DELAY_SECONDS": delay_seconds,
+            "FORBIDDEN_CURL_ENV_KEYS": (
+                "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN,NPCINK_CLOUD_SECRET"
+            ),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            "/bin/bash",
+            str(fixture / "deploy/remote-smoke.sh"),
+            "--base-url",
+            "http://cloud.example.test",
+            "--site-id",
+            "site_runtime",
+            "--key-id",
+            "key_runtime",
+            "--skip-terms-checks",
+        ],
+        cwd=fixture,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert expected_error in completed.stderr
+    assert not curl_log.exists()
     assert list(temp_root.iterdir()) == []
 
 
