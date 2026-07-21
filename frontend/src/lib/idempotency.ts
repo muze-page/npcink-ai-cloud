@@ -6,14 +6,65 @@
  */
 
 const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
-const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+function isAsciiLetterOrDigit(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122)
+  );
+}
+
+function isIdempotencyKeyCharacter(character: string): boolean {
+  return (
+    isAsciiLetterOrDigit(character) ||
+    character === '.' ||
+    character === '_' ||
+    character === ':' ||
+    character === '-'
+  );
+}
+
+function isIdempotencyKeyPunctuation(character: string): boolean {
+  return character === '.' || character === '_' || character === ':' || character === '-';
+}
 
 function normalizeIdempotencyPrefix(prefix: string): string {
-  const normalized = String(prefix || '')
-    .trim()
-    .replace(/[^A-Za-z0-9._:-]+/g, '_')
-    .replace(/^[._:-]+|[._:-]+$/g, '');
-  return normalized || 'cloud_operation';
+  const source = String(prefix || '').trim();
+  const normalized: string[] = [];
+  let previousCharacterWasInvalid = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (isIdempotencyKeyCharacter(character)) {
+      normalized.push(character);
+      previousCharacterWasInvalid = false;
+    } else if (!previousCharacterWasInvalid) {
+      normalized.push('_');
+      previousCharacterWasInvalid = true;
+    }
+  }
+
+  let start = 0;
+  while (start < normalized.length && isIdempotencyKeyPunctuation(normalized[start])) {
+    start += 1;
+  }
+
+  let end = normalized.length;
+  while (end > start && isIdempotencyKeyPunctuation(normalized[end - 1])) {
+    end -= 1;
+  }
+
+  return normalized.slice(start, end).join('') || 'cloud_operation';
+}
+
+function trimTrailingIdempotencyKeyPunctuation(value: string): string {
+  let end = value.length;
+  while (end > 0 && isIdempotencyKeyPunctuation(value[end - 1])) {
+    end -= 1;
+  }
+  return value.slice(0, end);
 }
 
 /**
@@ -28,9 +79,9 @@ export function generateIdempotencyKey(
   const random = Math.random().toString(36).slice(2, 14).padEnd(12, '0');
   const suffix = `${timestamp}_${random}`;
   const maxPrefixLength = IDEMPOTENCY_KEY_MAX_LENGTH - suffix.length - 1;
-  const truncatedPrefix = normalizeIdempotencyPrefix(prefix)
-    .slice(0, maxPrefixLength)
-    .replace(/[._:-]+$/g, '');
+  const truncatedPrefix = trimTrailingIdempotencyKeyPunctuation(
+    normalizeIdempotencyPrefix(prefix).slice(0, maxPrefixLength)
+  );
   const safePrefix = truncatedPrefix || 'cloud_operation';
   return `${safePrefix}_${suffix}`;
 }
@@ -39,7 +90,20 @@ export function generateIdempotencyKey(
  * Validate idempotency key format
  */
 export function isValidIdempotencyKey(key: string): boolean {
-  return typeof key === 'string' && IDEMPOTENCY_KEY_PATTERN.test(key);
+  if (
+    typeof key !== 'string' ||
+    key.length === 0 ||
+    key.length > IDEMPOTENCY_KEY_MAX_LENGTH
+  ) {
+    return false;
+  }
+
+  for (let index = 0; index < key.length; index += 1) {
+    if (!isIdempotencyKeyCharacter(key[index])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
