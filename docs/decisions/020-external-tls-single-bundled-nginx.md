@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted.
+Accepted. The fixed runtime-network address policy is superseded by ADR-021;
+the external Edge and single bundled NGINX topology remains accepted.
 
 ## Date
 
@@ -23,6 +24,10 @@ streaming, and sanitized logging controls. It does not need to own public TLS,
 DNS, WAF, or the production trace backend.
 
 ## Decision
+
+The address values below record the original fresh-network contract. ADR-021
+now governs discovery, per-release freezing, and reuse of an existing managed
+Compose network.
 
 Production uses this request chain:
 
@@ -133,3 +138,4 @@ project.
 - [Cloud Release Checklist](../../deploy/RELEASE_CHECKLIST.md)
 - [Media Runtime Boundary](../media-runtime-boundary-v1.md)
 - [Streamed Signed Media Ingress](006-streamed-signed-media-ingress.md)
+- [Release-Scoped Runtime Network Authority](021-release-scoped-runtime-network-authority.md)

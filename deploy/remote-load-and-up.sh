@@ -78,6 +78,401 @@ is_formal_runtime() {
 	return 0
 }
 
+is_runtime_compose_file() {
+	[ "$(basename "${COMPOSE_FILE}")" = "docker-compose.runtime.yml" ]
+}
+
+RUNTIME_NETWORK_STATE_FILE=""
+
+runtime_network_state_file() {
+	local state_dir=""
+	state_dir="$(npcink_ai_cloud_release_state_dir "${ROOT_DIR}")" || return 1
+	printf '%s/runtime-network.env' "${state_dir}"
+}
+
+discover_runtime_network_contract() {
+	local expected_proxy_ipv4="${1:-}"
+	local network_ids=""
+	local network_count=0
+	local network_id=""
+	local driver=""
+	local internal=""
+	local ipam_count=""
+	local subnet=""
+	local gateway=""
+	local endpoints=""
+	local container_id=""
+	local endpoint_cidr=""
+	local endpoint_ip=""
+	local endpoint_project=""
+	local endpoint_service=""
+	local proxy_ips=""
+	local occupied_ips=""
+
+	network_ids="$(docker network ls --quiet \
+		--filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
+		--filter "label=com.docker.compose.network=default")" || return 1
+	network_count="$(printf '%s\n' "${network_ids}" | awk 'NF {n += 1} END {print n + 0}')"
+	if [ "${network_count}" -eq 0 ]; then
+		subnet="172.28.0.0/24"
+		gateway="172.28.0.1"
+	elif [ "${network_count}" -ne 1 ]; then
+		echo "[fail] Managed Compose default network is not unique." >&2
+		return 1
+	else
+		network_id="$(printf '%s\n' "${network_ids}" | awk 'NF {print; exit}')"
+		[[ "${network_id}" =~ ^[0-9a-f]{12,64}$ ]] || {
+			echo "[fail] Managed Compose default network ID is invalid." >&2
+			return 1
+		}
+		driver="$(docker network inspect --format '{{.Driver}}' "${network_id}")" || return 1
+		internal="$(docker network inspect --format '{{.Internal}}' "${network_id}")" || return 1
+		ipam_count="$(docker network inspect --format '{{len .IPAM.Config}}' "${network_id}")" || return 1
+		if [ "${driver}" != "bridge" ] || [ "${internal}" != "false" ] || [ "${ipam_count}" != "1" ]; then
+			echo "[fail] Managed Compose default network must be one non-internal bridge IPv4 network." >&2
+			return 1
+		fi
+		subnet="$(docker network inspect \
+			--format '{{(index .IPAM.Config 0).Subnet}}' "${network_id}")" || return 1
+		gateway="$(docker network inspect \
+			--format '{{(index .IPAM.Config 0).Gateway}}' "${network_id}")" || return 1
+		endpoints="$(docker network inspect \
+			--format '{{range $id, $container := .Containers}}{{$id}}|{{$container.IPv4Address}}{{println}}{{end}}' \
+			"${network_id}")" || return 1
+	fi
+	while IFS='|' read -r container_id endpoint_cidr; do
+		[ -n "${container_id}" ] || continue
+		[[ "${container_id}" =~ ^[0-9a-f]{12,64}$ ]] || {
+			echo "[fail] Managed network contains an invalid endpoint ID." >&2
+			return 1
+		}
+		endpoint_project="$(docker inspect \
+			--format '{{index .Config.Labels "com.docker.compose.project"}}' \
+			"${container_id}")" || return 1
+		endpoint_service="$(docker inspect \
+			--format '{{index .Config.Labels "com.docker.compose.service"}}' \
+			"${container_id}")" || return 1
+		if [ "${endpoint_project}" != "${COMPOSE_PROJECT_NAME_EFFECTIVE}" ] || [ -z "${endpoint_service}" ]; then
+			echo "[fail] Managed Compose network contains a foreign or unlabelled endpoint." >&2
+			return 1
+		fi
+		endpoint_ip="${endpoint_cidr%%/*}"
+		occupied_ips+="${endpoint_ip},"
+		if [ "${endpoint_service}" = "proxy" ]; then
+			proxy_ips+="${endpoint_ip},"
+		fi
+	done <<<"${endpoints}"
+
+	"${RELEASE_TOOL_PYTHON}" - \
+		"${subnet}" "${gateway}" "${proxy_ips}" "${occupied_ips}" \
+		"${expected_proxy_ipv4}" <<'PY'
+from __future__ import annotations
+
+import ipaddress
+import sys
+
+subnet_text, gateway_text, proxy_text, occupied_text, expected_proxy_text = sys.argv[1:]
+try:
+    network = ipaddress.ip_network(subnet_text, strict=True)
+    gateway = ipaddress.ip_address(gateway_text)
+    proxy_values = [
+        ipaddress.ip_address(value)
+        for value in proxy_text.rstrip(",").split(",")
+        if value
+    ]
+    proxy_ips = set(proxy_values)
+    occupied = {
+        ipaddress.ip_address(value)
+        for value in occupied_text.rstrip(",").split(",")
+        if value
+    }
+    expected_proxy = (
+        ipaddress.ip_address(expected_proxy_text) if expected_proxy_text else None
+    )
+except ValueError as exc:
+    raise SystemExit(f"[fail] Managed Compose network IPv4 contract is invalid: {exc}") from exc
+
+if network.version != 4 or gateway.version != 4:
+    raise SystemExit("[fail] Managed Compose runtime requires an IPv4 network.")
+if gateway not in network or gateway in {network.network_address, network.broadcast_address}:
+    raise SystemExit("[fail] Managed Compose network gateway is outside its usable subnet.")
+for address in proxy_ips | occupied:
+    if (
+        address.version != 4
+        or address not in network
+        or address in {network.network_address, network.broadcast_address, gateway}
+    ):
+        raise SystemExit("[fail] Managed Compose endpoint is outside its usable IPv4 subnet.")
+if len(proxy_values) > 1:
+    raise SystemExit("[fail] Managed Compose network has multiple proxy endpoint addresses.")
+if expected_proxy is not None and (
+    expected_proxy.version != 4
+    or expected_proxy not in network
+    or expected_proxy in {network.network_address, network.broadcast_address, gateway}
+):
+    raise SystemExit("[fail] Frozen runtime proxy IPv4 address is outside the usable subnet.")
+
+if proxy_ips:
+    proxy = next(iter(proxy_ips))
+    if expected_proxy is not None and proxy != expected_proxy:
+        raise SystemExit("[fail] Managed proxy endpoint differs from the frozen runtime proxy IPv4 address.")
+elif expected_proxy is not None:
+    if expected_proxy in occupied:
+        raise SystemExit("[fail] Frozen runtime proxy IPv4 address is occupied by a non-proxy endpoint.")
+    proxy = expected_proxy
+else:
+    preferred = network.network_address + 10
+    proxy = None
+    if (
+        preferred in network
+        and preferred not in {network.network_address, network.broadcast_address, gateway}
+        and preferred not in occupied
+    ):
+        proxy = preferred
+    if proxy is None:
+        # Docker allocates dynamic addresses from the low end. Search the high
+        # end first so the frozen static proxy address remains collision-free
+        # while data/API/worker candidates are created in later phases.
+        upper = int(network.broadcast_address) - 1
+        lower = int(network.network_address) + 1
+        for value in range(upper, max(lower - 1, upper - 4096), -1):
+            candidate = ipaddress.ip_address(value)
+            if candidate != gateway and candidate not in occupied:
+                proxy = candidate
+                break
+    if proxy is None:
+        raise SystemExit("[fail] Managed Compose network has no free static proxy IPv4 address.")
+
+print(f"{network.with_prefixlen}\t{gateway}\t{proxy}")
+PY
+}
+
+load_runtime_network_contract() {
+	local state_file="$1"
+	local parsed=""
+	local subnet=""
+	local gateway=""
+	local proxy_ipv4=""
+	[ -f "${state_file}" ] && [ ! -L "${state_file}" ] && [ -O "${state_file}" ] &&
+		[ "$(npcink_ai_cloud_mode_of "${state_file}" 2>/dev/null || true)" = "600" ] || {
+		echo "[fail] Frozen runtime network state must be an owner-only mode-0600 regular file." >&2
+		return 1
+	}
+	parsed="$("${RELEASE_TOOL_PYTHON}" - \
+		"${state_file}" "${COMPOSE_PROJECT_NAME_EFFECTIVE}" <<'PY'
+from __future__ import annotations
+
+import ipaddress
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+allowed = {
+    "NPCINK_CLOUD_RUNTIME_NETWORK_PROJECT",
+    "NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET",
+    "NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY",
+    "NPCINK_CLOUD_RUNTIME_PROXY_IPV4",
+}
+values: dict[str, str] = {}
+for line in path.read_text(encoding="utf-8").splitlines():
+    if not line or "=" not in line:
+        raise SystemExit("[fail] Frozen runtime network state has an invalid assignment.")
+    key, value = line.split("=", 1)
+    if key not in allowed or key in values or not value:
+        raise SystemExit("[fail] Frozen runtime network state has unexpected or duplicate keys.")
+    values[key] = value
+if set(values) != allowed:
+    raise SystemExit("[fail] Frozen runtime network state is incomplete.")
+if values["NPCINK_CLOUD_RUNTIME_NETWORK_PROJECT"] != sys.argv[2]:
+    raise SystemExit("[fail] Frozen runtime network state belongs to another Compose project.")
+
+network = ipaddress.ip_network(values["NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET"], strict=True)
+gateway = ipaddress.ip_address(values["NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY"])
+proxy = ipaddress.ip_address(values["NPCINK_CLOUD_RUNTIME_PROXY_IPV4"])
+if network.version != 4 or gateway.version != 4 or proxy.version != 4:
+    raise SystemExit("[fail] Frozen runtime network state must contain IPv4 values.")
+if gateway not in network or proxy not in network:
+    raise SystemExit("[fail] Frozen runtime network gateway/proxy is outside the subnet.")
+if len({network.network_address, network.broadcast_address, gateway, proxy}) != 4:
+    raise SystemExit("[fail] Frozen runtime network gateway/proxy is not a distinct usable host.")
+print(f"{network.with_prefixlen}\t{gateway}\t{proxy}")
+PY
+)" || return 1
+	IFS=$'\t' read -r subnet gateway proxy_ipv4 <<<"${parsed}"
+	export NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET="${subnet}"
+	export NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY="${gateway}"
+	export NPCINK_CLOUD_RUNTIME_PROXY_IPV4="${proxy_ipv4}"
+}
+
+freeze_runtime_network_contract() {
+	local state_file="$1"
+	local state_dir=""
+	local discovered=""
+	local subnet=""
+	local gateway=""
+	local proxy_ipv4=""
+	local temporary=""
+	state_dir="$(dirname "${state_file}")"
+	[ -d "${state_dir}" ] && [ ! -L "${state_dir}" ] && [ -O "${state_dir}" ] &&
+		[ "$(npcink_ai_cloud_mode_of "${state_dir}" 2>/dev/null || true)" = "700" ] || {
+		echo "[fail] Runtime network state requires the protected release-state directory." >&2
+		return 1
+	}
+	if [ -e "${state_file}" ] || [ -L "${state_file}" ]; then
+		load_runtime_network_contract "${state_file}" || return 1
+		discovered="$(discover_runtime_network_contract \
+			"${NPCINK_CLOUD_RUNTIME_PROXY_IPV4}")" || return 1
+		IFS=$'\t' read -r subnet gateway proxy_ipv4 <<<"${discovered}"
+		if [ "${NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET}" != "${subnet}" ] ||
+			[ "${NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY}" != "${gateway}" ] ||
+			[ "${NPCINK_CLOUD_RUNTIME_PROXY_IPV4}" != "${proxy_ipv4}" ]; then
+			echo "[fail] Existing frozen runtime network state differs from current managed network facts." >&2
+			return 1
+		fi
+		return 0
+	fi
+	discovered="$(discover_runtime_network_contract)" || return 1
+	IFS=$'\t' read -r subnet gateway proxy_ipv4 <<<"${discovered}"
+	temporary="$(mktemp "${state_dir}/.runtime-network.env.XXXXXX")" || return 1
+	chmod 0600 "${temporary}" || {
+		rm -f -- "${temporary}"
+		return 1
+	}
+	if ! printf '%s\n' \
+		"NPCINK_CLOUD_RUNTIME_NETWORK_PROJECT=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
+		"NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET=${subnet}" \
+		"NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY=${gateway}" \
+		"NPCINK_CLOUD_RUNTIME_PROXY_IPV4=${proxy_ipv4}" >"${temporary}"; then
+		rm -f -- "${temporary}"
+		return 1
+	fi
+	mv -f -- "${temporary}" "${state_file}" || {
+		rm -f -- "${temporary}"
+		return 1
+	}
+	"${RELEASE_TOOL_PYTHON}" - "${state_file}" <<'PY' || return 1
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open("rb") as handle:
+    os.fsync(handle.fileno())
+directory_fd = os.open(path.parent, os.O_RDONLY)
+try:
+    os.fsync(directory_fd)
+finally:
+    os.close(directory_fd)
+PY
+	load_runtime_network_contract "${state_file}"
+}
+
+assert_runtime_network_contract() {
+	local discovered=""
+	local subnet=""
+	local gateway=""
+	local proxy_ipv4=""
+	discovered="$(discover_runtime_network_contract \
+		"${NPCINK_CLOUD_RUNTIME_PROXY_IPV4}")" || return 1
+	IFS=$'\t' read -r subnet gateway proxy_ipv4 <<<"${discovered}"
+	if [ "${NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET}" != "${subnet}" ] ||
+		[ "${NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY}" != "${gateway}" ] ||
+		[ "${NPCINK_CLOUD_RUNTIME_PROXY_IPV4}" != "${proxy_ipv4}" ]; then
+		echo "[fail] Managed Compose network drifted from the frozen runtime network contract." >&2
+		return 1
+	fi
+}
+
+prepare_runtime_nginx_config() {
+	local state_file="$1"
+	local mode="verify"
+	local rendered_path=""
+	if [ "${LOAD_MODE}" = "prepare-only" ]; then
+		mode="create"
+	fi
+	rendered_path="$("${RELEASE_TOOL_PYTHON}" - \
+		"${ROOT_DIR}/deploy/nginx.prod.conf" \
+		"$(dirname "${state_file}")/nginx.runtime.conf" \
+		"${NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY}" "${mode}" <<'PY'
+from __future__ import annotations
+
+import os
+import stat
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+gateway = sys.argv[3]
+mode = sys.argv[4]
+parent_stat = target.parent.stat(follow_symlinks=False)
+if (
+    not stat.S_ISDIR(parent_stat.st_mode)
+    or parent_stat.st_uid != os.geteuid()
+    or stat.S_IMODE(parent_stat.st_mode) != 0o700
+):
+    raise SystemExit("[fail] Runtime NGINX config requires the protected release-state directory.")
+source_stat = source.lstat()
+if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_uid != os.geteuid():
+    raise SystemExit("[fail] Bundled NGINX config must be an owner-controlled regular file.")
+source_text = source.read_text(encoding="utf-8")
+default_trust = "    set_real_ip_from 172.28.0.1;"
+if source_text.count(default_trust) != 1:
+    raise SystemExit("[fail] Bundled NGINX gateway trust anchor is not unique.")
+expected = source_text.replace(default_trust, f"    set_real_ip_from {gateway};", 1)
+
+if target.exists() or target.is_symlink():
+    target_stat = target.lstat()
+    if (
+        not stat.S_ISREG(target_stat.st_mode)
+        or target_stat.st_uid != os.geteuid()
+        or stat.S_IMODE(target_stat.st_mode) != 0o600
+        or target.read_text(encoding="utf-8") != expected
+    ):
+        raise SystemExit("[fail] Frozen runtime NGINX config is unsafe or drifted.")
+elif mode == "create":
+    temporary = target.with_name(f".{target.name}.{os.getpid()}")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(expected)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        directory_fd = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+else:
+    raise SystemExit("[fail] Frozen runtime NGINX config is missing.")
+print(target)
+PY
+)" || return 1
+	export NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH="${rendered_path}"
+}
+
+prepare_runtime_network_contract() {
+	is_runtime_compose_file || return 0
+	RUNTIME_NETWORK_STATE_FILE="$(runtime_network_state_file)" || return 1
+	if [ "${LOAD_MODE}" = "prepare-only" ]; then
+		freeze_runtime_network_contract "${RUNTIME_NETWORK_STATE_FILE}" || return 1
+	else
+		load_runtime_network_contract "${RUNTIME_NETWORK_STATE_FILE}" || return 1
+		assert_runtime_network_contract || return 1
+	fi
+	prepare_runtime_nginx_config "${RUNTIME_NETWORK_STATE_FILE}" || return 1
+	printf '[ok] Runtime network contract is frozen: subnet=%s gateway=%s proxy=%s\n' \
+		"${NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET}" \
+		"${NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY}" \
+		"${NPCINK_CLOUD_RUNTIME_PROXY_IPV4}"
+}
+
 require_external_edge_for_formal_runtime() {
 	if [ "$(basename "${COMPOSE_FILE}")" != "docker-compose.runtime.yml" ] &&
 		[[ "${BASE_URL}" != https://* ]]; then
@@ -179,6 +574,7 @@ assert_retired_bundle_services_absent() {
 	echo "[ok] Retired bundle services are absent: ${RETIRED_BUNDLE_SERVICES[*]}"
 }
 
+prepare_runtime_network_contract
 require_external_edge_for_formal_runtime
 
 configure_ready_origin_headers() {
@@ -505,6 +901,11 @@ create_prove_and_start_exact_services() {
 		return 1
 	fi
 	EXACT_SERVICE_CONTAINER_PLAN=""
+	if is_runtime_compose_file && ! assert_runtime_network_contract; then
+		echo "[fail] Exact service candidates do not use the frozen runtime network contract." >&2
+		remove_exact_candidate_services "${services[@]}" || true
+		return 1
+	fi
 
 	while IFS=$'\t' read -r service role _reference expected_image_id; do
 		[ -n "${service}" ] || continue

@@ -30,6 +30,31 @@ def _write(path: Path, text: str, *, executable: bool = False) -> None:
         path.chmod(0o755)
 
 
+def _runtime_compose_source(*, partial: bool = False) -> str:
+    if partial:
+        return (
+            "services:\n"
+            "  api:\n"
+            "    command: ${NPCINK_CLOUD_RUNTIME_PROXY_IPV4:-172.28.0.10}\n"
+        )
+    return """services:
+  api:
+    command: ${NPCINK_CLOUD_RUNTIME_PROXY_IPV4:-172.28.0.10}
+  proxy:
+    volumes:
+      - ${NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH:-./deploy/nginx.prod.conf}:/nginx.conf:ro
+    networks:
+      default:
+        ipv4_address: ${NPCINK_CLOUD_RUNTIME_PROXY_IPV4:-172.28.0.10}
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET:-172.28.0.0/24}
+          gateway: ${NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY:-172.28.0.1}
+"""
+
+
 def _stub_bundle(source: Path) -> None:
     verifier = r"""#!/usr/bin/env bash
 set -euo pipefail
@@ -74,6 +99,9 @@ if [ "${NPCINK_CLOUD_LOAD_MODE:-}" = "prepare-only" ]; then
     chmod 0600 "${NPCINK_CLOUD_ROLLBACK_IMAGE_MAP}"
 fi
 if [ "${FAIL_AT:-}" = "${NPCINK_CLOUD_LOAD_MODE:-}" ]; then
+    if [ -n "${PREVIOUS_RUNTIME_NETWORK_DRIFT_PATH:-}" ]; then
+        printf '# injected drift\n' >>"${PREVIOUS_RUNTIME_NETWORK_DRIFT_PATH}"
+    fi
     : >"${CUTOVER_FAILURE_TRIGGERED}"
     exit 42
 fi
@@ -128,6 +156,7 @@ fi
     _write(source / "deploy/remote-operational-ready.sh", operational)
     _write(source / "deploy/remote-baseline-status.sh", baseline)
     _write(source / "docker-compose.prod.yml", "services: {}\n")
+    _write(source / "docker-compose.runtime.yml", _runtime_compose_source())
 
 
 def _install_p1_e06_receipt(
@@ -253,6 +282,17 @@ if [ "${1:-}" = "compose" ]; then
     done
     printf 'compose-shell-sentinel:%s\n' \
         "${NPCINK_CLOUD_TEST_RECOVERY_SENTINEL:-unset}" >>"${CUTOVER_LOG}"
+    if [ -f "${CUTOVER_FAILURE_TRIGGERED}" ]; then
+        compose_phase="recovery"
+    else
+        compose_phase="inspection"
+    fi
+    printf 'compose-network:%s:%s:%s:%s:%s\n' \
+        "${compose_phase}" \
+        "${NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET:-unset}" \
+        "${NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY:-unset}" \
+        "${NPCINK_CLOUD_RUNTIME_PROXY_IPV4:-unset}" \
+        "${NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH:-unset}" >>"${CUTOVER_LOG}"
     if [ -n "${env_file}" ] && [ -f "${env_file}" ]; then
         awk -F= '$1=="NPCINK_CLOUD_TEST_RECOVERY_SENTINEL" {print "compose-file-sentinel:" $2}' \
             "${env_file}" >>"${CUTOVER_LOG}"
@@ -510,6 +550,9 @@ def _run_remote_cutover(
     omit_p1_e06_restore_proof: bool = False,
     descendant_revision: str = "",
     preexisting_one_off_lock: bool = False,
+    previous_runtime_network_contract: bool = False,
+    runtime_network_state_variant: str = "valid",
+    drift_previous_runtime_network_after_failure: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     remote_dir = tmp_path / "remote"
     incoming = remote_dir / ".incoming" / "test-upload"
@@ -533,6 +576,49 @@ def _run_remote_cutover(
     )
     (previous / ".env.deploy").chmod(0o600)
     (previous / "docker-compose.prod.yml").write_text("services: {}\n", encoding="utf-8")
+    if previous_runtime_network_contract:
+        partial_compose = runtime_network_state_variant == "partial-compose"
+        (previous / "docker-compose.runtime.yml").write_text(
+            _runtime_compose_source(partial=partial_compose),
+            encoding="utf-8",
+        )
+        nginx_source = (
+            "events {}\n"
+            "http {\n"
+            "    set_real_ip_from 172.28.0.1;\n"
+            "}\n"
+        )
+        _write(previous / "deploy/nginx.prod.conf", nginx_source)
+        if runtime_network_state_variant != "missing":
+            previous_state = remote_dir / ".release-state" / previous.name
+            previous_state.mkdir(parents=True)
+            (remote_dir / ".release-state").chmod(0o700)
+            previous_state.chmod(0o700)
+            project_name = old_project_name
+            subnet = "10.255.1.0/24"
+            gateway = "10.255.1.1"
+            proxy_ipv4 = "10.255.1.9"
+            if runtime_network_state_variant == "project-mismatch":
+                project_name = "another-project"
+            elif runtime_network_state_variant == "invalid-ipv4":
+                subnet = "10.255.1.0/33"
+            state_file = previous_state / "runtime-network.env"
+            state_file.write_text(
+                "NPCINK_CLOUD_RUNTIME_NETWORK_PROJECT=" f"{project_name}\n"
+                "NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET=" f"{subnet}\n"
+                "NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY=" f"{gateway}\n"
+                "NPCINK_CLOUD_RUNTIME_PROXY_IPV4=" f"{proxy_ipv4}\n",
+                encoding="utf-8",
+            )
+            state_file.chmod(0o600)
+            rendered_nginx = nginx_source.replace("172.28.0.1", gateway)
+            if runtime_network_state_variant == "nginx-mismatch":
+                rendered_nginx = nginx_source
+            nginx_file = previous_state / "nginx.runtime.conf"
+            nginx_file.write_text(rendered_nginx, encoding="utf-8")
+            nginx_file.chmod(0o600)
+            if runtime_network_state_variant == "state-mode":
+                state_file.chmod(0o644)
     current_target = previous
     if current_kind == "broken":
         current_target = remote_dir / "missing-release"
@@ -616,7 +702,11 @@ def _run_remote_cutover(
                     "REMOTE_ENV_PATH": uploaded_env,
                     "WITH_PORTAL_SMOKE": "0",
                     "SKIP_FRONTEND_IMAGE": "1" if skip_frontend_image else "0",
-                    "REMOTE_COMPOSE_FILE": "",
+                    "REMOTE_COMPOSE_FILE": (
+                        "docker-compose.runtime.yml"
+                        if previous_runtime_network_contract
+                        else ""
+                    ),
                     "REFRESH_PROVIDERS": "1",
                     "WITH_OPERATIONAL_READY": "0",
                     "REQUIRE_P1_E06_RECEIPT": ("1" if require_p1_e06_receipt else "0"),
@@ -669,6 +759,16 @@ def _run_remote_cutover(
             "DATABASE_REVISION": database_revision,
             "ONE_OFF_LOCK_PATH": str(
                 remote_dir / ".release-state" / ".release-one-off.lock"
+            ),
+            "PREVIOUS_RUNTIME_NETWORK_DRIFT_PATH": (
+                str(
+                    remote_dir
+                    / ".release-state"
+                    / previous.name
+                    / "runtime-network.env"
+                )
+                if drift_previous_runtime_network_after_failure
+                else ""
             ),
         }
     )
@@ -1470,6 +1570,103 @@ def test_previous_release_recovery_uses_only_previous_env_for_compose(
     assert "compose-file-sentinel:new-value" not in log
     assert "compose-shell-sentinel:new-value" not in log
     assert "compose-shell-sentinel:unset" in log
+
+
+def test_parameterized_previous_compose_uses_frozen_network_for_inspection_and_recovery(
+    tmp_path: Path,
+) -> None:
+    completed, remote_dir, log_path = _run_remote_cutover(
+        tmp_path,
+        fail_at="data-only",
+        previous_runtime_network_contract=True,
+    )
+
+    assert completed.returncode == 42, f"{completed.stdout}\n{completed.stderr}"
+    assert (remote_dir / "current").resolve() == remote_dir / "release-previous"
+    state_dir = remote_dir / ".release-state" / "release-previous"
+    expected_suffix = (
+        "10.255.1.0/24:10.255.1.1:10.255.1.9:"
+        f"{state_dir / 'nginx.runtime.conf'}"
+    )
+    network_lines = [
+        line
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("compose-network:")
+    ]
+    assert any(line == f"compose-network:inspection:{expected_suffix}" for line in network_lines)
+    assert any(line == f"compose-network:recovery:{expected_suffix}" for line in network_lines)
+    assert all(line.endswith(expected_suffix) for line in network_lines)
+    assert all("172.28.0." not in line and ":unset" not in line for line in network_lines)
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected_error"),
+    [
+        ("partial-compose", "interpolation structure is incomplete or ambiguous"),
+        ("missing", "per-release state directory is missing"),
+        ("project-mismatch", "belongs to another Compose project"),
+        ("invalid-ipv4", "Frozen runtime network state is invalid"),
+        ("nginx-mismatch", "differs from the bundled gateway contract"),
+        ("state-mode", "has an unsafe mode"),
+    ],
+)
+def test_parameterized_previous_compose_rejects_unsafe_network_state_before_mutation(
+    tmp_path: Path,
+    variant: str,
+    expected_error: str,
+) -> None:
+    completed, remote_dir, log_path = _run_remote_cutover(
+        tmp_path,
+        previous_runtime_network_contract=True,
+        runtime_network_state_variant=variant,
+    )
+
+    assert completed.returncode != 0
+    assert expected_error in completed.stderr
+    marker = (remote_dir / ".cutover-failed").read_text(encoding="utf-8")
+    assert "outcome=validation_failed_before_mutation" in marker
+    log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    assert "load:prepare-only" not in log
+    assert "docker:tag" not in log
+    assert "docker:stop" not in log
+    assert "docker:rm" not in log
+
+
+def test_previous_runtime_network_drift_refuses_rollback_recreate(
+    tmp_path: Path,
+) -> None:
+    completed, remote_dir, log_path = _run_remote_cutover(
+        tmp_path,
+        fail_at="data-only",
+        previous_runtime_network_contract=True,
+        drift_previous_runtime_network_after_failure=True,
+    )
+
+    assert completed.returncode != 0
+    marker = (remote_dir / ".cutover-failed").read_text(encoding="utf-8")
+    assert "outcome=fail_closed_without_safe_rollback" in marker
+    assert (remote_dir / ".deploy-lock").is_dir()
+    assert "runtime network contract drifted or became unsafe" in completed.stderr
+    log = log_path.read_text(encoding="utf-8")
+    assert " up -d --pull never --no-build --force-recreate --remove-orphans" not in log
+    assert "Deployment lock retained for operator recovery" in completed.stderr
+
+
+def test_legacy_previous_compose_recovery_needs_no_runtime_network_state(
+    tmp_path: Path,
+) -> None:
+    completed, remote_dir, log_path = _run_remote_cutover(tmp_path, fail_at="data-only")
+
+    assert completed.returncode == 42, f"{completed.stdout}\n{completed.stderr}"
+    assert not (remote_dir / ".release-state" / "release-previous").exists()
+    assert "pre-runtime-network Compose contract" in completed.stdout
+    network_lines = [
+        line
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("compose-network:")
+    ]
+    assert network_lines
+    assert all(line.endswith(":unset:unset:unset:unset") for line in network_lines)
 
 
 def test_compose_project_drift_fails_before_docker_mutation(tmp_path: Path) -> None:
