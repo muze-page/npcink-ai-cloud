@@ -44,6 +44,32 @@ _RUNTIME_CONFIG_CONNECTION_KINDS = frozenset(
         "vector_store_provider",
     }
 )
+_PUBLIC_PROVIDER_TEST_ERROR_CODES = {
+    "provider.auth_invalid": "provider.auth_invalid",
+    "provider.error": "provider.error",
+    "provider.invalid_response": "provider.invalid_response",
+    "provider.network_error": "provider.network_error",
+    "provider.rate_limited": "provider.rate_limited",
+    "provider.reader_error": "provider.reader_error",
+    "provider.response_too_large": "provider.response_too_large",
+    "provider.timeout": "provider.timeout",
+    "provider.unavailable": "provider.unavailable",
+    "web_search.apify_actor_missing": "web_search.apify_actor_missing",
+    "web_search.apify_api_token_missing": "web_search.apify_api_token_missing",
+    "web_search.apify_http_error": "web_search.apify_http_error",
+    "web_search.bocha_api_key_missing": "web_search.bocha_api_key_missing",
+    "web_search.bocha_http_error": "web_search.bocha_http_error",
+    "web_search.provider_fallback_exhausted": "web_search.provider_fallback_exhausted",
+    "web_search.provider_not_configured": "web_search.provider_not_configured",
+    "web_search.provider_not_supported": "web_search.provider_not_supported",
+    "web_search.query_required": "web_search.query_required",
+    "web_search.reader_not_configured": "web_search.reader_not_configured",
+    "web_search.tavily_api_key_missing": "web_search.tavily_api_key_missing",
+    "web_search.tavily_http_error": "web_search.tavily_http_error",
+    "web_search.zhihu_access_secret_missing": "web_search.zhihu_access_secret_missing",
+    "web_search.zhihu_endpoint_missing": "web_search.zhihu_endpoint_missing",
+    "web_search.zhihu_http_error": "web_search.zhihu_http_error",
+}
 
 
 class ProviderConnectionAdminError(ValueError):
@@ -333,7 +359,7 @@ class ProviderConnectionAdminService:
                 status=error_code.rsplit(".", 1)[-1],
                 stage="catalog_fetch",
                 error_code=error_code,
-                message=_truncate_message(str(error) or error.__class__.__name__),
+                message="provider catalog request failed",
                 now=now,
             )
 
@@ -391,10 +417,10 @@ class ProviderConnectionAdminService:
                 source="provider_connection_test",
                 notes=f"connection={row.connection_id}",
             )
-        except Exception as error:
+        except Exception:
             return {
                 "status": "error",
-                "message": _truncate_message(str(error) or error.__class__.__name__),
+                "message": "provider catalog sync failed",
             }
         return {
             "status": "synced",
@@ -441,7 +467,7 @@ class ProviderConnectionAdminService:
                 status=error_code.rsplit(".", 1)[-1],
                 stage="web_search_probe",
                 error_code=error_code,
-                message=_truncate_message(str(error) or error.__class__.__name__),
+                message="web search provider probe failed",
                 now=now,
             )
 
@@ -506,7 +532,7 @@ class ProviderConnectionAdminService:
                 status=error_code.rsplit(".", 1)[-1],
                 stage="web_search_reader_probe",
                 error_code=error_code,
-                message=_truncate_message(str(error) or error.__class__.__name__),
+                message="web search reader probe failed",
                 now=now,
             )
 
@@ -779,9 +805,10 @@ def _test_result(
 
 
 def _map_test_error_code(error: Exception) -> str:
-    provider_error_code = str(getattr(error, "error_code", "") or "").strip()
-    if provider_error_code:
-        return provider_error_code
+    provider_error_code = str(getattr(error, "error_code", "") or "").strip().lower()
+    public_error_code = _PUBLIC_PROVIDER_TEST_ERROR_CODES.get(provider_error_code)
+    if public_error_code:
+        return public_error_code
     message = str(error).lower()
     if "401" in message or "403" in message or "auth" in message or "credential" in message:
         return "provider_connection.auth_failed"
@@ -792,13 +819,6 @@ def _map_test_error_code(error: Exception) -> str:
     if "no usable models" in message:
         return "provider_connection.catalog_empty"
     return "provider_connection.test_failed"
-
-
-def _truncate_message(value: str, limit: int = 360) -> str:
-    normalized = _string(value)
-    if len(normalized) <= limit:
-        return normalized
-    return f"{normalized[:limit]}..."
 
 
 def _normalize_identifier(value: str, *, field: str) -> str:

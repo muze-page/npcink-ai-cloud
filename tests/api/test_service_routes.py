@@ -2258,6 +2258,296 @@ def test_admin_ai_resources_lists_only_added_capability_provider_connections(
     assert "apify-provider-secret" not in json.dumps(projection)
 
 
+def _assert_admin_provider_test_failure_is_redacted(
+    *,
+    database_url: str,
+    client: TestClient,
+    connection_id: str,
+    idempotency_key: str,
+    expected_stage: str,
+    expected_error_code: str,
+    expected_message: str,
+    redacted_values: tuple[str, ...],
+) -> None:
+    response = client.post(
+        f"/internal/service/admin/provider-connections/{connection_id}/test",
+        headers=build_internal_headers(idempotency_key=idempotency_key),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error_code"] == expected_error_code
+    assert payload["message"] == expected_message
+    data = payload["data"]
+    assert data["ok"] is False
+    assert data["stage"] == expected_stage
+    assert data["error_code"] == expected_error_code
+    assert data["message"] == expected_message
+    serialized_response = json.dumps(payload)
+    for value in redacted_values:
+        assert value not in serialized_response
+
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, connection_id)
+        assert row is not None
+        assert row.last_error_code == expected_error_code
+        assert row.last_error_message == expected_message
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(
+                ServiceAuditEvent.event_kind == "provider_connection.test",
+                ServiceAuditEvent.scope_id == connection_id,
+            )
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        audit_payload = audit_event.payload_json or {}
+        assert audit_payload["error_code"] == expected_error_code
+        assert audit_payload["message"] == expected_message
+        assert audit_payload["result"]["test"]["stage"] == expected_stage
+        serialized_audit = json.dumps(audit_payload)
+        for value in redacted_values:
+            assert value not in serialized_audit
+
+
+def test_admin_provider_connection_test_redacts_catalog_fetch_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-catalog-failure-create"),
+        json={
+            "connection_id": "catalog_failure",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "Catalog failure",
+            "enabled": True,
+            "base_url": "https://api.openai.test/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "catalog-secret-value",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    class MaliciousCatalogError(RuntimeError):
+        error_code = "provider.private_catalog-secret-value"
+
+    def fail_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        raise MaliciousCatalogError(
+            "auth failure credential=catalog-secret-value "
+            "at /srv/private/provider.py with traceback"
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fail_fetch_catalog,
+    )
+
+    _assert_admin_provider_test_failure_is_redacted(
+        database_url=database_url,
+        client=client,
+        connection_id="catalog_failure",
+        idempotency_key="provider-catalog-failure-test",
+        expected_stage="catalog_fetch",
+        expected_error_code="provider_connection.auth_failed",
+        expected_message="provider catalog request failed",
+        redacted_values=(
+            "catalog-secret-value",
+            "provider.private_catalog-secret-value",
+            "/srv/private/provider.py",
+            "traceback",
+        ),
+    )
+
+
+def test_admin_provider_connection_test_redacts_catalog_sync_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-sync-failure-create"),
+        json={
+            "connection_id": "catalog_sync_failure",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "Catalog sync failure",
+            "enabled": True,
+            "base_url": "https://api.openai.test/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "catalog-sync-secret-value",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    def fake_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id="openai",
+            display_name="Catalog sync failure",
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="sync-test-model",
+                    family="sync-test-model",
+                    feature="text",
+                    status="available",
+                    instances=[],
+                )
+            ],
+        )
+
+    def fail_store_provider_snapshot(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise RuntimeError(
+            "catalog-sync-secret-value leaked from /srv/private/catalog_sync.py traceback"
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+    monkeypatch.setattr(
+        CatalogService,
+        "store_provider_snapshot",
+        fail_store_provider_snapshot,
+    )
+
+    _assert_admin_provider_test_failure_is_redacted(
+        database_url=database_url,
+        client=client,
+        connection_id="catalog_sync_failure",
+        idempotency_key="provider-sync-failure-test",
+        expected_stage="catalog_sync",
+        expected_error_code="provider_connection.catalog_sync_failed",
+        expected_message="provider catalog sync failed",
+        redacted_values=(
+            "catalog-sync-secret-value",
+            "/srv/private/catalog_sync.py",
+            "traceback",
+        ),
+    )
+
+
+def test_admin_provider_connection_test_redacts_web_search_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-search-failure-create"),
+        json={
+            "connection_id": "search_failure",
+            "provider_id": "tavily",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Search failure",
+            "enabled": True,
+            "base_url": "https://api.tavily.test",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "credential": "search-probe-secret-value",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    class MaliciousWebSearchError(RuntimeError):
+        error_code = "provider.timeout"
+
+    def fail_web_search(*_args: object, **_kwargs: object) -> WebSearchExecutionResult:
+        raise MaliciousWebSearchError(
+            "search-probe-secret-value from /srv/private/search.py with traceback"
+        )
+
+    monkeypatch.setattr(
+        "app.domain.provider_connections.service.WebSearchService.execute",
+        fail_web_search,
+    )
+
+    _assert_admin_provider_test_failure_is_redacted(
+        database_url=database_url,
+        client=client,
+        connection_id="search_failure",
+        idempotency_key="provider-search-failure-test",
+        expected_stage="web_search_probe",
+        expected_error_code="provider.timeout",
+        expected_message="web search provider probe failed",
+        redacted_values=(
+            "search-probe-secret-value",
+            "/srv/private/search.py",
+            "traceback",
+        ),
+    )
+
+
+def test_admin_provider_connection_test_redacts_jina_reader_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-reader-failure-create"),
+        json={
+            "connection_id": "reader_failure",
+            "provider_id": "jina_reader",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Reader failure",
+            "enabled": True,
+            "base_url": "https://r.jina.test",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.reader"],
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    class FailingReaderClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout > 0
+
+        def __enter__(self) -> FailingReaderClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+            assert url == "https://r.jina.test/https://example.com/"
+            assert headers == {"Accept": "text/plain"}
+            raise RuntimeError(
+                "network connect reader-secret-value "
+                "at /srv/private/reader.py with traceback"
+            )
+
+    monkeypatch.setattr(
+        "app.domain.provider_connections.service.httpx.Client",
+        FailingReaderClient,
+    )
+
+    _assert_admin_provider_test_failure_is_redacted(
+        database_url=database_url,
+        client=client,
+        connection_id="reader_failure",
+        idempotency_key="provider-reader-failure-test",
+        expected_stage="web_search_reader_probe",
+        expected_error_code="provider_connection.network_error",
+        expected_message="web search reader probe failed",
+        redacted_values=(
+            "reader-secret-value",
+            "/srv/private/reader.py",
+            "traceback",
+        ),
+    )
+
+
 def test_admin_provider_connection_test_updates_masked_diagnostics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
