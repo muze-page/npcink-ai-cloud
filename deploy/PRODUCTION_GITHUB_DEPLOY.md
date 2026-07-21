@@ -239,8 +239,11 @@ The base URL must use HTTPS and its host must exactly match
 `NPCINK_CLOUD_DOMAIN_NAME`.
 The external Edge must replace inbound `X-Real-IP`, `X-Forwarded-For`,
 `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Port` values. NGINX
-trusts real-client headers only from the pinned Compose gateway `172.28.0.1`;
-Gunicorn trusts forwarded headers only from NGINX at `172.28.0.10`.
+trusts real-client headers only from the gateway recorded in the protected
+per-release runtime network state; Gunicorn trusts forwarded headers only from
+the proxy IPv4 address in that same state. The `172.28.0.1` gateway and
+`172.28.0.10` proxy are fresh-network defaults, not authority for an existing
+managed Compose network.
 
 Public legal and policy pages under `/terms/*` are served as static files from
 the checked-in `site/` directory by NGINX.

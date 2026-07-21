@@ -501,6 +501,212 @@ npcink_ai_cloud_assert_container_matches_rollback_image() {
 	fi
 }
 
+npcink_ai_cloud_prepare_runtime_compose_environment() {
+	local root_dir="$1"
+	local compose_file="$2"
+	local compose_project_name="$3"
+	local release_tool_python=""
+	local state_dir=""
+	local parsed=""
+	local subnet=""
+	local gateway=""
+	local proxy_ipv4=""
+	local nginx_config_path=""
+	local line=""
+	local parameterized=0
+
+	# Runtime interpolation must never inherit caller-controlled values. A
+	# parameterized release is reconstructed only from its protected per-release
+	# state, while a legacy Compose file without these markers remains usable.
+	unset NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET \
+		NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY \
+		NPCINK_CLOUD_RUNTIME_PROXY_IPV4 \
+		NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH
+
+	if [ ! -e "${compose_file}" ] && [ ! -L "${compose_file}" ]; then
+		# Preserve the generic helper's historical delegation for a missing
+		# non-runtime Compose path. Formal runtime callers always require the
+		# canonical bundled runtime file and must fail before Docker.
+		if [ "$(basename "${compose_file}")" != "docker-compose.runtime.yml" ]; then
+			return 0
+		fi
+	fi
+	[ -f "${compose_file}" ] && [ ! -L "${compose_file}" ] && [ -O "${compose_file}" ] || {
+		echo "[fail] Runtime Compose authority must be an owner-controlled regular file." >&2
+		return 1
+	}
+	while IFS= read -r line || [ -n "${line}" ]; do
+		case "${line}" in
+			*'NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET'*|\
+			*'NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY'*|\
+			*'NPCINK_CLOUD_RUNTIME_PROXY_IPV4'*|\
+			*'NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH'*)
+				parameterized=1
+				break
+				;;
+		esac
+	done <"${compose_file}"
+	if [ "${parameterized}" -eq 0 ]; then
+		return 0
+	fi
+
+	root_dir="$(cd "${root_dir}" 2>/dev/null && pwd -P)" || {
+		echo "[fail] Parameterized runtime Compose release root could not be resolved." >&2
+		return 1
+	}
+	state_dir="$(npcink_ai_cloud_release_state_dir "${root_dir}")" || {
+		echo "[fail] Parameterized runtime Compose requires a managed release root." >&2
+		return 1
+	}
+	release_tool_python="$(npcink_ai_cloud_release_tool_python)"
+	npcink_ai_cloud_require_release_tool_python "${release_tool_python}" || return 1
+
+	parsed="$("${release_tool_python}" - \
+		"${root_dir}" "${compose_file}" "${state_dir}" "${compose_project_name}" <<'PY'
+from __future__ import annotations
+
+import ipaddress
+import os
+import re
+import stat
+import sys
+from pathlib import Path
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"[fail] {message}")
+
+
+def read_owned_regular(path: Path, expected_mode=None) -> str:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        fail(f"Protected runtime Compose file could not be opened: {path}: {exc}")
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            fail(f"Protected runtime Compose file is not owner-controlled: {path}")
+        if expected_mode is not None and stat.S_IMODE(metadata.st_mode) != expected_mode:
+            fail(f"Protected runtime Compose file has an unsafe mode: {path}")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(descriptor)
+    try:
+        return b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        fail(f"Protected runtime Compose file is not UTF-8: {path}: {exc}")
+
+
+root = Path(sys.argv[1])
+compose = Path(sys.argv[2])
+state_dir = Path(sys.argv[3])
+expected_project = sys.argv[4]
+if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", expected_project):
+    fail("Runtime Compose project name is invalid.")
+if root != Path(os.path.abspath(root)) or compose != root / "docker-compose.runtime.yml":
+    fail("Parameterized runtime Compose must be the canonical bundled runtime file.")
+
+for directory, mode, label in (
+    (root.parent / ".release-state", 0o700, "release-state root"),
+    (state_dir, 0o700, "per-release state directory"),
+):
+    try:
+        metadata = directory.stat(follow_symlinks=False)
+    except OSError as exc:
+        fail(f"Runtime Compose {label} is missing: {exc}")
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != mode
+    ):
+        fail(f"Runtime Compose {label} must be owner-controlled mode {mode:04o}.")
+if state_dir != root.parent / ".release-state" / root.name:
+    fail("Runtime Compose state does not belong to the requested release.")
+
+compose_text = read_owned_regular(compose)
+runtime_markers = {
+    "${NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET:-172.28.0.0/24}": 1,
+    "${NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY:-172.28.0.1}": 1,
+    "${NPCINK_CLOUD_RUNTIME_PROXY_IPV4:-172.28.0.10}": 2,
+    "${NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH:-./deploy/nginx.prod.conf}": 1,
+}
+if any(compose_text.count(marker) != count for marker, count in runtime_markers.items()):
+    fail("Parameterized runtime Compose interpolation structure is incomplete or ambiguous.")
+
+state_file = state_dir / "runtime-network.env"
+state_text = read_owned_regular(state_file, 0o600)
+allowed = {
+    "NPCINK_CLOUD_RUNTIME_NETWORK_PROJECT",
+    "NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET",
+    "NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY",
+    "NPCINK_CLOUD_RUNTIME_PROXY_IPV4",
+}
+values: dict[str, str] = {}
+for line in state_text.splitlines():
+    if not line or "=" not in line:
+        fail("Frozen runtime network state has an invalid assignment.")
+    key, value = line.split("=", 1)
+    if key not in allowed or key in values or not value:
+        fail("Frozen runtime network state has unexpected or duplicate keys.")
+    values[key] = value
+if set(values) != allowed:
+    fail("Frozen runtime network state is incomplete.")
+if values["NPCINK_CLOUD_RUNTIME_NETWORK_PROJECT"] != expected_project:
+    fail("Frozen runtime network state belongs to another Compose project.")
+
+try:
+    network = ipaddress.ip_network(
+        values["NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET"], strict=True
+    )
+    gateway = ipaddress.ip_address(values["NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY"])
+    proxy = ipaddress.ip_address(values["NPCINK_CLOUD_RUNTIME_PROXY_IPV4"])
+except ValueError as exc:
+    fail(f"Frozen runtime network state is invalid: {exc}")
+if network.version != 4 or gateway.version != 4 or proxy.version != 4:
+    fail("Frozen runtime network state must contain IPv4 values.")
+if gateway not in network or proxy not in network:
+    fail("Frozen runtime network gateway/proxy is outside the subnet.")
+if len({network.network_address, network.broadcast_address, gateway, proxy}) != 4:
+    fail("Frozen runtime network gateway/proxy is not a distinct usable host.")
+
+source = root / "deploy" / "nginx.prod.conf"
+target = state_dir / "nginx.runtime.conf"
+source_text = read_owned_regular(source)
+target_text = read_owned_regular(target, 0o600)
+default_trust = "    set_real_ip_from 172.28.0.1;"
+if source_text.count(default_trust) != 1:
+    fail("Bundled NGINX gateway trust anchor is not unique.")
+expected_target = source_text.replace(
+    default_trust,
+    f"    set_real_ip_from {gateway};",
+    1,
+)
+if target_text != expected_target:
+    fail("Frozen runtime NGINX config differs from the bundled gateway contract.")
+if any(character in str(target) for character in "\r\n\t"):
+    fail("Frozen runtime NGINX config path is unsafe.")
+
+print(f"{network.with_prefixlen}\t{gateway}\t{proxy}\t{target}")
+PY
+	)" || return 1
+	IFS=$'\t' read -r subnet gateway proxy_ipv4 nginx_config_path <<<"${parsed}"
+	if [ -z "${subnet}" ] || [ -z "${gateway}" ] || [ -z "${proxy_ipv4}" ] || \
+		[ -z "${nginx_config_path}" ]; then
+		echo "[fail] Protected runtime Compose state could not be parsed." >&2
+		return 1
+	fi
+	export NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET="${subnet}"
+	export NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY="${gateway}"
+	export NPCINK_CLOUD_RUNTIME_PROXY_IPV4="${proxy_ipv4}"
+	export NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH="${nginx_config_path}"
+}
+
 npcink_ai_cloud_compose() {
 	local root_dir="$1"
 	shift
@@ -510,6 +716,11 @@ npcink_ai_cloud_compose() {
 	local backend_env_file="${NPCINK_CLOUD_BACKEND_ENV_FILE:-}"
 	local compose_project_name="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-}}"
 	local compose_status=0
+	root_dir="$(cd "${root_dir}" 2>/dev/null && pwd -P)" || {
+		echo "[fail] Compose release root could not be resolved." >&2
+		return 1
+	}
+	compose_file="$(npcink_ai_cloud_normalize_path "${root_dir}" "${compose_file}")"
 
 	env_file="$(npcink_ai_cloud_resolve_env_file "${root_dir}")"
 	if [ -n "${backend_env_file}" ]; then
@@ -525,6 +736,8 @@ npcink_ai_cloud_compose() {
 		echo "[fail] Invalid Compose project name: ${compose_project_name}" >&2
 		return 1
 	fi
+	npcink_ai_cloud_prepare_runtime_compose_environment \
+		"${root_dir}" "${compose_file}" "${compose_project_name}" || return 1
 
 	if [ -n "${env_file}" ]; then
 		COMPOSE_PROJECT_NAME="${compose_project_name}" \

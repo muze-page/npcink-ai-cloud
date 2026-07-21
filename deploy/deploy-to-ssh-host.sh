@@ -728,6 +728,10 @@ PREVIOUS_RELEASE_DIR=""
 PREVIOUS_ENV_FILE=""
 PREVIOUS_COMPOSE_FILE=""
 PREVIOUS_COMPOSE_PROJECT_NAME=""
+PREVIOUS_RUNTIME_NETWORK_SNAPSHOT=""
+PREVIOUS_RUNTIME_NETWORK_SUBNET=""
+PREVIOUS_RUNTIME_NETWORK_GATEWAY=""
+PREVIOUS_RUNTIME_PROXY_IPV4=""
 NEW_COMPOSE_FILE=""
 NEW_COMPOSE_RELATIVE=""
 COMPOSE_PROJECT_NAME_EFFECTIVE="npcink-ai-cloud"
@@ -1154,9 +1158,92 @@ assert_governed_one_off_absent() {
 	echo "[ok] Governed release one-off lock and containers are absent."
 }
 
+previous_runtime_network_snapshot() (
+	local state_dir=""
+	local state_file=""
+	local digests=""
+
+	export NPCINK_CLOUD_RELEASE_TOOL_PYTHON="${RELEASE_TOOL_PYTHON}"
+	npcink_ai_cloud_prepare_runtime_compose_environment \
+		"${PREVIOUS_RELEASE_DIR}" "${PREVIOUS_COMPOSE_FILE}" \
+		"${PREVIOUS_COMPOSE_PROJECT_NAME}" || return 1
+	if [ -z "${NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET+x}" ]; then
+		printf 'legacy\n'
+		return 0
+	fi
+	state_dir="$(npcink_ai_cloud_release_state_dir "${PREVIOUS_RELEASE_DIR}")" || return 1
+	state_file="${state_dir}/runtime-network.env"
+	digests="$("${RELEASE_TOOL_PYTHON}" - \
+		"${state_file}" "${NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import os
+import sys
+
+digests = []
+for path in sys.argv[1:]:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            digests.append(hashlib.sha256(handle.read()).hexdigest())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+print(*digests, sep="\t")
+PY
+	)" || return 1
+	printf 'parameterized\t%s\t%s\t%s\t%s\t%s\n' \
+		"${NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET}" \
+		"${NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY}" \
+		"${NPCINK_CLOUD_RUNTIME_PROXY_IPV4}" \
+		"${NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH}" "${digests}"
+)
+
+freeze_previous_runtime_network_contract() {
+	local kind=""
+	local nginx_config_path=""
+	local state_sha256=""
+	local nginx_sha256=""
+
+	[ -n "${PREVIOUS_RELEASE_DIR}" ] || return 0
+	PREVIOUS_RUNTIME_NETWORK_SNAPSHOT="$(previous_runtime_network_snapshot)" || return 1
+	if [ "${PREVIOUS_RUNTIME_NETWORK_SNAPSHOT}" = "legacy" ]; then
+		echo "[info] Previous release uses the pre-runtime-network Compose contract."
+		return 0
+	fi
+	IFS=$'\t' read -r kind \
+		PREVIOUS_RUNTIME_NETWORK_SUBNET PREVIOUS_RUNTIME_NETWORK_GATEWAY \
+		PREVIOUS_RUNTIME_PROXY_IPV4 nginx_config_path state_sha256 nginx_sha256 \
+		<<<"${PREVIOUS_RUNTIME_NETWORK_SNAPSHOT}"
+	if [ "${kind}" != "parameterized" ] || [ -z "${nginx_config_path}" ] || \
+		[[ ! "${state_sha256}" =~ ^[0-9a-f]{64}$ ]] || \
+		[[ ! "${nginx_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+		echo "[fail] Previous runtime network snapshot is incomplete." >&2
+		return 1
+	fi
+	echo "[ok] Previous runtime network contract is frozen for inspection and rollback: subnet=${PREVIOUS_RUNTIME_NETWORK_SUBNET} gateway=${PREVIOUS_RUNTIME_NETWORK_GATEWAY} proxy=${PREVIOUS_RUNTIME_PROXY_IPV4}"
+}
+
+assert_previous_runtime_network_contract_unchanged() {
+	local observed=""
+
+	[ -n "${PREVIOUS_RELEASE_DIR}" ] || return 0
+	observed="$(previous_runtime_network_snapshot)" || {
+		echo "[fail] Previous runtime network contract drifted or became unsafe after it was frozen." >&2
+		return 1
+	}
+	if [ "${observed}" != "${PREVIOUS_RUNTIME_NETWORK_SNAPSHOT}" ]; then
+		echo "[fail] Previous runtime network contract drifted after it was frozen for this cutover." >&2
+		return 1
+	fi
+}
+
 compose_previous_release() {
 	local clean_env=(env -i "PATH=${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}")
 	local passthrough_key=""
+	assert_previous_runtime_network_contract_unchanged || return 1
 	# The new release env has already been loaded into this shell. Do not let
 	# those values outrank --env-file while reconstructing the previous release.
 	# Preserve only process/Docker transport settings needed to reach the same
@@ -1171,12 +1258,18 @@ compose_previous_release() {
 	done
 
 	"${clean_env[@]}" \
-		COMPOSE_PROJECT_NAME="${PREVIOUS_COMPOSE_PROJECT_NAME}" \
+		NPCINK_CLOUD_RELEASE_TOOL_PYTHON="${RELEASE_TOOL_PYTHON}" \
+		NPCINK_CLOUD_COMPOSE_PROJECT_NAME="${PREVIOUS_COMPOSE_PROJECT_NAME}" \
+		NPCINK_CLOUD_COMPOSE_FILE="${PREVIOUS_COMPOSE_FILE}" \
+		NPCINK_CLOUD_ENV_FILE="${PREVIOUS_ENV_FILE}" \
 		NPCINK_CLOUD_BACKEND_ENV_FILE="${PREVIOUS_ENV_FILE}" \
-		docker compose \
-		--project-directory "${PREVIOUS_RELEASE_DIR}" \
-		--env-file "${PREVIOUS_ENV_FILE}" \
-		-f "${PREVIOUS_COMPOSE_FILE}" "$@"
+		bash -ceu '
+			common_file="$1"
+			previous_root="$2"
+			shift 2
+			. "${common_file}"
+			npcink_ai_cloud_compose "${previous_root}" "$@"
+		' bash "${RELEASE_DIR}/deploy/common.sh" "${PREVIOUS_RELEASE_DIR}" "$@"
 }
 
 assert_p1_e06_ordinary_deploy_gate() {
@@ -1528,6 +1621,10 @@ previous_release_is_restartable() {
 	[ -f "${PREVIOUS_ENV_FILE}" ] || return 1
 	[ "$(stat -c '%a' "${PREVIOUS_ENV_FILE}")" = "600" ] || return 1
 	[ -f "${PREVIOUS_COMPOSE_FILE}" ] || return 1
+	if ! assert_previous_runtime_network_contract_unchanged; then
+		RETAIN_DEPLOY_LOCK=1
+		return 1
+	fi
 
 	services="$(compose_previous_release config --services 2>/dev/null)" || return 1
 	while IFS= read -r service_name; do
@@ -2017,6 +2114,7 @@ export NPCINK_CLOUD_COMPOSE_FILE="${NEW_COMPOSE_FILE}"
 if [ -n "${PREVIOUS_RELEASE_DIR}" ]; then
 	PREVIOUS_COMPOSE_FILE="${PREVIOUS_RELEASE_DIR}/${NEW_COMPOSE_RELATIVE}"
 fi
+freeze_previous_runtime_network_contract
 assert_previous_writer_project_alignment
 assert_p1_e06_ordinary_deploy_gate
 

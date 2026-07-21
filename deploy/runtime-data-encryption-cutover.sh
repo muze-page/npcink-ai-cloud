@@ -834,6 +834,7 @@ CUTOVER_SUCCEEDED=0
 ACTIVATION_COMMITTED=0
 LOCK_HELD=1
 IMAGE_PREPARE_STARTED=0
+RUNTIME_NETWORK_PREPARED=0
 IMAGE_TAGS_RESTORED=0
 DATA_SWITCH_ATTEMPTED=0
 DATA_SERVICES_SWITCHED=0
@@ -972,16 +973,44 @@ clean_env() {
 	"${clean[@]}" "$@"
 }
 
-compose() {
+compose_runtime_release() {
+	local release_root="$1"
+	local runtime_env_file="$2"
+	local runtime_compose_file="$3"
+	shift 3
+	local NPCINK_CLOUD_RELEASE_TOOL_PYTHON="${HOST_PYTHON}"
+
+	npcink_ai_cloud_prepare_runtime_compose_environment \
+		"${release_root}" "${runtime_compose_file}" \
+		"${COMPOSE_PROJECT_NAME_EFFECTIVE}" || return 1
 	clean_env \
 		COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
 		NPCINK_CLOUD_COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
-		NPCINK_CLOUD_ENV_FILE="${STAGED_ENV_FILE}" \
-		NPCINK_CLOUD_BACKEND_ENV_FILE="${STAGED_ENV_FILE}" \
+		NPCINK_CLOUD_ENV_FILE="${runtime_env_file}" \
+		NPCINK_CLOUD_BACKEND_ENV_FILE="${runtime_env_file}" \
+		NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET="${NPCINK_CLOUD_RUNTIME_NETWORK_SUBNET:-}" \
+		NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY="${NPCINK_CLOUD_RUNTIME_NETWORK_GATEWAY:-}" \
+		NPCINK_CLOUD_RUNTIME_PROXY_IPV4="${NPCINK_CLOUD_RUNTIME_PROXY_IPV4:-}" \
+		NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH="${NPCINK_CLOUD_RUNTIME_NGINX_CONFIG_PATH:-}" \
 		docker compose \
-		--project-directory "${STAGED_RELEASE}" \
-		--env-file "${STAGED_ENV_FILE}" \
-		-f "${STAGED_RELEASE}/docker-compose.runtime.yml" "$@"
+		--project-directory "${release_root}" \
+		--env-file "${runtime_env_file}" \
+		-f "${runtime_compose_file}" "$@"
+}
+
+compose() {
+	local compose_status=0
+	if [ "${RUNTIME_NETWORK_PREPARED:-0}" = "1" ]; then
+		compose_runtime_release \
+			"${STAGED_RELEASE}" "${STAGED_ENV_FILE}" \
+			"${STAGED_RELEASE}/docker-compose.runtime.yml" "$@" || compose_status=$?
+		return "${compose_status}"
+	fi
+	# Before prepare-only freezes the staged network contract, inspect the
+	# running generation through the previous release's own authority.
+	compose_runtime_release \
+		"${PREVIOUS_RELEASE}" "${CURRENT_ENV_FILE}" \
+		"${PREVIOUS_RELEASE}/docker-compose.runtime.yml" "$@"
 }
 
 assert_governed_one_off_absent() {
@@ -1022,15 +1051,9 @@ release_helper() {
 }
 
 compose_previous() {
-	clean_env \
-		COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
-		NPCINK_CLOUD_COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
-		NPCINK_CLOUD_ENV_FILE="${CURRENT_ENV_FILE}" \
-		NPCINK_CLOUD_BACKEND_ENV_FILE="${CURRENT_ENV_FILE}" \
-		docker compose \
-		--project-directory "${PREVIOUS_RELEASE}" \
-		--env-file "${CURRENT_ENV_FILE}" \
-		-f "${PREVIOUS_RELEASE}/docker-compose.runtime.yml" "$@"
+	compose_runtime_release \
+		"${PREVIOUS_RELEASE}" "${CURRENT_ENV_FILE}" \
+		"${PREVIOUS_RELEASE}/docker-compose.runtime.yml" "$@"
 }
 
 stop_expected_services_and_verify() {
@@ -2051,6 +2074,7 @@ if ! release_helper \
 	>"${PREPARE_LOG}" 2>&1; then
 	fail "exact bundle prepare-only phase failed"
 fi
+RUNTIME_NETWORK_PREPARED=1
 [ -f "${ROLLBACK_IMAGE_MAP}" ] && [ "$(mode_of "${ROLLBACK_IMAGE_MAP}")" = "600" ] || fail "prepare-only rollback image map is missing or unsafe"
 NEW_API_IMAGE_ID="$(
 	"${HOST_PYTHON}" "${MANIFEST_HELPER}" loaded-role-daemon-id \
