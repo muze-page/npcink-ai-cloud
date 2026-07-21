@@ -310,9 +310,10 @@ after remediation; the stable unchecked gate above remains authoritative.
   only the loopback NGINX ingress
 - [ ] the external Edge replaces inbound `X-Real-IP`, `X-Forwarded-For`,
   `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Port` values
-- [ ] NGINX trusts real-client headers only from gateway `172.28.0.1`, sets
-  upstream `X-Forwarded-For` from `$remote_addr`, and Gunicorn trusts only NGINX
-  at `172.28.0.10`
+- [ ] NGINX trusts real-client headers only from the gateway frozen in the
+  protected per-release runtime network state, sets upstream
+  `X-Forwarded-For` from `$remote_addr`, and Gunicorn trusts only the proxy IPv4
+  address frozen in that same state
 - [ ] the loader reported
   `[ok] Retired bundle services are absent: caddy jaeger otel-collector` before
   public health verification

@@ -119,14 +119,18 @@ and one-shot multipart parsing to a bounded signed ingress:
   route-wide budget. Limit rejections return 429 and global body limits remain
   unchanged. In production, the operator-owned TLS Edge replaces inbound
   client-address and forwarded headers before reaching the loopback NGINX
-  ingress. Runtime Compose pins its gateway to `172.28.0.1`; NGINX accepts
-  `X-Real-IP` only from that gateway, so `$binary_remote_addr` continues to
-  represent the verified client for per-client zones, and sends
+  ingress. Runtime Compose freezes the discovered managed-network gateway in
+  protected per-release runtime network state; NGINX accepts `X-Real-IP` only
+  from that gateway, so `$binary_remote_addr` continues to represent the
+  verified client for per-client zones, and sends
   `X-Forwarded-For $remote_addr` upstream instead of appending an untrusted
-  chain. NGINX is separately pinned to `172.28.0.10`, the only forwarded proxy
-  address trusted by Gunicorn. The loopback local-development direct-client
-  path does not rewrite client addresses. The local exact-bundle HTTP smoke is
-  an explicit loopback-only exception and is not a production ingress model.
+  chain. The proxy IPv4 address is frozen in
+  the same state and is the only forwarded proxy address trusted by Gunicorn.
+  `172.28.0.1` and `172.28.0.10` are defaults for a fresh network, not a reason
+  to renumber an existing managed network. The loopback local-development
+  direct-client path does not rewrite client addresses. The local exact-bundle
+  HTTP smoke is an explicit loopback-only exception and is not a production
+  ingress model.
 
 This deliberately performs two disk I/O passes for multipart requests:
 network to the sealed raw spool, then raw spool to bounded multipart file

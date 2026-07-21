@@ -104,7 +104,7 @@ backup roots explicitly:
 
 ```bash
 sudo chown -R root:root -- /opt/npcink-ai-cloud
-test -z "$(sudo find /opt/npcink-ai-cloud \( ! -user root -o ! -group root -o -perm /022 \) -print -quit)"
+test -z "$(sudo find /opt/npcink-ai-cloud \( ! -user root -o ! -group root -o \( ! -type l -a -perm /022 \) \) -print -quit)"
 sudo install -d -o root -g root -m 0700 \
   /var/backups/npcink-ai-cloud \
   /run/npcink-ai-cloud
@@ -125,9 +125,12 @@ The external Edge owns public `80/443`, certificates, TLS policy, DNS, and any
 WAF/source restriction. It must replace client-supplied `X-Real-IP`,
 `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and
 `X-Forwarded-Port` values. The bundled NGINX trusts client-address evidence
-only from the Compose gateway `172.28.0.1` and sets the upstream
-`X-Forwarded-For` to `$remote_addr`; Gunicorn trusts forwarded headers only
-from NGINX at `172.28.0.10`.
+only from the gateway frozen in the protected per-release runtime network
+state and sets the upstream `X-Forwarded-For` to `$remote_addr`; Gunicorn
+trusts forwarded headers only from the proxy IPv4 address frozen in that same
+state. A fresh managed network defaults to `172.28.0.1` and `172.28.0.10`, but
+an existing managed Compose network is discovered and retained rather than
+renumbered during deployment.
 
 The exact-bundle smoke may replay the artifact through loopback NGINX over
 plain HTTP. That is a local verification exception, never a production public

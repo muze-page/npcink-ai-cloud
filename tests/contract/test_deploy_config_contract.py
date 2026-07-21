@@ -457,6 +457,51 @@ def test_production_api_trusts_the_same_pinned_network_used_by_compose() -> None
     assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" not in nginx
 
 
+def test_runtime_network_authority_is_documented_as_release_scoped() -> None:
+    cloud_root = _cloud_root()
+    ops_playbook = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
+    deploy_guide = (cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md").read_text()
+    release_checklist = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
+    media_boundary = (cloud_root / "docs" / "media-runtime-boundary-v1.md").read_text()
+    edge_adr = (
+        cloud_root / "docs" / "decisions" / "020-external-tls-single-bundled-nginx.md"
+    ).read_text()
+    network_adr = (
+        cloud_root
+        / "docs"
+        / "decisions"
+        / "021-release-scoped-runtime-network-authority.md"
+    ).read_text()
+
+    active_docs = tuple(
+        " ".join(document.split())
+        for document in (ops_playbook, deploy_guide, release_checklist, media_boundary)
+    )
+    normalized_network_adr = " ".join(network_adr.split())
+    assert all("per-release runtime network state" in document for document in active_docs)
+    assert "! -type l -a -perm /022" in ops_playbook
+    assert "ADR-021" in edge_adr
+    for marker in (
+        "runtime-network.env",
+        "nginx.runtime.conf",
+        "an existing managed network is retained",
+        "temporarily absent proxy retains its frozen address",
+        "previous release's own network authority",
+    ):
+        assert marker in normalized_network_adr
+
+    stale_authority_phrases = (
+        "pinned Compose gateway `172.28.0.1`",
+        "Runtime Compose pins its gateway to `172.28.0.1`",
+        "NGINX trusts real-client headers only from gateway `172.28.0.1`",
+    )
+    assert all(
+        phrase not in document
+        for document in active_docs
+        for phrase in stale_authority_phrases
+    )
+
+
 def _run_runtime_network_contract_prepare(
     tmp_path: Path,
     *,
