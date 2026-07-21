@@ -297,6 +297,33 @@ describe('ApiClient', () => {
     expect(isValidIdempotencyKey('x'.repeat(129))).toBe(false);
   });
 
+  it('normalizes adversarial long underscore runs before invoking the key factory', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(successEnvelope({ saved: true })));
+    const idempotencyKeyFactory = vi.fn((prefix: string) => `${prefix}_fixed`);
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ApiClient({
+      idempotencyPrefix: `${'_'.repeat(100_000)}admin_write${'_'.repeat(100_000)}`,
+      idempotencyKeyFactory,
+    });
+
+    await client.request('/api/admin/accounts', { method: 'POST' });
+
+    expect(idempotencyKeyFactory).toHaveBeenCalledOnce();
+    expect(idempotencyKeyFactory).toHaveBeenCalledWith('admin_write');
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(init.headers).get('idempotency-key')).toBe('admin_write_fixed');
+  });
+
+  it('handles adversarial long hyphen runs with bounded key validation', () => {
+    const hyphenRun = '-'.repeat(100_000);
+    const key = generateIdempotencyKey(`${hyphenRun}portal_write${hyphenRun}`);
+
+    expect(key).toMatch(/^portal_write_/);
+    expect(key.length).toBeLessThanOrEqual(128);
+    expect(isValidIdempotencyKey(key)).toBe(true);
+    expect(isValidIdempotencyKey(hyphenRun)).toBe(false);
+  });
+
   it('does not expose a session token in the logout idempotency key', () => {
     const sessionToken = 'session-token-must-remain-secret';
     const key = IdempotencyKeys.logout(sessionToken);
