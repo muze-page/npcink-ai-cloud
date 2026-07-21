@@ -298,8 +298,9 @@ def test_media_upload_proxy_overrides_are_exact_and_bounded() -> None:
         "proxy_set_header X-Forwarded-Port 443;",
     ):
         assert external_edge_header in domain
-    assert "listen 443 ssl http2;" not in domain
-    assert "http2 on;" in domain
+    assert "listen 443 ssl http2;" in domain
+    assert "listen [::]:443 ssl http2;" in domain
+    assert "http2 on;" not in domain
     assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" not in domain
 
     runtime_proxy = _compose_service_block(runtime_compose, "proxy")
@@ -488,7 +489,8 @@ def test_formal_runtime_requires_the_external_tls_edge_contract() -> None:
     assert 'DEPLOY_LOCK_DIR="${REMOTE_DIR}/.deploy-lock"' in bind_domain
     lock_acquire = bind_domain.index('mkdir -- "${DEPLOY_LOCK_DIR}"')
     freeze_nginx = bind_domain.index('backup_target "${SITE_AVAILABLE}"')
-    freeze_caddy = bind_domain.index("done < <(docker ps -q")
+    freeze_caddy = bind_domain.index("snapshot_original_caddy_ids || fail_remote")
+    assert "done < <(docker ps -q" not in bind_domain
     stop_caddy = bind_domain.index('docker stop "${ORIGINAL_CADDY_IDS[@]}"')
     nginx_restart = bind_domain.index("systemctl restart nginx", stop_caddy)
     edge_health = bind_domain.index('--resolve "${DOMAIN}:443:127.0.0.1"')

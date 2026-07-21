@@ -341,6 +341,7 @@ PRESERVE_ROLLBACK_EVIDENCE=0
 EDGE_SERVICE_MUTATION_STARTED=0
 NGINX_WAS_ACTIVE=0
 NGINX_WAS_ENABLED=0
+NGINX_ACTIVE_STATE=""
 NGINX_ENABLEMENT_STATE=""
 SITE_AVAILABLE_EXISTED=0
 SITE_ENABLED_EXISTED=0
@@ -358,6 +359,10 @@ mode_of() {
 
 owner_uid_of() {
 	stat -c '%u' -- "$1"
+}
+
+metadata_of() {
+	stat -c '%u:%g:%a' -- "$1"
 }
 
 file_type_of() {
@@ -478,9 +483,119 @@ restore_target() {
 }
 
 restore_nginx_files() {
-	restore_target "${SITE_AVAILABLE}" site-available "${SITE_AVAILABLE_EXISTED}" || return 1
-	restore_target "${SITE_ENABLED}" site-enabled "${SITE_ENABLED_EXISTED}" || return 1
-	restore_target "${DEFAULT_ENABLED}" default-enabled "${DEFAULT_ENABLED_EXISTED}" || return 1
+	local restore_failed=0
+	restore_target "${SITE_AVAILABLE}" site-available "${SITE_AVAILABLE_EXISTED}" || restore_failed=1
+	restore_target "${SITE_ENABLED}" site-enabled "${SITE_ENABLED_EXISTED}" || restore_failed=1
+	restore_target "${DEFAULT_ENABLED}" default-enabled "${DEFAULT_ENABLED_EXISTED}" || restore_failed=1
+	return "${restore_failed}"
+}
+
+restored_target_matches_snapshot() {
+	local label="$1"
+	local target="$2"
+	local backup_name="$3"
+	local existed="$4"
+	local backup="${ROLLBACK_DIR}/${backup_name}"
+	local target_type=""
+	local backup_type=""
+	local target_metadata=""
+	local backup_metadata=""
+	local target_link=""
+	local backup_link=""
+
+	if [ "${existed}" = "0" ]; then
+		if [ -e "${target}" ] || [ -L "${target}" ]; then
+			echo "[edge-bind:fail] rollback postcondition failed: ${label} should be absent" >&2
+			return 1
+		fi
+		return 0
+	fi
+	if { [ ! -e "${backup}" ] && [ ! -L "${backup}" ]; } || \
+		{ [ ! -e "${target}" ] && [ ! -L "${target}" ]; }; then
+		echo "[edge-bind:fail] rollback postcondition failed: ${label} snapshot or target is missing" >&2
+		return 1
+	fi
+	target_type="$(file_type_of "${target}")" || return 1
+	backup_type="$(file_type_of "${backup}")" || return 1
+	target_metadata="$(metadata_of "${target}")" || return 1
+	backup_metadata="$(metadata_of "${backup}")" || return 1
+	if [ "${target_type}" != "${backup_type}" ] || \
+		[ "${target_metadata}" != "${backup_metadata}" ]; then
+		echo "[edge-bind:fail] rollback postcondition failed: ${label} type or metadata differs" >&2
+		return 1
+	fi
+	case "${backup_type}" in
+		"regular file")
+			cmp -s -- "${backup}" "${target}" || {
+				echo "[edge-bind:fail] rollback postcondition failed: ${label} content differs" >&2
+				return 1
+			}
+			;;
+		"symbolic link")
+			target_link="$(readlink -- "${target}")" || return 1
+			backup_link="$(readlink -- "${backup}")" || return 1
+			[ "${target_link}" = "${backup_link}" ] || {
+				echo "[edge-bind:fail] rollback postcondition failed: ${label} link target differs" >&2
+				return 1
+			}
+			;;
+		*)
+			echo "[edge-bind:fail] rollback postcondition failed: ${label} has unsupported type" >&2
+			return 1
+			;;
+	esac
+}
+
+verify_restored_nginx_state() {
+	local verification_failed=0
+	restored_target_matches_snapshot \
+		"sites-available config" "${SITE_AVAILABLE}" site-available "${SITE_AVAILABLE_EXISTED}" || \
+		verification_failed=1
+	restored_target_matches_snapshot \
+		"sites-enabled config" "${SITE_ENABLED}" site-enabled "${SITE_ENABLED_EXISTED}" || \
+		verification_failed=1
+	restored_target_matches_snapshot \
+		"default site config" "${DEFAULT_ENABLED}" default-enabled "${DEFAULT_ENABLED_EXISTED}" || \
+		verification_failed=1
+	if ! nginx -t >/dev/null 2>&1; then
+		echo "[edge-bind:fail] rollback postcondition failed: restored NGINX configuration is invalid" >&2
+		verification_failed=1
+	fi
+	return "${verification_failed}"
+}
+
+verify_original_nginx_service_state() {
+	local active_state=""
+	local active_status=0
+	local enablement_state=""
+	if active_state="$(systemctl is-active nginx 2>/dev/null)"; then
+		active_status=0
+	else
+		active_status=$?
+	fi
+	case "${active_state}:${active_status}" in
+		active:0|inactive:3) ;;
+		*)
+			echo "[edge-bind:fail] rollback postcondition failed: NGINX active state is unreadable" >&2
+			return 1
+			;;
+	esac
+	if [ "${active_state}" != "${NGINX_ACTIVE_STATE}" ]; then
+		echo "[edge-bind:fail] rollback postcondition failed: NGINX service state differs" >&2
+		return 1
+	fi
+	enablement_state="$(systemctl is-enabled nginx 2>/dev/null || true)"
+	case "${enablement_state}" in
+		enabled|disabled|masked|static|indirect|generated) ;;
+		*)
+			echo "[edge-bind:fail] rollback postcondition failed: NGINX enablement state is unreadable" >&2
+			return 1
+			;;
+	esac
+	if [ "${enablement_state}" != "${NGINX_ENABLEMENT_STATE}" ]; then
+		echo "[edge-bind:fail] rollback postcondition failed: NGINX service state differs" >&2
+		return 1
+	fi
 }
 
 assert_safe_existing_site_available() {
@@ -504,8 +619,11 @@ verify_original_caddy_running() {
 	local container_id=""
 	local running=""
 	for container_id in "${ORIGINAL_CADDY_IDS[@]}"; do
-		running="$(docker inspect --format '{{.State.Running}}' "${container_id}")" || return 1
-		[ "${running}" = "true" ] || return 1
+		if ! running="$(docker inspect --format '{{.State.Running}}' "${container_id}")" || \
+			[ "${running}" != "true" ]; then
+			echo "[edge-bind:fail] rollback postcondition failed: original Caddy container is not verifiably running (${container_id})" >&2
+			return 1
+		fi
 	done
 }
 
@@ -518,44 +636,71 @@ verify_original_caddy_stopped() {
 	done
 }
 
+snapshot_original_caddy_ids() {
+	local snapshot_path="${ROLLBACK_DIR}/original-caddy-ids"
+	ORIGINAL_CADDY_IDS=()
+	if ! docker ps -q \
+		--filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
+		--filter "label=com.docker.compose.service=caddy" >"${snapshot_path}"; then
+		echo "[edge-bind:fail] could not snapshot the running project Caddy containers" >&2
+		return 1
+	fi
+	chmod 0600 "${snapshot_path}" || return 1
+	while IFS= read -r container_id; do
+		[ -n "${container_id}" ] || continue
+		if [[ ! "${container_id}" =~ ^[0-9a-f]{12,64}$ ]]; then
+			echo "[edge-bind:fail] Docker returned an invalid Caddy container ID" >&2
+			return 1
+		fi
+		ORIGINAL_CADDY_IDS+=("${container_id}")
+	done <"${snapshot_path}"
+}
+
 rollback_edge_transaction() {
 	local rollback_failed=0
 	if [ "${EDGE_SERVICE_MUTATION_STARTED}" != "1" ]; then
-		restore_nginx_files || rollback_failed=1
+		if ! restore_nginx_files; then
+			echo "[edge-bind:warn] one or more NGINX restore commands returned non-zero; checking final state" >&2
+		fi
+		verify_restored_nginx_state || rollback_failed=1
+		verify_original_nginx_service_state || rollback_failed=1
 		verify_original_caddy_running || rollback_failed=1
-		[ "${rollback_failed}" = "0" ]
-		return
+		return "${rollback_failed}"
 	fi
 	# Free public ports before restoring the exact pre-transaction services.
-	systemctl stop nginx >/dev/null 2>&1 || rollback_failed=1
-	restore_nginx_files || rollback_failed=1
+	systemctl stop nginx >/dev/null 2>&1 || true
+	if ! restore_nginx_files; then
+		echo "[edge-bind:warn] one or more NGINX restore commands returned non-zero; checking final state" >&2
+	fi
 	case "${NGINX_ENABLEMENT_STATE}" in
 		enabled)
-			systemctl unmask nginx >/dev/null 2>&1 || rollback_failed=1
-			systemctl enable nginx >/dev/null 2>&1 || rollback_failed=1
+			systemctl unmask nginx >/dev/null 2>&1 || true
+			systemctl enable nginx >/dev/null 2>&1 || true
 			;;
 		disabled)
-			systemctl unmask nginx >/dev/null 2>&1 || rollback_failed=1
-			systemctl disable nginx >/dev/null 2>&1 || rollback_failed=1
+			systemctl unmask nginx >/dev/null 2>&1 || true
+			systemctl disable nginx >/dev/null 2>&1 || true
 			;;
 		masked)
-			systemctl stop nginx >/dev/null 2>&1 || rollback_failed=1
-			systemctl mask nginx >/dev/null 2>&1 || rollback_failed=1
+			systemctl stop nginx >/dev/null 2>&1 || true
+			systemctl mask nginx >/dev/null 2>&1 || true
 			;;
 		static|indirect|generated) ;;
 		*) rollback_failed=1 ;;
 	esac
 	if [ "${NGINX_WAS_ACTIVE}" = "1" ]; then
-		nginx -t >/dev/null 2>&1 || rollback_failed=1
-		systemctl restart nginx >/dev/null 2>&1 || rollback_failed=1
+		nginx -t >/dev/null 2>&1 || true
+		systemctl restart nginx >/dev/null 2>&1 || true
 	else
-		systemctl stop nginx >/dev/null 2>&1 || rollback_failed=1
+		systemctl stop nginx >/dev/null 2>&1 || true
 	fi
 	if [ "${#ORIGINAL_CADDY_IDS[@]}" -gt 0 ]; then
-		docker start "${ORIGINAL_CADDY_IDS[@]}" >/dev/null 2>&1 || rollback_failed=1
-		verify_original_caddy_running || rollback_failed=1
+		docker start "${ORIGINAL_CADDY_IDS[@]}" >/dev/null 2>&1 || true
 	fi
-	[ "${rollback_failed}" = "0" ]
+	verify_restored_nginx_state || rollback_failed=1
+	verify_original_nginx_service_state || rollback_failed=1
+	verify_original_caddy_running || rollback_failed=1
+	return "${rollback_failed}"
 }
 
 cleanup_remote_tmp() {
@@ -610,7 +755,7 @@ CANDIDATE_CONFIG_MODE="$(mode_of "${REMOTE_TMP_CONF}")"
 (( (8#${CANDIDATE_CONFIG_MODE} & 0022) == 0 )) || fail_remote "candidate NGINX config must not be group/world writable"
 test "$(stat -c '%a' "${REMOTE_TMP_DIR}")" = "700" || fail_remote "remote temporary directory must have mode 0700"
 
-for required_command in awk cp curl dirname docker find install nginx openssl readlink rm stat systemctl; do
+for required_command in awk cmp cp curl dirname docker find install nginx openssl readlink rm stat systemctl; do
 	command -v "${required_command}" >/dev/null 2>&1 || \
 		fail_remote "Host prerequisite is missing: ${required_command}. Install prerequisites before running the migration helper."
 done
@@ -629,7 +774,17 @@ install -d -m 700 -- "${ROLLBACK_DIR}"
 assert_safe_directory "/etc/nginx/sites-available" "NGINX sites-available directory"
 assert_safe_directory "/etc/nginx/sites-enabled" "NGINX sites-enabled directory"
 assert_safe_existing_site_available
-systemctl is-active --quiet nginx && NGINX_WAS_ACTIVE=1 || true
+NGINX_ACTIVE_STATUS=0
+if NGINX_ACTIVE_STATE="$(systemctl is-active nginx 2>/dev/null)"; then
+	NGINX_ACTIVE_STATUS=0
+else
+	NGINX_ACTIVE_STATUS=$?
+fi
+case "${NGINX_ACTIVE_STATE}:${NGINX_ACTIVE_STATUS}" in
+	active:0) NGINX_WAS_ACTIVE=1 ;;
+	inactive:3) ;;
+	*) fail_remote "unsupported pre-transaction NGINX active state" ;;
+esac
 NGINX_ENABLEMENT_STATE="$(systemctl is-enabled nginx 2>/dev/null || true)"
 case "${NGINX_ENABLEMENT_STATE}" in
 	enabled) NGINX_WAS_ENABLED=1 ;;
@@ -639,20 +794,13 @@ esac
 backup_target "${SITE_AVAILABLE}" site-available SITE_AVAILABLE_EXISTED
 backup_target "${SITE_ENABLED}" site-enabled SITE_ENABLED_EXISTED
 backup_target "${DEFAULT_ENABLED}" default-enabled DEFAULT_ENABLED_EXISTED
-printf 'active=%s\nenabled=%s\nenablement_state=%s\n' \
-	"${NGINX_WAS_ACTIVE}" "${NGINX_WAS_ENABLED}" "${NGINX_ENABLEMENT_STATE}" \
+printf 'active=%s\nactive_state=%s\nenabled=%s\nenablement_state=%s\n' \
+	"${NGINX_WAS_ACTIVE}" "${NGINX_ACTIVE_STATE}" \
+	"${NGINX_WAS_ENABLED}" "${NGINX_ENABLEMENT_STATE}" \
 	>"${ROLLBACK_DIR}/nginx-state"
 chmod 0600 "${ROLLBACK_DIR}/nginx-state"
 
-while IFS= read -r container_id; do
-	[ -n "${container_id}" ] || continue
-	[[ "${container_id}" =~ ^[0-9a-f]{12,64}$ ]] || fail_remote "Docker returned an invalid Caddy container ID"
-	ORIGINAL_CADDY_IDS+=("${container_id}")
-done < <(docker ps -q \
-	--filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
-	--filter "label=com.docker.compose.service=caddy")
-printf '%s\n' "${ORIGINAL_CADDY_IDS[@]}" >"${ROLLBACK_DIR}/original-caddy-ids"
-chmod 0600 "${ROLLBACK_DIR}/original-caddy-ids"
+snapshot_original_caddy_ids || fail_remote "could not create the exact Caddy rollback snapshot"
 
 ROLLBACK_REQUIRED=1
 rm -f -- "${SITE_AVAILABLE}" "${SITE_ENABLED}"
@@ -661,8 +809,12 @@ ln -sfn -- "${SITE_AVAILABLE}" "${SITE_ENABLED}"
 nginx -t
 
 if [ "${PREPARE_ONLY}" = "1" ]; then
-	restore_nginx_files
-	nginx -t >/dev/null 2>&1 || fail_remote "restored NGINX configuration is invalid after prepare-only"
+	if ! restore_nginx_files; then
+		echo "[edge-bind:warn] one or more NGINX restore commands returned non-zero; checking final state" >&2
+	fi
+	verify_restored_nginx_state || fail_remote "prepare-only did not restore the exact prior NGINX state"
+	verify_original_nginx_service_state || fail_remote "prepare-only changed the NGINX service state"
+	verify_original_caddy_running || fail_remote "prepare-only changed the exact prior Caddy state"
 	ROLLBACK_REQUIRED=0
 	TRANSACTION_COMMITTED=1
 	release_deploy_lock
