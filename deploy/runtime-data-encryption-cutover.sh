@@ -999,11 +999,12 @@ compose_runtime_release() {
 }
 
 compose() {
+	local compose_status=0
 	if [ "${RUNTIME_NETWORK_PREPARED:-0}" = "1" ]; then
 		compose_runtime_release \
 			"${STAGED_RELEASE}" "${STAGED_ENV_FILE}" \
-			"${STAGED_RELEASE}/docker-compose.runtime.yml" "$@"
-		return
+			"${STAGED_RELEASE}/docker-compose.runtime.yml" "$@" || compose_status=$?
+		return "${compose_status}"
 	fi
 	# Before prepare-only freezes the staged network contract, inspect the
 	# running generation through the previous release's own authority.

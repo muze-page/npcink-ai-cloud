@@ -547,7 +547,23 @@ else:
 PY
                 ;;
             %u)
-                printf '0\n'
+                case "${path}" in
+                    /etc/letsencrypt|/etc/letsencrypt/*)
+                        printf '0\n'
+                        exit 0
+                        ;;
+                esac
+                "${HOST_PYTHON}" - "${path}" <<'PY'
+import os
+import sys
+
+# Most fixture objects emulate root-owned production paths even when pytest
+# runs as an ordinary macOS user.  Preserve an explicit nobody ownership
+# mutation so the Linux root-only negative case can still exercise the
+# production ownership guard instead of reaching the receipt handoff.
+observed_uid = os.stat(sys.argv[1]).st_uid
+print(observed_uid if observed_uid == 65534 else 0)
+PY
                 ;;
             %F)
                 case "${path}" in
@@ -2168,6 +2184,8 @@ def test_edge_readiness_env_is_required_private_and_exactly_five_keys(
 
         assert completed.returncode != 0
         assert "edge readiness env" in completed.stderr.lower()
+        if case_name == "wrong-owner":
+            assert "Edge readiness env must be owned by root" in completed.stderr
         assert _current_env_path(fixture).read_bytes() == original_current_env
         assert not (fixture.state / "image-prepared").exists()
         assert not fixture.handoff.exists()
