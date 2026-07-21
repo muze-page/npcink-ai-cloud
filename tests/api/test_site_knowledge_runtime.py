@@ -1283,9 +1283,13 @@ def test_sync_strips_style_script_noise_before_indexing(tmp_path: Path) -> None:
         "title": "AI 摘要 &#8211; 页面",
         "url": "https://example.test/ai-summary",
         "modified_gmt": "2026-06-03 02:00:00",
-        "excerpt": "<style>.hero { opacity: 0; }</style>AI 摘要页面说明",
+        "excerpt": (
+            "<StYlE data-source='untrusted'>STYLE_SECRET_TEXT</STYLE   >"
+            "AI 摘要页面说明"
+        ),
         "content_excerpt": (
-            "<script>alert('secret')</script>"
+            "<ScRiPt type='text/javascript'>SCRIPT_SECRET_TEXT"
+            "</sCrIpT\t\n data-tail='untrusted'>"
             "@keyframes fadeInUp { from { opacity: 0; transform: translateY(40px); } "
             "to { opacity: 1; transform: translateY(0); } } "
             "AI 摘要用于给文章提供站内上下文。"
@@ -1307,7 +1311,8 @@ def test_sync_strips_style_script_noise_before_indexing(tmp_path: Path) -> None:
     assert "&#8211;" not in chunk.chunk_text
     assert "@keyframes" not in chunk.chunk_text
     assert "opacity" not in chunk.chunk_text
-    assert "alert" not in chunk.chunk_text
+    assert "STYLE_SECRET_TEXT" not in chunk.chunk_text
+    assert "SCRIPT_SECRET_TEXT" not in chunk.chunk_text
 
 
 def test_sync_caps_long_documents_and_reports_truncation(tmp_path: Path) -> None:

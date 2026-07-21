@@ -77,7 +77,7 @@ EmbeddingUsageCallback = Callable[
 ]
 
 STYLE_SCRIPT_BLOCK_PATTERN = re.compile(
-    r"<(?:style|script)\b[^>]*>.*?</(?:style|script)>",
+    r"<(?:style|script)\b[^>]*>.*?</(?:style|script)\b[^>]*>",
     flags=re.IGNORECASE | re.DOTALL,
 )
 HTML_TAG_PATTERN = re.compile(r"<[^>]+>")

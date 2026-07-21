@@ -26,6 +26,7 @@ from app.domain.web_search.contracts import (
     validate_public_source_url,
 )
 from app.domain.web_search.service import (
+    _TAVILY_KEY_TOKENS,
     _TAVILY_POOL_CURSOR,
     _TAVILY_POOL_QUARANTINED_UNTIL,
     _ZHIHU_HOT_LIST_CACHE,
@@ -36,6 +37,7 @@ from app.domain.web_search.service import (
     WebSearchProviderError,
     WebSearchProviderUsage,
     ZhihuWebSearchProvider,
+    _tavily_key_token,
 )
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
@@ -786,8 +788,25 @@ def test_tavily_key_pool_rotates_without_exposing_keys(monkeypatch: Any) -> None
     assert first.result_json["provider_key_pool"]["selected_key_label"] == "account-a"
     assert second.result_json["provider_key_pool"]["selected_key_index"] == 2
     assert second.result_json["provider_key_pool"]["selected_key_label"] == "account-b"
-    assert "tvly-pool-a" not in json.dumps(first.result_json)
-    assert "tvly-pool-b" not in json.dumps(second.result_json)
+    serialized_results = json.dumps([first.result_json, second.result_json])
+    assert "tvly-pool-a" not in serialized_results
+    assert "tvly-pool-b" not in serialized_results
+
+
+def test_tavily_key_tokens_are_opaque_stable_and_process_local() -> None:
+    first_key = "tvly-process-local-fingerprint-a"
+    second_key = "tvly-process-local-fingerprint-b"
+    _TAVILY_KEY_TOKENS.clear()
+
+    first_token = _tavily_key_token(first_key)
+
+    assert first_token == _tavily_key_token(first_key)
+    assert first_token != _tavily_key_token(second_key)
+    assert first_key not in first_token
+    assert second_key not in first_token
+
+    _TAVILY_KEY_TOKENS.clear()
+    assert first_token != _tavily_key_token(first_key)
 
 
 def test_tavily_rejects_oversized_provider_response(monkeypatch: Any) -> None:

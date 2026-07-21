@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
 import threading
 import time
 from dataclasses import dataclass
@@ -44,6 +45,8 @@ MAX_SOURCE_PREVIEW_CHARS = 600
 WEB_SEARCH_PROVIDER_ORDER = ("tavily", "bocha", "apify", "zhihu")
 TAVILY_KEY_QUARANTINE_SECONDS = 300.0
 _TAVILY_POOL_LOCK = threading.Lock()
+# Opaque runtime-local tokens avoid deriving identifiers from provider secrets.
+_TAVILY_KEY_TOKENS: dict[str, str] = {}
 _TAVILY_POOL_CURSOR: dict[str, int] = {}
 _TAVILY_POOL_QUARANTINED_UNTIL: dict[tuple[str, str], float] = {}
 _ZHIHU_HOT_LIST_LOCK = threading.Lock()
@@ -1068,10 +1071,10 @@ def _select_tavily_api_key(
     *,
     labels: list[str] | None = None,
 ) -> _TavilyApiKeySelection:
-    fingerprints = [_hash_tavily_key(item) for item in api_keys]
-    pool_id = hashlib.sha256("|".join(fingerprints).encode("utf-8")).hexdigest()[:16]
     now = time.monotonic()
     with _TAVILY_POOL_LOCK:
+        fingerprints = [_tavily_key_token_unlocked(item) for item in api_keys]
+        pool_id = "|".join(fingerprints)
         start = _TAVILY_POOL_CURSOR.get(pool_id, 0) % len(api_keys)
         selected = start
         for offset in range(len(api_keys)):
@@ -1110,8 +1113,17 @@ def _should_quarantine_tavily_key(error_code: str | None) -> bool:
     }
 
 
-def _hash_tavily_key(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+def _tavily_key_token(value: str) -> str:
+    with _TAVILY_POOL_LOCK:
+        return _tavily_key_token_unlocked(value)
+
+
+def _tavily_key_token_unlocked(value: str) -> str:
+    token = _TAVILY_KEY_TOKENS.get(value)
+    if token is None:
+        token = secrets.token_hex(16)
+        _TAVILY_KEY_TOKENS[value] = token
+    return token
 
 
 def _build_provider(

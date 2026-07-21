@@ -307,11 +307,11 @@ async def create_media_upload(request: Request) -> Any:
                 trace_id=ingress.auth.trace_id,
             )
             return _execution_response(result, message="media upload accepted")
-        except (json.JSONDecodeError, ValueError) as error:
+        except (json.JSONDecodeError, ValueError):
             return _media_error_response(
                 status_code=422,
                 error_code="media_upload.validation_error",
-                message=str(error),
+                message="media upload request is invalid",
                 trace_id=ingress.auth.trace_id,
             )
         except (MediaDerivativeErrorBase, RuntimeErrorBase) as error:
@@ -343,11 +343,11 @@ async def create_media_job(request: Request) -> Any:
         return auth
     try:
         payload = MediaJobRequest.model_validate(await request.json())
-    except (json.JSONDecodeError, ValueError) as error:
+    except (json.JSONDecodeError, ValueError):
         return _media_error_response(
             status_code=422,
             error_code="media_job.validation_error",
-            message=str(error),
+            message="media job request is invalid",
             trace_id=auth.trace_id,
         )
     service = _get_runtime_service(request)
@@ -466,11 +466,11 @@ async def acknowledge_media_artifact(request: Request, artifact_id: str) -> Any:
         )
     try:
         payload = MediaArtifactDeliveryAckRequest.model_validate(await request.json())
-    except (json.JSONDecodeError, ValidationError) as error:
+    except (json.JSONDecodeError, ValidationError):
         return _media_error_response(
             status_code=422,
             error_code="media_artifact.delivery_ack_validation_error",
-            message=str(error),
+            message="media artifact delivery acknowledgement request is invalid",
             trace_id=auth.trace_id,
             revision="media2",
         )

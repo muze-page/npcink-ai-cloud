@@ -273,6 +273,84 @@ def _artifact_id(response: Any) -> str:
     return str(response.json()["data"]["result"]["artifact"]["artifact_id"])
 
 
+def test_validation_errors_do_not_expose_internal_request_details(tmp_path: Path) -> None:
+    database_url, _, _, client = _client(tmp_path)
+    internal_detail = "sk-LEAK|Traceback|/srv/private.py:731"
+    expected_trace_id = "0123456789abcdef0123456789abcdef"
+    artifact_id = f"art_{'a' * 32}"
+    try:
+        upload_payload = {
+            "request_contract_version": "media_upload_request.v1",
+            "media_kind": "image",
+            "ttl_minutes": 30,
+            "unexpected_internal_detail": internal_detail,
+        }
+        upload_body, upload_content_type = _multipart(upload_payload, _png())
+        upload_headers = build_auth_headers(
+            "POST",
+            UPLOAD_PATH,
+            site_id="site_alpha",
+            body=upload_body,
+            idempotency_key="validation-upload",
+            nonce="validation-upload",
+        )
+        upload_headers["content-type"] = upload_content_type
+        upload = client.post(UPLOAD_PATH, content=upload_body, headers=upload_headers)
+
+        job_payload = _job_payload(artifact_id)
+        job_payload["unexpected_internal_detail"] = internal_detail
+        job = _post_job(
+            client,
+            job_payload,
+            key="validation-job",
+            nonce="validation-job",
+        )
+
+        ack_payload = {
+            "contract_version": "media_artifact_delivery_ack.v1",
+            "delivery_id": "mdl_validation",
+            "received_byte_size": 1,
+            "received_checksum": f"sha256:{'0' * 64}",
+            "unexpected_internal_detail": internal_detail,
+        }
+        ack_body, ack_headers = _ack_headers(
+            artifact_id,
+            ack_payload,
+            key="validation-ack",
+            nonce="validation-ack",
+        )
+        ack = client.post(_ack_path(artifact_id), content=ack_body, headers=ack_headers)
+
+        cases = (
+            (
+                upload,
+                "media_upload.validation_error",
+                "media upload request is invalid",
+            ),
+            (
+                job,
+                "media_job.validation_error",
+                "media job request is invalid",
+            ),
+            (
+                ack,
+                "media_artifact.delivery_ack_validation_error",
+                "media artifact delivery acknowledgement request is invalid",
+            ),
+        )
+        for response, error_code, message in cases:
+            assert response.status_code == 422, response.json()
+            payload = response.json()
+            assert payload["error_code"] == error_code
+            assert payload["message"] == message
+            assert payload["meta"]["trace_id"] == expected_trace_id
+            assert "sk-LEAK" not in response.text
+            assert "Traceback" not in response.text
+            assert "/srv/private.py:731" not in response.text
+    finally:
+        dispose_engine(database_url)
+
+
 def _process_jobs(
     database_url: str,
     settings: Settings,
