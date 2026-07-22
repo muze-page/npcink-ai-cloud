@@ -786,7 +786,7 @@ def test_instance_stats_contract_exposes_latency_probe_delivery_buffer_metadata(
         )
     )
 
-    probe_end = datetime.now(UTC).replace(second=0, microsecond=0)
+    probe_end = datetime(2026, 3, 24, 9, 20, tzinfo=UTC)
     probe_start = probe_end - timedelta(minutes=15)
     with get_session(database_url) as session:
         run = session.scalar(select(RunRecord).where(RunRecord.run_id == runtime_result.run_id))
