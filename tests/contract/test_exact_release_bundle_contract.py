@@ -1672,9 +1672,12 @@ def test_release_scripts_enforce_pre_and_post_load_and_same_bundle_replay() -> N
     assert smoke.index("stop_replay_application_services") < data_index
     assert "same exact bundle receipt was reused" in smoke
     assert 'PG18_PROOF_COMPOSE="${ROOT_DIR}/docker-compose.pg18-proof.yml"' in smoke
-    assert 'COMPOSE_PROJECT_NAME="${PROJECT_NAME}"' in smoke
+    assert 'PG18_PROOF_PROJECT_NAME="${PROJECT_NAME}-pg18"' in smoke
+    assert 'COMPOSE_PROJECT_NAME="${PG18_PROOF_PROJECT_NAME}"' in smoke
+    assert 'PG18_PROOF_OVERRIDE="${TMP_DIR}/docker-compose.pg18-proof.host-port.yml"' in smoke
+    assert "0.0.0.0:${PG18_PROOF_PORT}:5432" in smoke
     assert "local no-TLS fixture; not RDS evidence" in smoke
-    assert "@postgres18-proof:5432/npcink_ai_cloud" in smoke
+    assert "@host.docker.internal:%s/npcink_ai_cloud" in smoke
     assert "preflight_status=\\$?" in ssh_deploy
     assert 'rm -rf $(remote_shell_arg "${REMOTE_PREFLIGHT_DIR}")' in ssh_deploy
 

@@ -32,6 +32,7 @@ CONFIG_DIR="${TMP_DIR}/shared/config"
 FRONTEND_CONFIG_DIR="${CONFIG_DIR}/frontend"
 BACKEND_ENV_FILE="${STATE_DIR}/env.deploy"
 PG18_PROOF_COMPOSE="${ROOT_DIR}/docker-compose.pg18-proof.yml"
+PG18_PROOF_OVERRIDE="${TMP_DIR}/docker-compose.pg18-proof.host-port.yml"
 DEPLOY_LOCK_OWNER="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 install -d -m 0700 \
 	"${RELEASE_DIR}" "${TMP_DIR}/.release-state" "${STATE_DIR}" "${DEPLOY_LOCK_DIR}" \
@@ -41,6 +42,8 @@ printf '%s\n' "${DEPLOY_LOCK_OWNER}" >"${DEPLOY_LOCK_DIR}/one-off-owner"
 chmod 0600 "${DEPLOY_LOCK_DIR}/one-off-owner"
 export NPCINK_CLOUD_DEPLOY_LOCK_OWNER="${DEPLOY_LOCK_OWNER}"
 PROJECT_NAME="npcink-ai-cloud-deploy-smoke-$(date +%s)"
+PG18_PROOF_PROJECT_NAME="${PROJECT_NAME}-pg18"
+PG18_PROOF_PORT="${NPCINK_CLOUD_DEPLOY_SMOKE_POSTGRES_PORT:-55432}"
 PORT="${NPCINK_CLOUD_DEPLOY_SMOKE_PORT:-8110}"
 BASE_URL="${NPCINK_CLOUD_DEPLOY_SMOKE_BASE_URL:-http://127.0.0.1:${PORT}}"
 BASE_HOST="$(python3 - "${BASE_URL}" <<'PY'
@@ -59,6 +62,20 @@ DEPLOY_SMOKE_INTERNAL_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-npcink-cloud-de
 if [[ ! "${DEPLOY_SMOKE_POSTGRES_PASSWORD}" =~ ^[A-Za-z0-9._-]{16,128}$ ]]; then
 	fail "NPCINK_CLOUD_DEPLOY_SMOKE_POSTGRES_PASSWORD must be 16-128 URL-safe characters"
 fi
+if [[ ! "${PG18_PROOF_PORT}" =~ ^[0-9]+$ ]] ||
+	[ "${PG18_PROOF_PORT}" -lt 1024 ] || [ "${PG18_PROOF_PORT}" -gt 65535 ]; then
+	fail "NPCINK_CLOUD_DEPLOY_SMOKE_POSTGRES_PORT must be an integer from 1024 through 65535"
+fi
+
+# The database fixture is a separate Compose project so the production
+# remove-orphans phase cannot delete it. A smoke-only host port preserves that
+# boundary while release containers use their existing host-gateway mapping.
+printf '%s\n' \
+	'services:' \
+	'  postgres18-proof:' \
+	'    ports:' \
+	"      - \"0.0.0.0:${PG18_PROOF_PORT}:5432\"" \
+	>"${PG18_PROOF_OVERRIDE}"
 
 export NPCINK_CLOUD_PG18_PROOF_PASSWORD="${DEPLOY_SMOKE_POSTGRES_PASSWORD}"
 export NPCINK_CLOUD_ENVIRONMENT="${NPCINK_CLOUD_ENVIRONMENT:-test}"
@@ -82,7 +99,8 @@ chmod 0640 "${CONFIG_DIR}/install-state.json" "${FRONTEND_CONFIG_DIR}/internal-a
 
 {
 	printf 'NPCINK_CLOUD_ENVIRONMENT=%s\n' "${NPCINK_CLOUD_ENVIRONMENT}"
-	printf 'NPCINK_CLOUD_DATABASE_URL=postgresql+psycopg://npcink:%s@postgres18-proof:5432/npcink_ai_cloud\n' "${DEPLOY_SMOKE_POSTGRES_PASSWORD}"
+	printf 'NPCINK_CLOUD_DATABASE_URL=postgresql+psycopg://npcink:%s@host.docker.internal:%s/npcink_ai_cloud\n' \
+		"${DEPLOY_SMOKE_POSTGRES_PASSWORD}" "${PG18_PROOF_PORT}"
 	printf 'NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=%s\n' "${DEPLOY_SMOKE_INTERNAL_TOKEN}"
 	printf 'NPCINK_CLOUD_ADMIN_SESSION_SECRET=%s\n' "${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-npcink-cloud-deploy-admin-session-secret-32b}"
 	printf 'NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=%s\n' "${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4=}" # gitleaks:allow
@@ -107,8 +125,9 @@ cleanup() {
 		done <"${STATE_DIR}/rollback-images.tsv"
 	fi
 	if [ -f "${RELEASE_DIR}/docker-compose.prod.yml" ]; then
-		COMPOSE_PROJECT_NAME="${PROJECT_NAME}" \
-			docker compose -f "${PG18_PROOF_COMPOSE}" down -v --remove-orphans >/dev/null 2>&1 || true
+		COMPOSE_PROJECT_NAME="${PG18_PROOF_PROJECT_NAME}" \
+			docker compose -f "${PG18_PROOF_COMPOSE}" -f "${PG18_PROOF_OVERRIDE}" \
+			down -v --remove-orphans >/dev/null 2>&1 || true
 		COMPOSE_PROJECT_NAME="${PROJECT_NAME}" \
 		NPCINK_CLOUD_PORT="${PORT}" \
 		NPCINK_CLOUD_CONFIG_DIR_HOST="${CONFIG_DIR}" \
@@ -136,10 +155,12 @@ prepare_smoke_config_permissions() {
 
 ensure_external_pg18_proof() {
 	local server_version=""
-	COMPOSE_PROJECT_NAME="${PROJECT_NAME}" \
-		docker compose -f "${PG18_PROOF_COMPOSE}" up -d --wait postgres18-proof
-	server_version="$(COMPOSE_PROJECT_NAME="${PROJECT_NAME}" \
-		docker compose -f "${PG18_PROOF_COMPOSE}" exec -T postgres18-proof \
+	COMPOSE_PROJECT_NAME="${PG18_PROOF_PROJECT_NAME}" \
+		docker compose -f "${PG18_PROOF_COMPOSE}" -f "${PG18_PROOF_OVERRIDE}" \
+		up -d --wait postgres18-proof
+	server_version="$(COMPOSE_PROJECT_NAME="${PG18_PROOF_PROJECT_NAME}" \
+		docker compose -f "${PG18_PROOF_COMPOSE}" -f "${PG18_PROOF_OVERRIDE}" \
+		exec -T postgres18-proof \
 		psql -v ON_ERROR_STOP=1 -U npcink -d npcink_ai_cloud -Atc \
 		"select case when current_setting('server_version_num')::int between 180000 and 189999 then 'postgresql-18' else current_setting('server_version') end")" \
 		|| fail "External deploy-smoke database version could not be read"
