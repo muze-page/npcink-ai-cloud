@@ -13,13 +13,28 @@ from app.core.redaction import safe_exception_type
 
 
 @lru_cache(maxsize=8)
-def get_engine(database_url: str) -> Engine:
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+def get_engine(
+    database_url: str,
+    pool_size: int = 2,
+    max_overflow: int = 1,
+    pool_timeout_seconds: int = 10,
+    pool_recycle_seconds: int = 1800,
+    connect_timeout_seconds: int = 5,
+) -> Engine:
+    connect_args: dict[str, object] = (
+        {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+    )
+    if database_url.startswith("postgresql"):
+        connect_args["connect_timeout"] = connect_timeout_seconds
     return create_engine(
         database_url,
         future=True,
         hide_parameters=True,
         pool_pre_ping=True,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_timeout=pool_timeout_seconds,
+        pool_recycle=pool_recycle_seconds,
         connect_args=connect_args,
     )
 

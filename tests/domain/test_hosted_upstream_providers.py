@@ -305,7 +305,7 @@ def test_provider_registry_omits_default_openai_without_credentials_outside_dev_
         database_url="sqlite+pysqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         internal_auth_token="npcink-cloud-internal-prod-token-32b",
-        admin_bootstrap_token="npcink-cloud-admin-bootstrap-token-32b",
+        admin_key_sha256="a" * 64,
         admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
         portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
         browser_origin_allowlist="https://cloud.example.com",

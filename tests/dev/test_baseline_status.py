@@ -22,7 +22,7 @@ def test_baseline_status_reports_missing_alembic_version_table(tmp_path: Path) -
             database_url=database_url,
             redis_url="redis://localhost:6379/0",
             internal_auth_token="i" * 32,
-            admin_bootstrap_token="b" * 32,
+            admin_key_sha256="b" * 64,
             admin_session_secret="a" * 32,
             portal_jwt_secret="j" * 32,
             browser_origin_allowlist="https://cloud.example.com",

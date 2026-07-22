@@ -22,6 +22,7 @@ from app.core.models import Site
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService
+from app.setup.security import sha256_text
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
     TEST_INTERNAL_AUTH_TOKEN,
@@ -29,7 +30,7 @@ from tests.conftest import (
     build_internal_headers,
 )
 
-TEST_ADMIN_BOOTSTRAP_TOKEN = "npcink-cloud-admin-bootstrap-test-32"
+TEST_ADMIN_KEY = "nca_admin_npcink-cloud-admin-key-test-32"
 TEST_ADMIN_SESSION_ISSUER = "npcink-ai-cloud"
 TEST_ADMIN_SESSION_AUDIENCE = "npcink-ai-cloud-admin"
 TEST_ADMIN_SESSION_PURPOSE = "admin_session"
@@ -56,12 +57,11 @@ def _build_client(
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
         "internal_auth_token": TEST_INTERNAL_AUTH_TOKEN,
-        "admin_bootstrap_token": TEST_ADMIN_BOOTSTRAP_TOKEN,
+        "admin_key_sha256": sha256_text(TEST_ADMIN_KEY),
         "admin_session_secret": TEST_ADMIN_SESSION_SECRET,
         "allow_dev_admin_internal_token_fallback": False,
         "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-        "admin_bootstrap_principal_id": "platform:founder",
-        "admin_bootstrap_platform_admin_role": "platform_admin",
+        "admin_principal_id": "platform:founder",
     }
     settings_kwargs.update(settings_overrides or {})
     settings = Settings(**settings_kwargs)
@@ -200,11 +200,11 @@ def _login_platform_admin(
     *,
     principal_id: str = "platform:founder",
 ) -> TestClient:
+    client.app.state.services.settings.admin_principal_id = principal_id
     response = client.post(
-        "/admin/auth/bootstrap",
+        "/admin/auth/login",
         data={
-            "token": TEST_ADMIN_BOOTSTRAP_TOKEN,
-            "principal_id": principal_id,
+            "admin_key": TEST_ADMIN_KEY,
         },
         follow_redirects=False,
     )
@@ -225,7 +225,7 @@ def _admin_session_token(
     now = datetime.now(UTC)
     payload: dict[str, object] = {
         "sub": "platform:founder",
-        "auth_mode": "admin_bootstrap_token",
+        "auth_mode": "admin_key",
         "grant_id": "",
         "is_persisted": False,
         "session_version": 1,
@@ -335,23 +335,25 @@ def test_web_removed_ops_routes_and_bad_admin_token(tmp_path: Path) -> None:
 
     removed_login = client.get("/ops/login", follow_redirects=False)
     removed_bootstrap = client.post("/ops/auth/bootstrap", follow_redirects=False)
+    removed_admin_bootstrap = client.post("/admin/auth/bootstrap", follow_redirects=False)
     removed_logout = client.get("/ops/logout", follow_redirects=False)
     invalid_login = client.post(
-        "/admin/auth/bootstrap",
-        data={"token": "wrong-token", "principal_id": "platform:founder"},
+        "/admin/auth/login",
+        data={"admin_key": "wrong-token"},
         follow_redirects=False,
     )
 
     assert removed_login.status_code == 404
     assert removed_bootstrap.status_code == 404
+    assert removed_admin_bootstrap.status_code == 404
     assert removed_logout.status_code == 404
     assert invalid_login.status_code == 303
-    assert "auth.admin_bootstrap_token_invalid" in invalid_login.headers["location"]
+    assert "auth.admin_key_invalid" in invalid_login.headers["location"]
 
     dispose_engine(database_url)
 
 
-def test_web_admin_bootstrap_issues_cookie_session(tmp_path: Path) -> None:
+def test_web_admin_key_issues_cookie_session(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 
     _login_platform_admin(client, principal_id="platform:founder")
@@ -362,7 +364,7 @@ def test_web_admin_bootstrap_issues_cookie_session(tmp_path: Path) -> None:
     assert session_response.json()["data"]["principal_id"] == "platform:founder"
     assert session_response.json()["data"]["identity_type"] == "platform_admin"
     assert session_response.json()["data"]["role"] == "platform_admin"
-    assert session_response.json()["data"]["auth_mode"] == "admin_bootstrap_token"
+    assert session_response.json()["data"]["auth_mode"] == "admin_key"
     token = client.cookies.get("npcink_admin_session_token")
     assert token
     claims = jwt.decode(token, options={"verify_signature": False})
@@ -370,13 +372,61 @@ def test_web_admin_bootstrap_issues_cookie_session(tmp_path: Path) -> None:
     assert claims["aud"] == TEST_ADMIN_SESSION_AUDIENCE
     assert claims["purpose"] == TEST_ADMIN_SESSION_PURPOSE
     assert claims["sub"] == "platform:founder"
-    assert claims["auth_mode"] == "admin_bootstrap_token"
+    assert claims["auth_mode"] == "admin_key"
     assert claims["grant_id"] == ""
     assert claims["is_persisted"] is False
     assert claims["session_version"] == 1
     assert isinstance(claims["iat"], int)
     assert isinstance(claims["exp"], int)
     assert "role" not in claims
+
+    dispose_engine(database_url)
+
+
+def test_web_admin_key_json_login_is_fixed_to_server_principal(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    rejected = client.post(
+        "/admin/auth/login",
+        json={
+            "admin_key": TEST_ADMIN_KEY,
+            "principal_id": "platform:attacker-selected",
+        },
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["error_code"] == "auth.admin_login_request_invalid"
+    assert rejected.headers["cache-control"] == "no-store"
+    assert rejected.headers["pragma"] == "no-cache"
+
+    response = client.post(
+        "/admin/auth/login",
+        json={"admin_key": TEST_ADMIN_KEY, "redirect": "/admin/sites"},
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["principal_id"] == "platform:founder"
+    assert response.json()["data"]["auth_mode"] == "admin_key"
+    assert "npcink_admin_session_token" in response.headers["set-cookie"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+
+    dispose_engine(database_url)
+
+
+def test_web_admin_json_login_rejects_malformed_json_without_server_error(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = client.post(
+        "/admin/auth/login",
+        content='{"admin_key":',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "auth.admin_login_request_invalid"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
 
     dispose_engine(database_url)
 
@@ -571,7 +621,7 @@ def test_resolved_admin_session_trusts_explicit_persistence_not_metadata() -> No
             "is_persisted": True,
             "metadata": {"bootstrap": True},
         },
-        auth_mode="admin_bootstrap_token",
+        auth_mode="admin_key",
     )
 
     assert resolved.revocable is True
@@ -591,7 +641,7 @@ def test_resolved_admin_session_rejects_invalid_version_without_fallback(
                 "session_version": session_version,
                 "is_persisted": True,
             },
-            auth_mode="admin_bootstrap_token",
+            auth_mode="admin_key",
         )
 
     assert exc_info.value.error_code == "auth.admin_session_invalid"
@@ -744,20 +794,19 @@ def test_web_portal_session_evidence_comes_only_from_signed_claims(tmp_path: Pat
     dispose_engine(database_url)
 
 
-def test_web_admin_bootstrap_token_is_separate_from_internal_service_token(tmp_path: Path) -> None:
+def test_web_admin_key_is_separate_from_internal_service_token(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 
     response = client.post(
-        "/admin/auth/bootstrap",
+        "/admin/auth/login",
         data={
-            "token": TEST_INTERNAL_AUTH_TOKEN,
-            "principal_id": "platform:founder",
+            "admin_key": TEST_INTERNAL_AUTH_TOKEN,
         },
         follow_redirects=False,
     )
 
     assert response.status_code == 303
-    assert "auth.admin_bootstrap_token_invalid" in response.headers["location"]
+    assert "auth.admin_key_invalid" in response.headers["location"]
 
     dispose_engine(database_url)
 

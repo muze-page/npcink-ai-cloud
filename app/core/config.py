@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import re
 from functools import lru_cache
 from urllib.parse import urlsplit
@@ -9,10 +10,9 @@ from urllib.parse import urlsplit
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
-
 _ENCRYPTION_KEY_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _CANONICAL_32_BYTE_ROOT_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}=")
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 def _validate_encryption_root(field_name: str, raw_value: str | None) -> None:
@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud"
     )
+    database_pool_size: int = Field(default=2, ge=1, le=20)
+    database_max_overflow: int = Field(default=1, ge=0, le=20)
+    database_pool_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    database_pool_recycle_seconds: int = Field(default=1800, ge=60, le=86400)
+    database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
     redis_url: str = Field(default="redis://redis:6379/0")
     runtime_queue_key: str = Field(default="npcink_ai_cloud:runtime_queue")
     runtime_worker_poll_seconds: int = Field(default=5)
@@ -122,7 +127,8 @@ class Settings(BaseSettings):
     internal_guard_max_reject_events_per_token_window: int = Field(default=40)
     internal_guard_max_reject_events_per_ip_window: int = Field(default=50)
     internal_auth_token: str | None = Field(default=None)
-    admin_bootstrap_token: str | None = Field(default=None)
+    admin_key_sha256: str | None = Field(default=None)
+    dev_admin_key: str | None = Field(default=None)
     admin_session_secret: str | None = Field(default=None)
     service_settings_secret: str | None = Field(default=None)
     service_settings_encryption_key_id: str | None = Field(default=None)
@@ -133,13 +139,9 @@ class Settings(BaseSettings):
     trusted_host_allowlist: str = Field(default="")
     allow_dev_admin_internal_token_fallback: bool = Field(default=False)
     admin_session_ttl_seconds: int = Field(default=8 * 60 * 60)
-    admin_bootstrap_principal_id: str = Field(
+    admin_principal_id: str = Field(
         default="platform:internal_root",
-        validation_alias="NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID",
-    )
-    admin_bootstrap_platform_admin_role: str = Field(
-        default=PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
-        validation_alias="NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE",
+        validation_alias="NPCINK_CLOUD_ADMIN_PRINCIPAL_ID",
     )
     portal_jwt_secret: str | None = Field(default=None)
     portal_jwt_issuer: str | None = Field(default="npcink-ai-cloud")
@@ -399,7 +401,6 @@ class Settings(BaseSettings):
         production_like = self.production_like_environment()
         secret_fields = {
             "internal_auth_token": self.internal_auth_token,
-            "admin_bootstrap_token": self.admin_bootstrap_token,
             "admin_session_secret": self.admin_session_secret,
             "service_settings_secret": self.service_settings_secret,
             "runtime_data_encryption_secret": self.runtime_data_encryption_secret,
@@ -413,6 +414,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "allow_dev_admin_internal_token_fallback is only allowed in development/test"
             )
+        if production_like and str(self.dev_admin_key or "").strip():
+            raise ValueError("dev_admin_key is only allowed in development/test")
+        if self.dev_admin_key and len(str(self.dev_admin_key).strip()) < 32:
+            raise ValueError("dev_admin_key must be at least 32 bytes long")
         if production_like and str(self.openai_sample_catalog_profile or "").strip():
             raise ValueError("openai_sample_catalog_profile is only allowed in development/test")
         if production_like and not str(self.admin_session_secret or "").strip():
@@ -462,20 +467,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "internal_auth_token is required outside development/test environments"
             )
-        if production_like and not str(self.admin_bootstrap_token or "").strip():
-            raise ValueError(
-                "admin_bootstrap_token is required outside development/test environments"
-            )
-        if (
-            production_like
-            and str(self.admin_bootstrap_token or "").strip()
-            and str(self.admin_bootstrap_token or "").strip()
-            == str(self.internal_auth_token or "").strip()
-        ):
-            raise ValueError(
-                "admin_bootstrap_token must differ from internal_auth_token outside "
-                "development/test environments"
-            )
+        admin_key_sha256 = str(self.admin_key_sha256 or "").strip()
+        if admin_key_sha256 and _SHA256_PATTERN.fullmatch(admin_key_sha256) is None:
+            raise ValueError("admin_key_sha256 must be a lowercase SHA-256 digest")
+        if production_like and not admin_key_sha256:
+            raise ValueError("admin_key_sha256 is required outside development/test environments")
         if production_like and not str(self.portal_jwt_secret or "").strip():
             raise ValueError("portal_jwt_secret is required outside development/test environments")
         if production_like and not str(self.portal_jwt_issuer or "").strip():
@@ -882,4 +878,22 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    from app.core.runtime_config import (
+        INSTALL_STATE_FILE,
+        config_dir_from_environment,
+        load_runtime_settings_values,
+        production_runtime_enabled,
+    )
+
+    if production_runtime_enabled():
+        state_path = config_dir_from_environment() / INSTALL_STATE_FILE
+        try:
+            state_payload = json.loads(state_path.read_bytes())
+        except (OSError, UnicodeDecodeError, ValueError):
+            state_payload = {}
+        if (
+            isinstance(state_payload, dict)
+            and state_payload.get("installation_state") == "complete"
+        ):
+            return Settings(**load_runtime_settings_values(config_dir_from_environment()))
     return Settings()

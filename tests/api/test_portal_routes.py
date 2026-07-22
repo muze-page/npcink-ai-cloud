@@ -4671,7 +4671,7 @@ def test_portal_debug_bypass_is_disabled_in_production_even_with_allowlist(
         tmp_path,
         settings_overrides={
             "environment": "production",
-            "admin_bootstrap_token": "b" * 32,
+            "admin_key_sha256": "b" * 64,
             "browser_origin_allowlist": "https://cloud.example.com",
             "trusted_host_allowlist": "testserver,cloud.example.com",
             "debug_local_origin_allowlist": "http://127.0.0.1:8010",

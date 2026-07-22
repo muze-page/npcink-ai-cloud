@@ -116,7 +116,7 @@ def _settings(database_url: str) -> Settings:
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
         "internal_auth_token": "callback-failure-drill-internal-token-32b",
-        "admin_bootstrap_token": "callback-failure-drill-bootstrap-token-32b",
+        "dev_admin_key": "callback-failure-drill-admin-key-32b",
         "admin_session_secret": "callback-failure-drill-admin-session-secret-32b",
         "portal_jwt_secret": "callback-failure-drill-portal-jwt-secret-32b",
         "openai_api_key": None,

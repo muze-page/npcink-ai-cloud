@@ -48,7 +48,7 @@ def _settings(database_url: str) -> Settings:
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
         "internal_auth_token": "auth-failure-drill-internal-token-32b",
-        "admin_bootstrap_token": "auth-failure-drill-bootstrap-token-32b",
+        "dev_admin_key": "auth-failure-drill-admin-key-32-bytes",
         "admin_session_secret": "auth-failure-drill-admin-session-secret-32b",
         "portal_jwt_secret": "auth-failure-drill-portal-jwt-secret-32b",
         "openai_api_key": None,

@@ -33,7 +33,7 @@ def _settings(database_url: str) -> Settings:
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
-        admin_bootstrap_token="npcink-cloud-admin-bootstrap-token-32b",
+        admin_key_sha256="a" * 64,
         admin_session_secret=TEST_ADMIN_SESSION_SECRET,
         portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
         browser_origin_allowlist="https://cloud.example.com",

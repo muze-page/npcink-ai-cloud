@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -37,7 +38,7 @@ ADMIN_SESSION_ALGORITHM = "HS256"
 ADMIN_SESSION_ISSUER = "npcink-ai-cloud"
 ADMIN_SESSION_AUDIENCE = "npcink-ai-cloud-admin"
 ADMIN_SESSION_PURPOSE = "admin_session"
-ADMIN_SESSION_AUTH_MODE = "admin_bootstrap_token"
+ADMIN_SESSION_AUTH_MODE = "admin_key"
 ADMIN_SESSION_REQUIRED_CLAIMS = (
     "iss",
     "aud",
@@ -246,11 +247,9 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
     principal_id = claims["sub"]
     auth_mode = claims["auth_mode"]
     settings = get_cloud_services(request).settings
-    bootstrap_principal_id = str(
-        settings.admin_bootstrap_principal_id or "platform:internal_root"
-    ).strip()
+    admin_principal_id = str(settings.admin_principal_id or "platform:internal_root").strip()
     token_is_persisted = claims["is_persisted"]
-    allow_bootstrap = not token_is_persisted and principal_id == bootstrap_principal_id
+    allow_bootstrap = not token_is_persisted and principal_id == admin_principal_id
 
     from app.api.routes.service import _get_commercial_service
 
@@ -335,7 +334,7 @@ def _admin_session_json_error(
     error_code: str,
     message: str,
 ) -> JSONResponse:
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status_code,
         content=build_envelope(
             status="error",
@@ -344,6 +343,9 @@ def _admin_session_json_error(
             revision="m6",
         ),
     )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 def _require_admin_session_json(request: Request) -> dict[str, Any] | JSONResponse:
@@ -402,8 +404,21 @@ def _issue_admin_session_cookie(
 async def _request_payload(request: Request) -> dict[str, Any]:
     content_type = str(request.headers.get("content-type") or "").lower()
     if "application/json" in content_type:
-        payload = await request.json()
-        return payload if isinstance(payload, dict) else {}
+        try:
+            payload = await request.json()
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise PortalBearerTokenError(
+                422,
+                "auth.admin_login_request_invalid",
+                "admin login request is invalid",
+            ) from error
+        if not isinstance(payload, dict):
+            raise PortalBearerTokenError(
+                422,
+                "auth.admin_login_request_invalid",
+                "admin login request is invalid",
+            )
+        return payload
     if "application/x-www-form-urlencoded" in content_type:
         body = (await request.body()).decode("utf-8", errors="ignore")
         return {key: value for key, value in parse_qsl(body, keep_blank_values=True)}
@@ -436,9 +451,17 @@ def _build_admin_login_url(
     return f"/admin/login?{query}" if query else "/admin/login"
 
 
-@router.post("/admin/auth/bootstrap")
-async def web_admin_auth_bootstrap(request: Request) -> Any:
-    payload = await _request_payload(request)
+@router.post("/admin/auth/login")
+async def web_admin_auth_login(request: Request) -> Any:
+    try:
+        payload = await _request_payload(request)
+    except PortalBearerTokenError as error:
+        return _admin_session_json_error(
+            request,
+            status_code=error.status_code,
+            error_code=error.error_code,
+            message=error.message,
+        )
     wants_redirect = _request_wants_html_redirect(request)
     try:
         enforce_browser_same_origin(request)
@@ -459,15 +482,32 @@ async def web_admin_auth_bootstrap(request: Request) -> Any:
             error_code=error.error_code,
             message=error.message,
         )
-    token = str(payload.get("token") or "").strip()
-    principal_id = str(payload.get("principal_id") or "").strip()
-    redirect_to = payload.get("redirect") or request.query_params.get("redirect")
-    if not token:
+    unsupported_fields = sorted(set(payload) - {"admin_key", "redirect"})
+    if unsupported_fields:
+        redirect_to = payload.get("redirect") or request.query_params.get("redirect")
         if wants_redirect:
             return RedirectResponse(
                 url=_build_admin_login_url(
                     request,
-                    error_code="auth.admin_bootstrap_token_required",
+                    error_code="auth.admin_login_request_invalid",
+                    redirect_to=redirect_to,
+                ),
+                status_code=303,
+            )
+        return _admin_session_json_error(
+            request,
+            status_code=422,
+            error_code="auth.admin_login_request_invalid",
+            message="admin login request is invalid",
+        )
+    admin_key = str(payload.get("admin_key") or "").strip()
+    redirect_to = payload.get("redirect") or request.query_params.get("redirect")
+    if not admin_key:
+        if wants_redirect:
+            return RedirectResponse(
+                url=_build_admin_login_url(
+                    request,
+                    error_code="auth.admin_key_required",
                     redirect_to=redirect_to,
                 ),
                 status_code=303,
@@ -475,18 +515,17 @@ async def web_admin_auth_bootstrap(request: Request) -> Any:
         return _admin_session_json_error(
             request,
             status_code=400,
-            error_code="auth.admin_bootstrap_token_required",
-            message="missing admin bootstrap token",
+            error_code="auth.admin_key_required",
+            message="admin key is required",
         )
     try:
         identity = resolve_admin_login_identity(
             request,
-            token=token,
-            principal_id=principal_id,
+            admin_key=admin_key,
         )
         session = ResolvedAdminSession.from_identity(
             identity,
-            auth_mode="admin_bootstrap_token",
+            auth_mode="admin_key",
         )
     except PortalBearerTokenError as error:
         if wants_redirect:
@@ -521,11 +560,25 @@ async def web_admin_auth_bootstrap(request: Request) -> Any:
             message=error.message,
         )
     try:
-        response = _build_console_redirect_response(
-            request,
-            fallback="/admin",
-            redirect_to=redirect_to,
-        )
+        response: Response
+        if wants_redirect:
+            response = _build_console_redirect_response(
+                request,
+                fallback="/admin",
+                redirect_to=redirect_to,
+            )
+        else:
+            response = JSONResponse(
+                status_code=200,
+                content=build_envelope(
+                    status="ok",
+                    message="admin session created",
+                    data=session.as_payload(),
+                    revision="m8",
+                ),
+            )
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         _issue_admin_session_cookie(request, response, session=session)
         return response
     except PortalBearerTokenError as error:

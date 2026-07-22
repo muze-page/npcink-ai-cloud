@@ -11,6 +11,7 @@ from app.api.portal_session import (
     get_commercial_service,
 )
 from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
+from app.setup.security import sha256_text
 
 
 @dataclass(frozen=True)
@@ -81,33 +82,30 @@ class ResolvedAdminSession:
 def resolve_admin_login_identity(
     request: Request,
     *,
-    token: str,
-    principal_id: str,
+    admin_key: str,
 ) -> dict[str, object]:
     settings = get_cloud_services(request).settings
-    expected_token = str(settings.admin_bootstrap_token or "").strip()
+    expected_digest = str(settings.admin_key_sha256 or "").strip()
     environment = str(settings.environment or "").strip().lower()
-    if not expected_token and environment in {"development", "test"}:
-        expected_token = str(settings.internal_auth_token or "").strip()
-    if not expected_token:
+    if not expected_digest and environment in {"development", "test"}:
+        dev_admin_key = str(settings.dev_admin_key or "").strip()
+        if dev_admin_key:
+            expected_digest = sha256_text(dev_admin_key)
+    if not expected_digest:
         raise PortalBearerTokenError(
             503,
-            "auth.admin_bootstrap_not_configured",
-            "admin bootstrap auth is not configured",
+            "auth.admin_key_not_configured",
+            "admin key auth is not configured",
         )
-    if not hmac.compare_digest(token, expected_token):
+    if not hmac.compare_digest(sha256_text(admin_key), expected_digest):
         raise PortalBearerTokenError(
             401,
-            "auth.admin_bootstrap_token_invalid",
-            "invalid admin bootstrap token",
+            "auth.admin_key_invalid",
+            "admin key is invalid",
         )
-    bootstrap_principal_id = str(
-        settings.admin_bootstrap_principal_id or "platform:internal_root"
-    ).strip()
-    requested_principal_id = str(principal_id or "").strip()
-    principal_id = requested_principal_id or bootstrap_principal_id or "platform:internal_root"
+    principal_id = str(settings.admin_principal_id or "platform:internal_root").strip()
     return get_commercial_service(request).resolve_platform_admin_grant(
         principal_id=principal_id,
         bootstrap_role=PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
-        allow_bootstrap=(principal_id == bootstrap_principal_id),
+        allow_bootstrap=True,
     )
