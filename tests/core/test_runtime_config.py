@@ -10,7 +10,7 @@ from alembic.config import Config as AlembicConfig
 from sqlalchemy.engine import make_url
 
 from app.core import runtime_config as runtime_config_module
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.runtime_config import (
     RuntimeConfigError,
     configure_alembic_database_url,
@@ -101,6 +101,12 @@ def test_completed_runtime_config_loads_structured_rds_and_secret_projection(
     assert database_url.query["hostaddr"] == "10.0.0.10"
     assert values["database_pool_size"] == 2
     assert values["database_max_overflow"] == 1
+    assert Settings(**values).trusted_hosts() == {
+        "cloud.example.com",
+        "api",
+        "127.0.0.1",
+        "localhost",
+    }
     assert (tmp_path / "runtime-config.json").stat().st_mode & 0o777 == 0o600
     assert (tmp_path / "frontend/internal-auth-token").stat().st_mode & 0o777 == 0o640
 

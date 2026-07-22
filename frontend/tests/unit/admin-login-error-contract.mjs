@@ -46,9 +46,19 @@ assert.match(
   'admin login invalid-key copy must use the localized operator guidance'
 );
 assert.match(
+  loginPageSource,
+  /proxy\.admin_login_invalid_response[\s\S]*t\('admin\.login_error_upstream'\)/,
+  'admin login must distinguish an invalid upstream response from an invalid key'
+);
+assert.match(
   i18nSource,
   /'admin\.login_error_invalid': 'The admin key is not valid\.[^']+'[\s\S]*'admin\.login_error_invalid': '管理员密钥无效，[^']+'/,
   'admin login invalid-key guidance must exist in English and Simplified Chinese'
+);
+assert.match(
+  i18nSource,
+  /'admin\.login_error_upstream': 'Cloud rejected[^']+'[\s\S]*'admin\.login_error_upstream': 'Cloud 内部登录转发配置异常，[^']+'/,
+  'admin login upstream guidance must exist in English and Simplified Chinese'
 );
 
 assert.match(loginRouteSource, /buildBackendUrl\('\/admin\/auth\/login'\)/);

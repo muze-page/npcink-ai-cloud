@@ -57,6 +57,12 @@ root signing/encryption/session values. Duplicate production values in the
 environment fail validation instead of silently overriding the file. Development
 and test modes may explicitly use the existing environment source.
 
+The completed runtime derives its trusted-host set from the configured public
+origin plus the fixed Compose API service name and loopback hosts. This permits
+Frontend BFF and operator probes to reach the non-published API container while
+the external Edge continues to pin the public host. No wildcard or arbitrary
+container hostname is accepted.
+
 The frontend container mounts only the `frontend/` projection directory, not
 `runtime-config.json`, the database password, the RDS CA, or any signing and
 encryption root. Setup BFF code never reads or forwards the projected internal
@@ -205,6 +211,7 @@ Stable setup errors include:
 - `auth.admin_key_required`
 - `auth.admin_key_not_configured`
 - `auth.admin_key_invalid`
+- `proxy.admin_login_invalid_response`
 
 Internal exception messages, SQL, credentials, resolved IP lists, and filesystem
 paths are never included in the public response.

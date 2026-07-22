@@ -46,6 +46,8 @@ function AdminLoginPageContent() {
       case 'auth.dev_entry_unreachable':
       case 'auth.admin_login_unreachable':
         return t('admin.login_error_unreachable');
+      case 'proxy.admin_login_invalid_response':
+        return t('admin.login_error_upstream');
       default:
         return error || '';
     }

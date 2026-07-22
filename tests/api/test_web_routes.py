@@ -927,6 +927,62 @@ def test_web_rejects_untrusted_forwarded_host_in_production(tmp_path: Path) -> N
     dispose_engine(database_url)
 
 
+def test_web_accepts_internal_api_host_with_trusted_public_forwarding(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "environment": "production",
+            "browser_origin_allowlist": "https://cloud.example.com",
+            "trusted_host_allowlist": "cloud.example.com,api",
+        },
+    )
+
+    response = client.get(
+        "/admin/session",
+        headers={
+            "host": "api:8000",
+            "x-forwarded-host": "cloud.example.com",
+            "x-forwarded-proto": "https",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.admin_session_required"
+
+    dispose_engine(database_url)
+
+
+def test_web_rejects_unlisted_internal_container_host_in_production(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "environment": "production",
+            "browser_origin_allowlist": "https://cloud.example.com",
+            "trusted_host_allowlist": "cloud.example.com,api",
+        },
+    )
+
+    response = client.get(
+        "/admin/session",
+        headers={
+            "host": "worker:8000",
+            "x-forwarded-host": "cloud.example.com",
+            "x-forwarded-proto": "https",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.text == "Invalid host header"
+
+    dispose_engine(database_url)
+
+
 def test_web_allows_untrusted_forwarded_host_in_development_when_browser_origin_is_trusted(
     tmp_path: Path,
 ) -> None:

@@ -115,4 +115,53 @@ describe('admin login BFF origin', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('set-cookie')).toContain('npcink_admin_session_token=session');
   });
+
+  it('reports a non-JSON backend rejection as an internal proxy failure', async () => {
+    vi.stubEnv('NEXT_PUBLIC_ENV', 'production');
+    const fetchMock = vi.fn(async () => new Response('Invalid host header', {
+      status: 400,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const request = new NextRequest('https://cloud.example.com/admin/auth/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        origin: 'https://cloud.example.com',
+      },
+      body: 'admin_key=nca_admin_test&redirect=%2Fadmin',
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe(
+      'https://cloud.example.com/admin/login?error=proxy.admin_login_invalid_response&redirect=%2Fadmin'
+    );
+    expect(response.headers.get('location')).not.toContain('auth.admin_login_failed');
+  });
+
+  it('returns a sanitized JSON proxy error for a non-JSON backend rejection', async () => {
+    vi.stubEnv('NEXT_PUBLIC_ENV', 'production');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('sensitive upstream detail', {
+      status: 400,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    })));
+
+    const request = new NextRequest('https://cloud.example.com/admin/auth/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://cloud.example.com',
+      },
+      body: JSON.stringify({ admin_key: 'nca_admin_test', redirect: '/admin' }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+    expect(response.status).toBe(502);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(body.error_code).toBe('proxy.admin_login_invalid_response');
+    expect(JSON.stringify(body)).not.toContain('sensitive upstream detail');
+  });
 });

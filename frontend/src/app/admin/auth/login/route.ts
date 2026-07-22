@@ -7,6 +7,7 @@ import {
 import { getPublicBaseUrl } from '@/lib/env';
 
 const ADMIN_SESSION_COOKIE = 'npcink_admin_session_token';
+const INVALID_UPSTREAM_ERROR_CODE = 'proxy.admin_login_invalid_response';
 
 function resolveTrustedAdminOrigin(): string {
   return new URL(getPublicBaseUrl()).origin;
@@ -84,6 +85,28 @@ function redirectToLogin(
   return response;
 }
 
+function invalidUpstreamResponse(
+  request: NextRequest,
+  wantsJson: boolean,
+  redirect: string
+): NextResponse {
+  if (!wantsJson) {
+    return redirectToLogin(request, INVALID_UPSTREAM_ERROR_CODE, {}, {}, redirect);
+  }
+  const response = NextResponse.json(
+    {
+      status: 'error',
+      error_code: INVALID_UPSTREAM_ERROR_CODE,
+      message: 'admin login endpoint returned an invalid response',
+      data: {},
+      meta: { trace_id: '', revision: 'admin-login-bff-v1' },
+    },
+    { status: 502 }
+  );
+  response.headers.set('Cache-Control', 'no-store');
+  return response;
+}
+
 export async function GET(request: NextRequest) {
   const redirect = sanitizeAdminRedirect(request.nextUrl.searchParams.get('redirect') || '/admin');
   const response = NextResponse.redirect(
@@ -156,8 +179,23 @@ export async function POST(request: NextRequest) {
     return response;
   }
 
+  const backendContentType = backendResponse.headers.get('content-type') || '';
+  const backendBody = backendContentType.includes('application/json')
+    ? await backendResponse
+        .clone()
+        .json()
+        .then((value: unknown) =>
+          value && typeof value === 'object' && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : null
+        )
+        .catch(() => null)
+    : null;
+  if (!backendBody) {
+    return invalidUpstreamResponse(request, wantsJson, redirect);
+  }
+
   if (!wantsJson) {
-    const body = await backendResponse.json().catch(() => ({}));
     if (backendResponse.ok) {
       const response = NextResponse.redirect(
         new URL(redirect, resolveTrustedAdminOrigin()),
@@ -169,9 +207,9 @@ export async function POST(request: NextRequest) {
     }
     return redirectToLogin(
       request,
-      String(body?.error_code || 'auth.admin_login_failed'),
-      body?.data,
-      body?.meta,
+      String(backendBody.error_code || INVALID_UPSTREAM_ERROR_CODE),
+      backendBody.data,
+      backendBody.meta,
       redirect
     );
   }

@@ -245,6 +245,16 @@ def load_runtime_settings_values(
 
     hostname = str(parsed.hostname).lower()
     trusted_host = hostname if parsed.port is None else f"{hostname}:{parsed.port}"
+    # Server-side Fetch owns the Host header from CLOUD_API_BASE_URL, so the
+    # completed runtime must accept the fixed, non-published Compose API name.
+    trusted_hosts = ",".join(
+        (
+            trusted_host,
+            "api",
+            "127.0.0.1",
+            "localhost",
+        )
+    )
     return {
         "_env_file": None,
         "project_name": _required_string(cloud, "name"),
@@ -269,7 +279,7 @@ def load_runtime_settings_values(
         ),
         "portal_jwt_secret": _required_string(security, "portal_jwt_secret"),
         "browser_origin_allowlist": public_base_url.rstrip("/"),
-        "trusted_host_allowlist": trusted_host,
+        "trusted_host_allowlist": trusted_hosts,
         "database_pool_size": 2,
         "database_max_overflow": 1,
         "database_pool_timeout_seconds": 10,
