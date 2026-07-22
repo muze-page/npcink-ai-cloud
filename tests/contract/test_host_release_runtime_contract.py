@@ -310,6 +310,10 @@ if sys.argv[1:2] == ["archive-platform"]:
 raise SystemExit(64)
 """,
     )
+    _write(
+        fixture / "scripts/check-first-install-cve-gate.py",
+        "raise SystemExit(0)\n",
+    )
     bundle.parent.mkdir()
     bundle.write_bytes(b"fixture bundle\n")
     bundle.with_suffix(bundle.suffix + ".sha256").write_text(

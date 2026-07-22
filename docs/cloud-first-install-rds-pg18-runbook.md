@@ -9,9 +9,12 @@ not authorize a production cutover while any independent release gate is red.
 ## 1. Preconditions
 
 - target release commit and exact bundle are known;
-- the exact release canonical CVE allowlist no longer contains the three
-  blocked Python 3.14.6 exceptions and its fresh image scan is green; the
-  deploy helper enforces this before any first-install host mutation;
+- the exact release either no longer contains the three blocked Python 3.14.6
+  exceptions, or the operator has accepted the time-bounded controlled
+  validation decision with an exact bundle-external mode-`0600` receipt and
+  independent mode-`0600` checksum; in both cases the fresh image scan must be
+  green and the deploy helper enforces the result before any first-install host
+  mutation;
 - Alibaba RDS PostgreSQL 18 Basic `pg.n2e.1c.1m` exists in the same region and
   VPC as the Cloud host;
 - only the private RDS endpoint is enabled for the Cloud host security group;
@@ -46,6 +49,25 @@ Use the governed deployment path from the approved release commit:
 source deploy/workspace-target.env.sh
 pnpm run deploy:ssh
 ```
+
+While the exact three governed Python 3.14.6 entries remain, the controlled
+validation path additionally requires the two external evidence paths. They are
+not secrets, but they must stay out of Git, the bundle, shell history, and the
+server:
+
+```bash
+export NPCINK_CLOUD_CONTROLLED_CVE_RISK_ACCEPTANCE=/trusted/evidence/controlled-risk-acceptance.json
+export NPCINK_CLOUD_CONTROLLED_CVE_RISK_ACCEPTANCE_CHECKSUM=/trusted/evidence/controlled-risk-acceptance.sha256
+pnpm run deploy:ssh
+unset NPCINK_CLOUD_CONTROLLED_CVE_RISK_ACCEPTANCE
+unset NPCINK_CLOUD_CONTROLLED_CVE_RISK_ACCEPTANCE_CHECKSUM
+```
+
+This route is allowed only from the trusted operator workstation for the exact
+CI-green `production` commit under the temporary release-policy exception. It
+does not authorize GA and expires with the acceptance. A missing, stale,
+rebound, partially matching, or incorrectly protected receipt fails before
+remote upload or mutation.
 
 On a host without installation state, the deploy helper creates the protected
 shared configuration directory and an intentionally undisclosed setup-code

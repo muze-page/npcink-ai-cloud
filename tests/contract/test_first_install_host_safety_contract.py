@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -7,6 +8,7 @@ import os
 import subprocess
 import sys
 import tarfile
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -84,6 +86,127 @@ def _bundle_with_allowlist(tmp_path: Path, entries: list[dict[str, str]]) -> Pat
     return bundle
 
 
+def _write_private_json(path: Path, payload: dict[str, object]) -> bytes:
+    raw = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    return raw
+
+
+def _controlled_acceptance_fixture(
+    tmp_path: Path,
+    module: ModuleType,
+) -> tuple[Path, Path, Path, datetime]:
+    generated_at = "2026-07-22T10:00:00Z"
+    now = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+    allowlist = {
+        "schema_version": "npcink.production-image-cve-allowlist.v1",
+        "entries": [
+            {
+                "image": "api",
+                "vulnerability_id": finding["vulnerability_id"],
+                "package": "python",
+                "package_version": "3.14.6",
+            }
+            for finding in module.EXPECTED_FINDINGS
+        ],
+    }
+    allowlist_raw = (json.dumps(allowlist, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    allowlist_sha256 = hashlib.sha256(allowlist_raw).hexdigest()
+    api_receipt = {
+        "contract_version": "npcink.production-image-scan-receipt.v1",
+        "status": "passed",
+        "scope": "release",
+        "release_gate": True,
+        "generated_at_utc": generated_at,
+        "image_key": "api",
+        "requested_reference": "npcink-ai-cloud-api:prod",
+        "archive_reference": "npcink-ai-cloud-api:prod",
+        "platform": "linux/amd64",
+        "allowlist_sha256": allowlist_sha256,
+        "blocking_finding_count": 3,
+        "allowlisted_blocking_finding_count": 3,
+        "unallowlisted_blocking_finding_count": 0,
+        "allowlisted_blocking_findings": module.EXPECTED_FINDINGS,
+        "unallowlisted_blocking_findings": [],
+    }
+    api_receipt_raw = (
+        json.dumps(api_receipt, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    scan_index = {
+        "contract_version": "npcink.production-image-scan-index.v1",
+        "status": "passed",
+        "scope": "release",
+        "release_gate": True,
+        "generated_at_utc": generated_at,
+        "allowlist_sha256": allowlist_sha256,
+        "release_platform": "linux/amd64",
+        "images": [
+            {
+                "image_key": "api",
+                "status": "passed",
+                "platform": "linux/amd64",
+                "archive_reference": "npcink-ai-cloud-api:prod",
+                "blocking_finding_count": 3,
+                "unallowlisted_blocking_finding_count": 0,
+                "receipt_sha256": hashlib.sha256(api_receipt_raw).hexdigest(),
+            }
+        ],
+    }
+    scan_index_raw = (json.dumps(scan_index, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    manifest = {
+        "source": {
+            "revision": "a" * 40,
+            "tree": "b" * 40,
+        }
+    }
+    manifest_raw = (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    members = {
+        "deploy/image-lock/cve-allowlist.json": allowlist_raw,
+        "release-bundle-manifest.json": manifest_raw,
+        "release/image-scan/scan-index.json": scan_index_raw,
+        "release/image-scan/api.receipt.json": api_receipt_raw,
+    }
+    bundle = tmp_path / "controlled-bundle.tgz"
+    with tarfile.open(bundle, mode="w:gz") as archive:
+        for name, raw in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(raw)
+            archive.addfile(info, io.BytesIO(raw))
+    acceptance = {
+        "contract": module.ACCEPTANCE_CONTRACT,
+        "status": "accepted_by_operator",
+        "scope": "controlled_production_validation_only",
+        "decision_document": module.DECISION_DOCUMENT,
+        "source_revision": "a" * 40,
+        "source_tree": "b" * 40,
+        "bundle_sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
+        "scan_index_sha256": hashlib.sha256(scan_index_raw).hexdigest(),
+        "api_scan_receipt_sha256": hashlib.sha256(api_receipt_raw).hexdigest(),
+        "allowlist_sha256": allowlist_sha256,
+        "scan_index_status": "passed",
+        "api_scan_status": "passed",
+        "image_platform": "linux/amd64",
+        "api_image_reference": "npcink-ai-cloud-api:prod",
+        "blocking_finding_count": 3,
+        "allowlisted_blocking_finding_count": 3,
+        "unallowlisted_blocking_finding_count": 0,
+        "allowlisted_findings": module.EXPECTED_FINDINGS,
+        "cisa_ssvc_exploitation": {cve: "none" for cve in sorted(module.BLOCKED)},
+        "cisa_ssvc_checked_at_utc": "2026-07-22T11:00:00Z",
+        "exception_expires_on": "2026-08-05",
+        "ga_authorized": False,
+        "authorized_by": "Muze",
+        "authorized_at_utc": "2026-07-22T11:05:00Z",
+    }
+    acceptance_path = tmp_path / "controlled-risk-acceptance.json"
+    acceptance_raw = _write_private_json(acceptance_path, acceptance)
+    checksum_path = tmp_path / "controlled-risk-acceptance.sha256"
+    checksum_path.write_text(hashlib.sha256(acceptance_raw).hexdigest() + "\n")
+    checksum_path.chmod(0o600)
+    return bundle, acceptance_path, checksum_path, now
+
+
 def test_first_install_cve_gate_blocks_any_named_python_3146_exception(
     tmp_path: Path,
 ) -> None:
@@ -114,6 +237,68 @@ def test_first_install_cve_gate_accepts_exact_bundle_after_exception_removal(
     bundle = _bundle_with_allowlist(tmp_path, [])
 
     module.assert_first_install_allowed(module._read_allowlist(bundle))
+
+
+def test_first_install_cve_gate_accepts_only_exact_fresh_operator_receipt(
+    tmp_path: Path,
+) -> None:
+    module = _load_module(
+        ROOT / "scripts" / "check-first-install-cve-gate.py",
+        "first_install_cve_gate_controlled",
+    )
+    bundle, acceptance, checksum, now = _controlled_acceptance_fixture(tmp_path, module)
+
+    module.assert_controlled_first_install_allowed(
+        bundle=bundle,
+        acceptance_path=acceptance,
+        acceptance_checksum_path=checksum,
+        now=now,
+    )
+
+
+def test_first_install_cve_gate_rejects_rebound_or_unprotected_operator_receipt(
+    tmp_path: Path,
+) -> None:
+    module = _load_module(
+        ROOT / "scripts" / "check-first-install-cve-gate.py",
+        "first_install_cve_gate_tamper",
+    )
+    bundle, acceptance, checksum, now = _controlled_acceptance_fixture(tmp_path, module)
+    payload = json.loads(acceptance.read_text())
+    payload["bundle_sha256"] = "0" * 64
+    raw = _write_private_json(acceptance, payload)
+    checksum.write_text(hashlib.sha256(raw).hexdigest() + "\n")
+    checksum.chmod(0o600)
+
+    with pytest.raises(ValueError, match="does not bind the exact bundle"):
+        module.assert_controlled_first_install_allowed(
+            bundle=bundle,
+            acceptance_path=acceptance,
+            acceptance_checksum_path=checksum,
+            now=now,
+        )
+
+    acceptance.chmod(0o644)
+    with pytest.raises(ValueError, match="mode-0600"):
+        module.assert_controlled_first_install_allowed(
+            bundle=bundle,
+            acceptance_path=acceptance,
+            acceptance_checksum_path=checksum,
+            now=now,
+        )
+
+    payload["bundle_sha256"] = hashlib.sha256(bundle.read_bytes()).hexdigest()
+    payload["authorized_at_utc"] = "2026-07-20T11:05:00Z"
+    raw = _write_private_json(acceptance, payload)
+    checksum.write_text(hashlib.sha256(raw).hexdigest() + "\n")
+    checksum.chmod(0o600)
+    with pytest.raises(ValueError, match="operator authorization must be no more"):
+        module.assert_controlled_first_install_allowed(
+            bundle=bundle,
+            acceptance_path=acceptance,
+            acceptance_checksum_path=checksum,
+            now=now,
+        )
 
 
 def _remote_install_state_probe_program() -> str:
@@ -255,9 +440,7 @@ os.read = read_with_in_place_change
     changed = _run_remote_install_state_probe(state_path, hook=hook)
 
     state_path.write_bytes(
-        b'{"installation_state":"pending","padding":"'
-        + (b"x" * (1024 * 1024))
-        + b'"}\n'
+        b'{"installation_state":"pending","padding":"' + (b"x" * (1024 * 1024)) + b'"}\n'
     )
     state_path.chmod(0o640)
     oversized = _run_remote_install_state_probe(state_path)
@@ -275,7 +458,7 @@ def test_admin_key_rotation_fences_api_before_disk_mutation_and_supports_retry()
     mutation = 'ADMIN_KEY="$("${RELEASE_TOOL_PYTHON}"'
     start = 'npcink_ai_cloud_compose "${ROOT_DIR}" start api'
     ready = "npcink_ai_cloud_wait_for_internal_endpoint"
-    disclose = 'printf \'%s\\n\' "${ADMIN_KEY}"'
+    disclose = "printf '%s\\n' \"${ADMIN_KEY}\""
     main_fence = source.index("# Establish the serving fence")
     main_stop = source.index(stop, main_fence)
 
@@ -283,9 +466,7 @@ def test_admin_key_rotation_fences_api_before_disk_mutation_and_supports_retry()
     assert source.index(lookup) < main_stop < source.index(mutation)
     assert source.index(mutation) < source.index(start) < source.index(ready)
     assert source.index(ready) < source.index(disclose)
-    assert source.index(disclose) < source.index(
-        "API_FENCE_ACTIVE=0", source.index(ready)
-    )
+    assert source.index(disclose) < source.index("API_FENCE_ACTIVE=0", source.index(ready))
     assert 'if [ "${API_FENCE_ACTIVE}" = "1" ]; then' in source
     assert source.count(stop) >= 2
     assert "STARTED_API_CONTAINER_ID" in source
@@ -315,16 +496,20 @@ def test_ordinary_deploy_and_safe_prune_require_positive_durable_sentinel() -> N
 
 def test_first_install_cve_probe_is_protected_and_precedes_host_mutation() -> None:
     source = DEPLOY_TO_SSH.read_text()
-    probe = "REMOTE_INSTALLATION_STATE=\"$("
+    probe = 'REMOTE_INSTALLATION_STATE="$('
     gate = "check-first-install-cve-gate.py"
     first_mutation = 'echo "[info] Preparing remote directory'
 
     assert probe in source
-    assert 'stat.S_IMODE(metadata.st_mode) != 0o640' in source
-    assert '(metadata.st_uid, metadata.st_gid) != (999, 999)' in source
+    assert "stat.S_IMODE(metadata.st_mode) != 0o640" in source
+    assert "(metadata.st_uid, metadata.st_gid) != (999, 999)" in source
     assert 'getattr(os, "O_NOFOLLOW", 0)' in source
     assert 'getattr(os, "O_NONBLOCK", 0)' in source
     assert "MAX_INSTALL_STATE_BYTES = 1024 * 1024" in source
     assert "descriptor_metadata_after = os.fstat(descriptor)" in source
     assert "path_metadata_after = path.lstat()" in source
+    assert "--controlled-cve-risk-acceptance" in source
+    assert "--controlled-cve-risk-acceptance-checksum" in source
+    assert "FIRST_INSTALL_CVE_GATE_ARGS" in source
+    assert source.index("Stage-only upload is forbidden") < source.index(first_mutation)
     assert source.index(probe) < source.index(gate) < source.index(first_mutation)

@@ -63,6 +63,34 @@ Git, and run the narrowest relevant local gates plus CI. Before promoting
 - manual production workflow dispatch and Environment approval after the exact
   `production` revision passes CI.
 
+One temporary exception applies only to the current empty-host PostgreSQL 18
+first installation while the exact three governed Python 3.14.6 findings
+remain. Because the operator acceptance must bind the final bundle produced
+after its fresh scan, the explicitly authorized operator may run the deploy
+from the trusted workstation instead of the GitHub deploy workflow when all of
+the following are true:
+
+- the exact `production` commit has green Cloud CI and is the checked-out clean
+  source of the Linux/AMD64 bundle;
+- the usual production-promotion PR contains
+  `Approved for production validation by operator.`;
+- the operator verifies the newly reset SSH host fingerprint through the ECS
+  console before pinning it locally;
+- a bundle-external
+  `npcink.controlled_production_cve_risk_acceptance.v1` receipt and independent
+  checksum pass `scripts/check-first-install-cve-gate.py`;
+- deployment uses `deploy/deploy-to-ssh-host.sh`, emits
+  `installation_state=pending`, and does not bypass any other first-install
+  gate;
+- the receipt is unexpired, no fixed supported Python image is available, and
+  the work remains controlled production validation with no real users.
+
+This is not a second ordinary deployment route. It expires no later than
+2026-08-05, cannot be used after installation finalization, and disappears as
+soon as the three allowlist entries are removed. Pushes still never deploy.
+Ordinary deployments continue to require the manually dispatched GitHub
+workflow and Environment approval.
+
 Recommended repository gate:
 
 ```bash
@@ -122,8 +150,9 @@ to a high-availability edition first.
 The required gates for this contract are the focused Setup/Auth/frontend tests,
 PostgreSQL 18 schema and semantic proof, production Compose and exact-bundle
 contracts, release-policy checks, current CI, real RDS private/TLS smoke, and a
-WordPress text/media round trip. The Python image CVE exception must be closed
-in a separate release before this database cutover is authorized.
+WordPress text/media round trip. The Python image CVE exception must either be
+closed in a separate release or satisfy the exact, time-bounded controlled
+first-install acceptance above before this database cutover is authorized.
 
 The canonical procedures are:
 

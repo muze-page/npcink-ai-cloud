@@ -46,14 +46,17 @@ Full backend runs upload `pytest-backend-timing-shard-*` artifacts containing
 each shard's JUnit report and selected file list, then write slow-test tables to
 the job summary.
 
-Production deployment has one trigger: manually dispatch `Deploy Production`
-from the exact `production` revision after `Cloud CI` is green. The operator
-must enter `Approved for production validation by operator.` exactly, and the
-GitHub Environment named `production` must receive its human approval. The
-workflow then deploys and runs the small-customer preflight plus optional formal
-release smoke. Missing optional smoke secrets produce an explicit skip, never a
+Ordinary production deployment has one trigger: manually dispatch
+`Deploy Production` from the exact `production` revision after `Cloud CI` is
+green. The operator must enter
+`Approved for production validation by operator.` exactly, and the GitHub
+Environment named `production` must receive its human approval. The workflow
+then deploys and runs the small-customer preflight plus optional formal release
+smoke. Missing optional smoke secrets produce an explicit skip, never a
 secret-bearing log. Neither a normal `production` push nor a static-terms-only
-push deploys automatically.
+push deploys automatically. The only temporary exception is the exact
+bundle-bound trusted-workstation path for the current empty-host PostgreSQL 18
+first install described below; it is not reusable after finalization.
 
 `Deploy Production` and `Production Maintenance` share the
 `production-host-mutation` concurrency group. A mutating `safe-prune` also
@@ -441,9 +444,22 @@ current release project.
 A host with missing or `pending` installation state takes the bounded first-
 install path. Before remote mkdir, upload, deployment lock, image, container, or
 database mutation, the deploy helper reads the protected state with
-`/usr/bin/python3.11` and rejects the exact bundle while its canonical CVE
-allowlist contains any of the three blocked Python 3.14.6 exceptions. No
-historical operator-acceptance receipt bypasses this machine gate.
+`/usr/bin/python3.11`. While its canonical CVE allowlist contains the exact
+three governed Python 3.14.6 exceptions, it accepts only a fresh external
+`npcink.controlled_production_cve_risk_acceptance.v1` receipt plus its separate
+SHA-256 file. Both must be operator-owned mode `0600` and bind the exact
+Linux/AMD64 source, bundle, embedded allowlist, passed scan index, API receipt,
+finding set, current `exploitation:none` check, operator, and expiry. There is
+no generic skip. A missing or mismatched pair fails before upload or mutation.
+
+This temporary first-install path may be run from the trusted operator
+workstation only after the exact `production` commit is CI-green and the
+production-promotion PR records the standard approval sentence. It exists
+because the acceptance is created after and binds the final local exact bundle.
+It expires no later than 2026-08-05, authorizes no GA or real-user rollout, and
+cannot be used for ordinary deployments after the completion sentinel exists.
+See the risk decision and PostgreSQL 18 runbook for the two explicit evidence
+environment variables.
 
 The first deployment starts Redis, the setup-capable API, frontend, and proxy,
 then emits exactly `installation_state=pending`. The workflow skips ordinary
@@ -469,7 +485,8 @@ local feature work
   -> PR master -> production
   -> Cloud CI passes on production
   -> operator enters the exact production-validation approval phrase
-  -> manually dispatch Deploy Production in the production Environment
+  -> ordinary deploy: manually dispatch Deploy Production in the production Environment
+     OR temporary first install: exact-receipt trusted-workstation deploy
   -> operational-ready passes
 ```
 
