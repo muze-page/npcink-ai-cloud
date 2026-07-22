@@ -463,6 +463,7 @@ def test_admin_key_rotation_fences_api_before_disk_mutation_and_supports_retry()
     main_stop = source.index(stop, main_fence)
 
     assert lookup in source
+    assert 'docker container ls -aq --no-trunc \\' in source
     assert source.index(lookup) < main_stop < source.index(mutation)
     assert source.index(mutation) < source.index(start) < source.index(ready)
     assert source.index(ready) < source.index(disclose)

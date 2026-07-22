@@ -94,7 +94,7 @@ if [[ ! "${API_CONTAINER_ID}" =~ ^[0-9a-f]{12,64}$ ]] || \
 	echo "[fail] Exact active-release API container could not be identified before rotation." >&2
 	exit 1
 fi
-LABELED_API_CONTAINER_ID="$(docker container ls -aq \
+LABELED_API_CONTAINER_ID="$(docker container ls -aq --no-trunc \
 	--filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
 	--filter "label=com.docker.compose.service=api")"
 if [ "${LABELED_API_CONTAINER_ID}" != "${API_CONTAINER_ID}" ]; then
