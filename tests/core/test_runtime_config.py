@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config as AlembicConfig
+from sqlalchemy.engine import make_url
 
 from app.core import runtime_config as runtime_config_module
 from app.core.config import get_settings
@@ -93,10 +94,11 @@ def test_completed_runtime_config_loads_structured_rds_and_secret_projection(
     assert values["environment"] == "production"
     assert values["admin_key_sha256"] == "a" * 64
     assert values["internal_auth_token"].startswith("nca_internal_")
-    assert "rm-test.pg.rds.aliyuncs.com" in values["database_url"]
-    assert "sslmode=verify-full" in values["database_url"]
-    assert "connect_timeout=5" in values["database_url"]
-    assert "hostaddr=10.0.0.10" in values["database_url"]
+    database_url = make_url(str(values["database_url"]))
+    assert database_url.host == "rm-test.pg.rds.aliyuncs.com"
+    assert database_url.query["sslmode"] == "verify-full"
+    assert database_url.query["connect_timeout"] == "5"
+    assert database_url.query["hostaddr"] == "10.0.0.10"
     assert values["database_pool_size"] == 2
     assert values["database_max_overflow"] == 1
     assert (tmp_path / "runtime-config.json").stat().st_mode & 0o777 == 0o600
