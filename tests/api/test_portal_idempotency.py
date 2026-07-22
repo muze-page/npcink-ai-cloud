@@ -123,17 +123,16 @@ def portal_client(tmp_path: Path) -> Iterator[tuple[str, TestClient]]:
             )
         session.commit()
 
-    client = TestClient(create_app(CloudServices(settings=settings)))
-    client.headers.update(
-        {
-            "origin": "http://testserver",
-            "referer": "http://testserver/portal",
-        }
-    )
     try:
-        yield database_url, client
+        with TestClient(create_app(CloudServices(settings=settings))) as client:
+            client.headers.update(
+                {
+                    "origin": "http://testserver",
+                    "referer": "http://testserver/portal",
+                }
+            )
+            yield database_url, client
     finally:
-        client.close()
         dispose_engine(database_url)
 
 
@@ -547,7 +546,10 @@ def test_concurrent_http_duplicates_create_one_business_side_effect(
     successes = [response for response in responses if response.status_code == 200]
     conflicts = [response for response in responses if response.status_code == 409]
     assert successes
-    assert len(successes) + len(conflicts) == 2
+    assert len(successes) + len(conflicts) == 2, [
+        (response.status_code, str(response.request.url), response.text)
+        for response in responses
+    ]
     assert _support_request_count(database_url) == 1
     for response in conflicts:
         assert response.json()["error_code"] == "portal.idempotency_in_progress"
