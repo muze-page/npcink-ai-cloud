@@ -9,6 +9,7 @@ import {
 
 const ADMIN_SESSION_COOKIE = 'npcink_admin_session_token';
 const PORTAL_SESSION_COOKIE = 'npcink_portal_session_token';
+const SETUP_STATE_TIMEOUT_MS = 5000;
 
 type InstallationGateResult =
   | { ok: true; installationState: InstallationState }
@@ -44,10 +45,13 @@ async function readInstallationState(): Promise<InstallationGateResult> {
     return { ok: true, installationState: override };
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SETUP_STATE_TIMEOUT_MS);
   try {
     const response = await fetch(`${getApiBaseUrl().replace(/\/$/, '')}/setup/v1/state`, {
       headers: { Accept: 'application/json' },
       cache: 'no-store',
+      signal: controller.signal,
     });
     if (!response.ok) {
       return completedInstallationObserved
@@ -68,6 +72,8 @@ async function readInstallationState(): Promise<InstallationGateResult> {
     return completedInstallationObserved
       ? { ok: true, installationState: 'complete' }
       : { ok: false };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -197,7 +203,10 @@ export async function proxy(request: NextRequest) {
   const isSetupStateRoute = setupRouteKey === 'GET /api/setup/state';
   const isSetupApiRoute = pathname === '/api/setup' || pathname.startsWith('/api/setup/');
   const isSetupPage = pathname === '/setup' || pathname === '/setup/';
-  const isHealthRoute = pathname === '/health/live' || pathname === '/health/ready';
+  const isFrontendHealthRoute =
+    pathname === '/api/health' && (request.method === 'GET' || request.method === 'HEAD');
+  const isHealthRoute =
+    pathname === '/health/live' || pathname === '/health/ready' || isFrontendHealthRoute;
 
   // The state projection itself must remain reachable so the browser can show
   // an explicit backend failure instead of guessing that a deployment is new.
@@ -293,8 +302,7 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
-     * - public files (public folder)
      */
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static(?:/|$)|_next/image(?:/|$)|favicon\\.ico$).*)',
   ],
 };

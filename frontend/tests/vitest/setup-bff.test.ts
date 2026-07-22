@@ -19,10 +19,38 @@ function envelope(data: Record<string, unknown> = {}) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe('setup BFF', () => {
+  it('returns a stable 503 when the setup-state backend request hangs', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('setup state timed out', 'AbortError')),
+          { once: true }
+        );
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const responsePromise = proxySetupPath(
+      new NextRequest('https://cloud.example.com/api/setup/state'),
+      ['state']
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+    const response = await responsePromise;
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error_code: 'setup.state_unavailable',
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('forwards only the setup cookie and trusted client IP evidence', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);

@@ -8,6 +8,7 @@ vi.mock('@/lib/env', () => ({
 import { proxy } from '@/proxy';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -29,6 +30,32 @@ function stateEnvelope(installationState: 'pending' | 'complete') {
 }
 
 describe('setup proxy terminal-state cache', () => {
+  it('fails closed with a stable 503 when the setup-state probe hangs', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('setup state timed out', 'AbortError')),
+          { once: true }
+        );
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const responsePromise = proxy(
+      new NextRequest('https://cloud.example.com/api/admin/overview')
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+    const response = await responsePromise;
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error_code: 'setup.state_unavailable',
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('does not let a late pending response override an observed complete state', async () => {
     let resolvePending!: (response: Response) => void;
     const pendingResponse = new Promise<Response>((resolve) => {

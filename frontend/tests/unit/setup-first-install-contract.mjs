@@ -49,12 +49,23 @@ assert.match(globalProxy, /setup\.state_unavailable/);
 assert.match(globalProxy, /SETUP_API_RULES\.has\(setupRouteKey\)/);
 assert.match(globalProxy, /pathname === '\/health\/live'/);
 assert.match(globalProxy, /pathname === '\/health\/ready'/);
+assert.match(
+  globalProxy,
+  /pathname === '\/api\/health' && \(request\.method === 'GET' \|\| request\.method === 'HEAD'\)/,
+  'pending frontend health bypass must be limited to exact GET and HEAD requests'
+);
 assert.match(globalProxy, /pathname === '\/setup\/'/);
 assert.match(globalProxy, /installationState === 'complete'/);
 assert.match(globalProxy, /let completedInstallationObserved = false/);
 assert.match(globalProxy, /completedInstallationObserved = true/);
 assert.match(globalProxy, /if \(completedInstallationObserved\) \{[\s\S]*installationState: 'complete'/);
 assert.doesNotMatch(globalProxy, /installation state.*pending/i);
+assert.match(globalProxy, /_next\/static\(\?:\/\|\$\)[\s\S]*_next\/image\(\?:\/\|\$\)[\s\S]*favicon\\\\\.ico\$/);
+assert.doesNotMatch(
+  globalProxy,
+  /svg\|png\|jpg\|jpeg\|gif\|webp|\.\*\\\\\.\(\?:/,
+  'dynamic routes ending in an image extension must not bypass the installation gate'
+);
 assert.match(readFileSync(resolve(root, 'src/lib/setup.ts'), 'utf8'), /envelope\.status !== 'ok'/);
 assert.match(readFileSync(resolve(root, 'src/lib/setup.ts'), 'utf8'), /envelope\.error_code !== ''/);
 
@@ -63,7 +74,9 @@ for (const forbiddenStorage of ['localStorage', 'sessionStorage']) {
 }
 assert.doesNotMatch(wizard, /console\.(?:log|info|warn|error)/);
 assert.match(wizard, /type=\{isSetupCodeVisible \? 'text' : 'password'\}/);
-assert.match(wizard, /autoComplete="new-password"/);
+assert.match(wizard, /id="database_username"[\s\S]*?autoComplete="off"[\s\S]*?data-1p-ignore[\s\S]*?data-lpignore="true"/);
+assert.match(wizard, /id="database_password"[\s\S]*?autoComplete="off"[\s\S]*?data-1p-ignore[\s\S]*?data-lpignore="true"/);
+assert.doesNotMatch(wizard, /autoComplete="(?:username|new-password)"/);
 assert.match(wizard, /idempotencyKey: installIdempotencyKey\.current/);
 assert.match(wizard, /setSetupCode\(''\)/);
 assert.match(wizard, /setDatabase\(EMPTY_DATABASE\)/);
@@ -72,6 +85,23 @@ assert.doesNotMatch(wizard, /setNextUrl|location\.assign\(nextUrl\)/);
 assert.match(wizard, /data-setup-installation-state=\{installationComplete \? 'complete' : 'pending'\}/);
 assert.match(wizard, /installationComplete[\s\S]*setup\.install_complete_status/);
 assert.match(wizard, /I saved this admin key|setup\.admin_key_saved_confirm/);
+
+const i18n = readFileSync(resolve(root, 'src/lib/i18n.ts'), 'utf8');
+assert.match(
+  i18n,
+  /Automated deployment does not reveal a usable code[\s\S]*setup-code-rotate[\s\S]*SSH TTY/,
+  'English setup copy must direct the operator to the active-release TTY rotation path'
+);
+assert.match(
+  i18n,
+  /自动部署不会输出可用的安装码[\s\S]*SSH TTY[\s\S]*setup-code-rotate/,
+  'Chinese setup copy must direct the operator to the active-release TTY rotation path'
+);
+assert.doesNotMatch(
+  i18n,
+  /code printed once by the deployment command|部署命令只显示一次的安装码/,
+  'setup copy must not claim that automated deployment reveals the usable plaintext code'
+);
 
 assert.match(env, /NPCINK_CLOUD_INTERNAL_AUTH_TOKEN_FILE/);
 assert.match(env, /CLOUD_PUBLIC_BASE_URL must use HTTPS/);

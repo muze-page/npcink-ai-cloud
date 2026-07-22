@@ -75,6 +75,17 @@ test('first install keeps secrets in memory and reveals the admin key once', asy
   const blockedAdminApi = await page.request.get('/api/admin/overview');
   expect(blockedAdminApi.status()).toBe(503);
   expect((await blockedAdminApi.json()).error_code).toBe('setup.installation_required');
+  const frontendHealth = await page.request.get('/api/health');
+  expect(frontendHealth.status()).toBe(200);
+  expect((await frontendHealth.json()).status).toBe('healthy');
+  const frontendHealthHead = await page.request.head('/api/health');
+  expect(frontendHealthHead.status()).toBe(200);
+  const frontendHealthPost = await page.request.post('/api/health');
+  expect(frontendHealthPost.status()).toBe(503);
+  expect((await frontendHealthPost.json()).error_code).toBe('setup.installation_required');
+  const disguisedAdminApi = await page.request.get('/api/admin/export.png');
+  expect(disguisedAdminApi.status()).toBe(503);
+  expect((await disguisedAdminApi.json()).error_code).toBe('setup.installation_required');
   const unknownSetupApi = await page.request.post('/api/setup/not-allowed', { data: {} });
   expect(unknownSetupApi.status()).toBe(404);
   expect((await unknownSetupApi.json()).error_code).toBe('proxy.setup_route_not_allowed');

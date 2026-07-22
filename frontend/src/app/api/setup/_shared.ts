@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getApiBaseUrl, getPublicBaseUrl } from '@/lib/env';
 
 export const SETUP_SESSION_COOKIE = 'npcink_setup_session';
+const SETUP_STATE_TIMEOUT_MS = 5000;
 
 type SetupMethod = 'GET' | 'POST';
 
@@ -167,6 +168,10 @@ export async function proxySetupPath(
   }
 
   let response: Response;
+  const stateController = rule.path === 'state' ? new AbortController() : null;
+  const stateTimeout = stateController
+    ? setTimeout(() => stateController.abort(), SETUP_STATE_TIMEOUT_MS)
+    : null;
   try {
     response = await fetch(`${getApiBaseUrl().replace(/\/$/, '')}${rule.backendPath}`, {
       method,
@@ -174,6 +179,7 @@ export async function proxySetupPath(
       body: body && body.byteLength > 0 ? body : undefined,
       cache: 'no-store',
       redirect: 'manual',
+      ...(stateController ? { signal: stateController.signal } : {}),
     });
   } catch {
     if (rule.path === 'state') {
@@ -184,6 +190,10 @@ export async function proxySetupPath(
       );
     }
     return buildSetupErrorResponse(502, 'proxy.setup_unreachable', 'failed to reach setup endpoint');
+  } finally {
+    if (stateTimeout !== null) {
+      clearTimeout(stateTimeout);
+    }
   }
 
   return forwardSetupResponse(response);

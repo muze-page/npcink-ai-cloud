@@ -543,13 +543,13 @@ export function SetupWizard() {
                   </div>
                   <div>
                     <label htmlFor="database_username" className="mb-2 block text-sm font-medium">{t('setup.database_username')}</label>
-                    <input id="database_username" className="input font-mono" required autoComplete="username" value={database.username} onChange={(event) => updateDatabase('username', event.target.value)} />
+                    <input id="database_username" className="input font-mono" required autoComplete="off" data-1p-ignore data-lpignore="true" value={database.username} onChange={(event) => updateDatabase('username', event.target.value)} />
                   </div>
                 </div>
                 <div>
                   <label htmlFor="database_password" className="mb-2 block text-sm font-medium">{t('setup.database_password')}</label>
                   <div className="relative">
-                    <input id="database_password" className="input pr-20 font-mono" required type={isDatabasePasswordVisible ? 'text' : 'password'} autoComplete="new-password" value={database.password} onChange={(event) => updateDatabase('password', event.target.value)} />
+                    <input id="database_password" className="input pr-20 font-mono" required type={isDatabasePasswordVisible ? 'text' : 'password'} autoComplete="off" data-1p-ignore data-lpignore="true" value={database.password} onChange={(event) => updateDatabase('password', event.target.value)} />
                     <button type="button" className="absolute inset-y-1.5 right-1.5 rounded-lg px-3 text-xs font-semibold text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800" onClick={() => setIsDatabasePasswordVisible((value) => !value)}>
                       {isDatabasePasswordVisible ? t('common.hide') : t('setup.show_secret')}
                     </button>
