@@ -1,22 +1,4 @@
 services:
-  postgres:
-    build:
-      context: .
-      dockerfile: Dockerfile.postgres
-    image: ${NPCINK_CLOUD_POSTGRES_RELEASE_IMAGE:-npcink-ai-cloud-postgres:prod}
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-npcink_ai_cloud}
-      POSTGRES_USER: ${POSTGRES_USER:-npcink}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?POSTGRES_PASSWORD is required}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-npcink} -d ${POSTGRES_DB:-npcink_ai_cloud}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    volumes:
-      - cloud-postgres-prod:/var/lib/postgresql/data
-
   redis:
     image: ${NPCINK_CLOUD_REDIS_RELEASE_IMAGE:-npcink-ai-cloud-external-redis:prod}
     restart: unless-stopped
@@ -57,30 +39,23 @@ services:
     command: >-
       gunicorn -k uvicorn.workers.UvicornWorker
       --forwarded-allow-ips 172.28.0.10
-      -w ${NPCINK_CLOUD_API_WORKERS:-2}
+      -w 1
       -b 0.0.0.0:8000
       app.api.main:app
+    env_file:
+      - ${NPCINK_CLOUD_BACKEND_ENV_FILE:-/dev/null}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      NPCINK_CLOUD_ENVIRONMENT: ${NPCINK_CLOUD_ENVIRONMENT:-production}
+      NPCINK_CLOUD_ENVIRONMENT: ${NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV:-production}
       NPCINK_CLOUD_LOG_LEVEL: ${NPCINK_CLOUD_LOG_LEVEL:-INFO}
-      NPCINK_CLOUD_DATABASE_URL: ${NPCINK_CLOUD_DATABASE_URL?NPCINK_CLOUD_DATABASE_URL is required}
+      NPCINK_CLOUD_CONFIG_DIR: /run/npcink-config
       NPCINK_CLOUD_REDIS_URL: ${NPCINK_CLOUD_REDIS_URL:-redis://redis:6379/0}
       NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
-      NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
-      NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
-      NPCINK_CLOUD_ADMIN_SESSION_SECRET: ${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-}
-      NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: ${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-}
-      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-}
-      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET:-}
-      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID:-}
       NPCINK_CLOUD_ADMIN_SESSION_TTL_SECONDS: ${NPCINK_CLOUD_ADMIN_SESSION_TTL_SECONDS:-28800}
-      NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID:-platform:internal_root}
-      NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE:-platform_admin}
+      NPCINK_CLOUD_ADMIN_PRINCIPAL_ID: ${NPCINK_CLOUD_ADMIN_PRINCIPAL_ID:-platform:internal_root}
       NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST: ${NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST:-}
       NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST:-}
-      NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-}
       NPCINK_CLOUD_PORTAL_JWT_ISSUER: ${NPCINK_CLOUD_PORTAL_JWT_ISSUER:-npcink-ai-cloud}
       NPCINK_CLOUD_PORTAL_JWT_AUDIENCE: ${NPCINK_CLOUD_PORTAL_JWT_AUDIENCE:-npcink-ai-cloud-portal}
       NPCINK_CLOUD_PORTAL_SESSION_TTL_SECONDS: ${NPCINK_CLOUD_PORTAL_SESSION_TTL_SECONDS:-28800}
@@ -144,13 +119,12 @@ services:
       NPCINK_CLOUD_OLLAMA_TIMEOUT_SECONDS: ${NPCINK_CLOUD_OLLAMA_TIMEOUT_SECONDS:-30}
       NPCINK_CLOUD_OLLAMA_MODEL_ALLOWLIST: ${NPCINK_CLOUD_OLLAMA_MODEL_ALLOWLIST:-}
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     expose:
       - "8000"
     volumes:
+      - ${NPCINK_CLOUD_CONFIG_DIR_HOST:-./shared/config}:/run/npcink-config
       - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   frontend:
@@ -162,10 +136,16 @@ services:
     environment:
       CLOUD_API_BASE_URL: http://api:8000
       CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}
-      NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
+      NPCINK_CLOUD_INTERNAL_AUTH_TOKEN_FILE: /run/npcink-frontend-config/internal-auth-token
+      NEXT_PUBLIC_ENV: ${NPCINK_CLOUD_DEPLOY_SMOKE_FRONTEND_ENV:-production}
+      NPCINK_CLOUD_SETUP_STATE_OVERRIDE: ${NPCINK_CLOUD_DEPLOY_SMOKE_SETUP_STATE_OVERRIDE:-}
       NODE_ENV: production
+    group_add:
+      - "999"
     expose:
       - "3000"
+    volumes:
+      - ${NPCINK_CLOUD_CONFIG_DIR_HOST:-./shared/config}/frontend:/run/npcink-frontend-config:ro
 
   worker:
     build:
@@ -175,25 +155,20 @@ services:
         PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
     image: ${NPCINK_CLOUD_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-worker:prod}
     restart: unless-stopped
-    command: python -m app.workers.runtime_queue
+    entrypoint: ["/app/deploy/wait-for-install.sh"]
+    command: ["python", "-m", "app.workers.runtime_queue"]
+    env_file:
+      - ${NPCINK_CLOUD_BACKEND_ENV_FILE:-/dev/null}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      NPCINK_CLOUD_ENVIRONMENT: ${NPCINK_CLOUD_ENVIRONMENT:-production}
+      NPCINK_CLOUD_ENVIRONMENT: ${NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV:-production}
       NPCINK_CLOUD_LOG_LEVEL: ${NPCINK_CLOUD_LOG_LEVEL:-INFO}
-      NPCINK_CLOUD_DATABASE_URL: ${NPCINK_CLOUD_DATABASE_URL?NPCINK_CLOUD_DATABASE_URL is required}
+      NPCINK_CLOUD_CONFIG_DIR: /run/npcink-config
       NPCINK_CLOUD_REDIS_URL: ${NPCINK_CLOUD_REDIS_URL:-redis://redis:6379/0}
       NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS: ${NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS:-5}
       NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
-      NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
-      NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
-      NPCINK_CLOUD_ADMIN_SESSION_SECRET: ${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-}
-      NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: ${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-}
-      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-}
-      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET:-}
-      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID:-}
-      NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-}
       NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST: ${NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST:-}
       NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST:-}
       NPCINK_CLOUD_OPENAI_BASE_URL: ${NPCINK_CLOUD_OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -247,11 +222,10 @@ services:
       NPCINK_CLOUD_ANTHROPIC_VERSION: ${NPCINK_CLOUD_ANTHROPIC_VERSION:-2023-06-01}
       NPCINK_CLOUD_ANTHROPIC_TIMEOUT_SECONDS: ${NPCINK_CLOUD_ANTHROPIC_TIMEOUT_SECONDS:-30}
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
+      - ${NPCINK_CLOUD_CONFIG_DIR_HOST:-./shared/config}:/run/npcink-config:ro
       - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   callback-worker:
@@ -262,31 +236,26 @@ services:
         PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
     image: ${NPCINK_CLOUD_CALLBACK_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-callback-worker:prod}
     restart: unless-stopped
-    command: python -m app.workers.callback_dispatch
+    entrypoint: ["/app/deploy/wait-for-install.sh"]
+    command: ["python", "-m", "app.workers.callback_dispatch"]
+    env_file:
+      - ${NPCINK_CLOUD_BACKEND_ENV_FILE:-/dev/null}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      NPCINK_CLOUD_ENVIRONMENT: ${NPCINK_CLOUD_ENVIRONMENT:-production}
+      NPCINK_CLOUD_ENVIRONMENT: ${NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV:-production}
       NPCINK_CLOUD_LOG_LEVEL: ${NPCINK_CLOUD_LOG_LEVEL:-INFO}
-      NPCINK_CLOUD_DATABASE_URL: ${NPCINK_CLOUD_DATABASE_URL?NPCINK_CLOUD_DATABASE_URL is required}
+      NPCINK_CLOUD_CONFIG_DIR: /run/npcink-config
       NPCINK_CLOUD_REDIS_URL: ${NPCINK_CLOUD_REDIS_URL:-redis://redis:6379/0}
       NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS: ${NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS:-5}
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
-      NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
-      NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
-      NPCINK_CLOUD_ADMIN_SESSION_SECRET: ${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-}
-      NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: ${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-}
-      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-}
-      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET:-}
-      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID:-}
-      NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-}
       NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST: ${NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST:-}
       NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST:-}
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - ${NPCINK_CLOUD_CONFIG_DIR_HOST:-./shared/config}:/run/npcink-config:ro
 
   ops-worker:
     build:
@@ -296,22 +265,17 @@ services:
         PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
     image: ${NPCINK_CLOUD_OPS_WORKER_RELEASE_IMAGE:-npcink-ai-cloud-ops-worker:prod}
     restart: unless-stopped
-    command: python -m app.workers.ops_cadence
+    entrypoint: ["/app/deploy/wait-for-install.sh"]
+    command: ["python", "-m", "app.workers.ops_cadence"]
+    env_file:
+      - ${NPCINK_CLOUD_BACKEND_ENV_FILE:-/dev/null}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      NPCINK_CLOUD_ENVIRONMENT: ${NPCINK_CLOUD_ENVIRONMENT:-production}
+      NPCINK_CLOUD_ENVIRONMENT: ${NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV:-production}
       NPCINK_CLOUD_LOG_LEVEL: ${NPCINK_CLOUD_LOG_LEVEL:-INFO}
-      NPCINK_CLOUD_DATABASE_URL: ${NPCINK_CLOUD_DATABASE_URL?NPCINK_CLOUD_DATABASE_URL is required}
+      NPCINK_CLOUD_CONFIG_DIR: /run/npcink-config
       NPCINK_CLOUD_REDIS_URL: ${NPCINK_CLOUD_REDIS_URL:-redis://redis:6379/0}
-      NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
-      NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
-      NPCINK_CLOUD_ADMIN_SESSION_SECRET: ${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-}
-      NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: ${NPCINK_CLOUD_SERVICE_SETTINGS_SECRET:-}
-      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-}
-      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET:-}
-      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID:-}
-      NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-}
       NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST: ${NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST:-}
       NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST:-}
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
@@ -393,11 +357,10 @@ services:
       NPCINK_CLOUD_ANTHROPIC_VERSION: ${NPCINK_CLOUD_ANTHROPIC_VERSION:-2023-06-01}
       NPCINK_CLOUD_ANTHROPIC_TIMEOUT_SECONDS: ${NPCINK_CLOUD_ANTHROPIC_TIMEOUT_SECONDS:-30}
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
+      - ${NPCINK_CLOUD_CONFIG_DIR_HOST:-./shared/config}:/run/npcink-config:ro
       - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   release-one-off:
@@ -412,7 +375,6 @@ services:
 
 volumes:
   cloud-artifacts-prod:
-  cloud-postgres-prod:
   cloud-redis-prod:
 
 networks:

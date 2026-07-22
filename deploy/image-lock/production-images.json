@@ -40,15 +40,6 @@
       "required_platforms": ["linux/amd64", "linux/arm64"]
     },
     {
-      "key": "postgres_base",
-      "kind": "dockerfile_base",
-      "tag": "postgres:16-alpine",
-      "digest": "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
-      "reference": "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
-      "source_file": "Dockerfile.postgres",
-      "required_platforms": ["linux/amd64", "linux/arm64"]
-    },
-    {
       "key": "redis",
       "kind": "compose_external",
       "tag": "redis:7-alpine",
@@ -72,16 +63,6 @@
     }
   ],
   "application_outputs": [
-    {
-      "key": "postgres",
-      "reference": "npcink-ai-cloud-postgres:prod",
-      "dockerfile": "Dockerfile.postgres",
-      "compose_references": [
-        {"source_file": "docker-compose.prod.yml", "services": ["postgres"]},
-        {"source_file": "docker-compose.runtime.yml", "services": ["postgres"]}
-      ],
-      "scan_by_default": true
-    },
     {
       "key": "api",
       "reference": "npcink-ai-cloud-api:prod",

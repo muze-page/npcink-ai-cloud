@@ -88,6 +88,7 @@ jobs:
           ssh-keygen -F "${known_host_lookup}" -f ~/.ssh/known_hosts >/dev/null
 
       - name: Deploy
+        id: deploy
         env:
           NPCINK_CLOUD_DEPLOY_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           NPCINK_CLOUD_DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -99,17 +100,64 @@ jobs:
           NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"
           NPCINK_CLOUD_REFRESH_PROVIDERS: "1"
           NPCINK_CLOUD_WITH_OPERATIONAL_READY: "1"
-          NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT: "1"
         run: |
           set -euo pipefail
+          deploy_output_file="$(mktemp)"
+          cleanup_deploy_output() {
+            exit_status="$?"
+            trap - EXIT
+            rm -f -- "${deploy_output_file}" || exit_status=1
+            exit "${exit_status}"
+          }
+          trap cleanup_deploy_output EXIT
           bash deploy/deploy-to-ssh-host.sh \
             --skip-seed \
             --skip-smoke \
             --refresh-providers \
             --with-operational-ready \
-            --remote-compose-file docker-compose.runtime.yml
+            --remote-compose-file docker-compose.runtime.yml | tee "${deploy_output_file}"
+          installation_state_count="$(
+            awk '/^installation_state=(pending|complete)$/ { count += 1 } END { print count + 0 }' \
+              "${deploy_output_file}"
+          )"
+          if [ "${installation_state_count}" != "1" ]; then
+            echo "[fail] Deploy must emit exactly one explicit installation_state=pending|complete result." >&2
+            exit 1
+          fi
+          installation_state="$(
+            awk -F= '/^installation_state=(pending|complete)$/ { print $2 }' \
+              "${deploy_output_file}"
+          )"
+          case "${installation_state}" in
+            pending|complete) ;;
+            *)
+              echo "[fail] Deploy emitted an unsupported installation state." >&2
+              exit 1
+              ;;
+          esac
+          printf 'installation_state=%s\n' "${installation_state}" >> "${GITHUB_OUTPUT}"
+
+      - name: First-install operator handoff
+        if: steps.deploy.outputs.installation_state == 'pending'
+        env:
+          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## First installation pending"
+            echo ""
+            echo "Post-install preflight and release smoke were intentionally skipped."
+            echo ""
+            echo "1. On an SSH TTY as root, run \`current/deploy/setup-code-rotate.sh\` and save the one-time code without capturing terminal output."
+            echo "2. Open \`${NPCINK_CLOUD_BASE_URL%/}/setup\` and complete the PostgreSQL 18 installation."
+            echo "3. Save the one-time administrator key shown by Setup."
+            echo "4. While the lifecycle remains pending, run the complete-only Release Smoke workflow, WordPress text/image round trips, the RDS restore drill, and the 24–72 hour observation."
+            echo "5. Only after those acceptance checks pass, run \`current/deploy/first-install-finalize.sh\` on the production host as root."
+            echo "6. Future ordinary deployments will then report \`complete\` and run their post-install gates."
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Small-customer preflight
+        if: steps.deploy.outputs.installation_state == 'complete'
         env:
           NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
         run: |
@@ -118,10 +166,11 @@ jobs:
             --require-alipay-enabled
 
       - name: Optional formal release smoke
+        if: steps.deploy.outputs.installation_state == 'complete'
         env:
           NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
           NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${{ secrets.NPCINK_CLOUD_INTERNAL_AUTH_TOKEN }}
-          NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${{ secrets.NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN }}
+          NPCINK_CLOUD_ADMIN_KEY: ${{ secrets.NPCINK_CLOUD_ADMIN_KEY }}
           NPCINK_CLOUD_RELEASE_MEMBER_EMAIL: ${{ secrets.NPCINK_CLOUD_RELEASE_MEMBER_EMAIL }}
           NPCINK_CLOUD_PORTAL_LOGIN_CODE: ${{ secrets.NPCINK_CLOUD_PORTAL_LOGIN_CODE }}
           NPCINK_CLOUD_RELEASE_SITE_ID: ${{ secrets.NPCINK_CLOUD_RELEASE_SITE_ID }}
@@ -133,7 +182,7 @@ jobs:
           missing=0
           for key in \
             NPCINK_CLOUD_INTERNAL_AUTH_TOKEN \
-            NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN \
+            NPCINK_CLOUD_ADMIN_KEY \
             NPCINK_CLOUD_RELEASE_MEMBER_EMAIL \
             NPCINK_CLOUD_PORTAL_LOGIN_CODE \
             NPCINK_CLOUD_RELEASE_SITE_ID \
@@ -181,7 +230,7 @@ jobs:
           path = sys.argv[1]
           keys = (
               "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
-              "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
+              "NPCINK_CLOUD_ADMIN_KEY",
               "NPCINK_CLOUD_RELEASE_MEMBER_EMAIL",
               "NPCINK_CLOUD_PORTAL_LOGIN_CODE",
               "NPCINK_CLOUD_RELEASE_SITE_ID",
@@ -201,7 +250,7 @@ jobs:
           PY
           unset \
             NPCINK_CLOUD_INTERNAL_AUTH_TOKEN \
-            NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN \
+            NPCINK_CLOUD_ADMIN_KEY \
             NPCINK_CLOUD_RELEASE_MEMBER_EMAIL \
             NPCINK_CLOUD_PORTAL_LOGIN_CODE \
             NPCINK_CLOUD_RELEASE_SITE_ID \

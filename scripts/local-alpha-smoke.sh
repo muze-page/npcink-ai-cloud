@@ -51,7 +51,7 @@ require_value() {
 }
 
 require_value "${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}" "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN is required"
-require_value "${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}" "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN is required"
+require_value "${NPCINK_CLOUD_ADMIN_KEY:-}" "operator-only NPCINK_CLOUD_ADMIN_KEY is required"
 require_value "${SITE_ID}" "NPCINK_CLOUD_SITE_ID or default site id is required"
 require_value "${KEY_ID}" "NPCINK_CLOUD_KEY_ID or default key id is required"
 require_value "${SECRET}" "NPCINK_CLOUD_SECRET or NPCINK_CLOUD_SITE_KEY_SECRET is required"
@@ -531,17 +531,17 @@ assert_json_non_empty "${HTTP_BODY}" "data.items" "portal API key list should no
 
 http_request "GET" "${BASE_URL%/}/admin/login" "${ADMIN_COOKIE_JAR}" ""
 assert_status "${HTTP_STATUS}" "200" "admin login page should load"
-ADMIN_BODY="$(ADMIN_TOKEN_VALUE="${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN}" python3 - <<'PY'
+ADMIN_BODY="$(ADMIN_KEY_VALUE="${NPCINK_CLOUD_ADMIN_KEY}" python3 - <<'PY'
 import json
 import os
 
-print(json.dumps({"token": os.environ["ADMIN_TOKEN_VALUE"]}, ensure_ascii=True))
+print(json.dumps({"admin_key": os.environ["ADMIN_KEY_VALUE"]}, ensure_ascii=True))
 PY
 )"
-http_request "POST" "${BASE_URL%/}/admin/auth/bootstrap" "${ADMIN_COOKIE_JAR}" "${ADMIN_BODY}" \
+http_request "POST" "${BASE_URL%/}/admin/auth/login" "${ADMIN_COOKIE_JAR}" "${ADMIN_BODY}" \
 	"Origin: ${BASE_URL%/}"
 if [ "${HTTP_STATUS}" != "200" ] && [ "${HTTP_STATUS}" != "303" ]; then
-	fail "admin bootstrap login should succeed (expected 200 or 303, got ${HTTP_STATUS})"
+	fail "admin key login should succeed (expected 200 or 303, got ${HTTP_STATUS})"
 fi
 http_request "GET" "${BASE_URL%/}/admin/session" "${ADMIN_COOKIE_JAR}" ""
 assert_status "${HTTP_STATUS}" "200" "admin session should load"

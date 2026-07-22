@@ -33,23 +33,22 @@ only loads the already verified single-platform archives.
 
 Only Git-tracked files from `git archive HEAD` enter the source payload. The
 manifest records the full commit/tree/branch, hashes of the Python and pnpm
-locks, production Dockerfiles (including `Dockerfile.postgres`), Compose
-files, migrations, `deploy/`, and `site/`, plus BuildKit secret IDs but never
-secret values.
+locks, the API and frontend production Dockerfiles, Compose files, migrations,
+`deploy/`, and `site/`, plus BuildKit secret IDs but never secret values.
 
 Formal images are built with local Buildx and an explicit platform. The API is
 built once; `api`, `worker`, `callback_worker`, and `ops_worker` reuse one API
-archive and manifest-declared aliases. Frontend and the derived Postgres image
-are each built once. Compose externals are pulled by upstream digest, tagged
-to the lock's deterministic `npcink-ai-cloud-external-*:prod` release alias,
-and never represented by a mutable upstream tag.
+archive and manifest-declared aliases. The frontend is built once. Compose
+externals are pulled by upstream digest, tagged to the lock's deterministic
+`npcink-ai-cloud-external-*:prod` release alias, and never represented by a
+mutable upstream tag. The external RDS PostgreSQL 18 service and its CA or
+credentials are never image or bundle payloads.
 
 ## Scan and portable image identity
 
 The complete release set is scanned after the single build/pull phase and
-before packaging. A release scan must cover API, frontend, derived Postgres,
-and every Compose external on the same selected platform and local Docker
-context.
+before packaging. A release scan must cover API, frontend, and every bundled
+Compose external on the same selected platform and local Docker context.
 
 The scanner produces one Docker archive per scanned image and scans that exact
 archive with pinned Syft and Grype. The bundle compresses those same archive
@@ -86,7 +85,6 @@ The archive contains at least:
 release-bundle-manifest.json
 SHA256SUMS
 Dockerfile
-Dockerfile.postgres
 frontend/Dockerfile
 docker-compose.prod.yml
 docker-compose.runtime.yml
@@ -98,6 +96,11 @@ scripts/verify-release-bundle-manifest.py
 site/**
 dist/*.tar.gz
 ```
+
+The separate `docker-compose.pg18-proof.yml` is a local/CI schema fixture and
+does not enter the formal bundle. It is neither a PostgreSQL production image
+nor evidence for RDS private networking, `verify-full` TLS, backup, restore, or
+availability.
 
 In both bundled production Compose files, every governed service image,
 including `release-one-off`, must use its exact

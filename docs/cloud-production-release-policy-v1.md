@@ -81,8 +81,11 @@ and release tooling must fail closed unless all of the following are true:
   SHA-256 of the exact protected runtime configuration;
 - the candidate API image loads that protected configuration, resolves the RDS
   hostname only to approved private addresses, verifies TLS with the stored CA,
-  observes PostgreSQL major version 18, and proves the database is at the
-  candidate Alembic head before old writers are stopped;
+  observes PostgreSQL major version 18, and proves exactly one current Alembic
+  revision at the candidate head or one of its known ancestors before old
+  writers are stopped;
+- after old writers stop, the governed migration must establish the exact sole
+  candidate head before the candidate API or workers start;
 - production Compose contains no PostgreSQL service, image, volume, password,
   database URL, or database startup dependency;
 - workers remain behind the install-state gate and cannot connect before

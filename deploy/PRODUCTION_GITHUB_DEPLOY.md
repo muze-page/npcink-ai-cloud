@@ -18,9 +18,11 @@ pnpm run check:release-policy
 - `production`: production release branch.
 - feature branches: merge into `master` first, then promote to `production`.
 
-Do not edit production application code directly on the server. Production
-server edits are limited to runtime secrets and emergency break-glass fixes that
-are immediately backported to Git.
+Do not edit production application code directly on the server. `.env.deploy`
+contains only reviewed non-secret deployment/runtime settings. Protected
+structured configuration under `shared/config/` is changed only by `/setup` or
+the governed setup/admin-key rotation helpers. Emergency break-glass fixes must
+be immediately backported to Git.
 
 ## GitHub Actions
 
@@ -72,16 +74,23 @@ The manually approved production deploy job:
 5. Runs the explicit `prepare-only` phase, which loads and proves exact images,
    writes the mode-`0600` fixed target-daemon map at
    `${REMOTE_DIR}/.release-state/<release-name>/target-daemon-images.json`, and
-   starts no service; it then stops old public/write services.
-6. Runs the explicit `data-only` phase to create, prove, and start only
-   PostgreSQL and Redis by target-daemon image ID.
-7. Runs migration and provider refresh through staged one-off API containers
-   with Runtime Compose `pull_policy: never` and exact image-ID proof.
-8. Moves `current` atomically, then runs `api-only` to start and verify API.
-9. Runs `workers-only`, proves each new worker container is stable, and proves
+   starts no service.
+6. Uses the exact candidate API image to load protected runtime configuration,
+   prove private-name/TLS connectivity to PostgreSQL 18, and accept exactly one
+   Alembic revision at the candidate head or a known ancestor. This preflight
+   completes before old public/write services stop.
+7. Stops the old public/write services and records the writer cutoff.
+8. Runs the explicit `data-only` phase to create, prove, and start only Redis
+   by target-daemon image ID. PostgreSQL is external Alibaba RDS 18 and is never
+   a formal Compose service or bundled image.
+9. Runs the external RDS migration and provider refresh through staged one-off
+   API containers with Runtime Compose `pull_policy: never` and exact image-ID
+   proof, then requires the database to expose the exact sole candidate head.
+10. Moves `current` atomically, then runs `api-only` to start and verify API.
+11. Runs `workers-only`, proves each new worker container is stable, and proves
    each heartbeat is newer than the cutover cutoff, then verifies generic
    `/health/operational-ready`.
-10. Runs `traffic-only` to restore frontend/proxy traffic and verifies public
+12. Runs `traffic-only` to restore frontend/proxy traffic and verifies public
     static legal pages, including `/terms/en/terms.html`.
 
 The exact bundle contains the application outputs, the optional frontend output,
@@ -157,7 +166,7 @@ Optional formal release-smoke secrets used by the manually dispatched deploy:
 
 ```text
 NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=<internal readiness token>
-NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=<admin bootstrap token>
+NPCINK_CLOUD_ADMIN_KEY=<operator-only admin key>
 NPCINK_CLOUD_RELEASE_MEMBER_EMAIL=<invited release member email>
 NPCINK_CLOUD_PORTAL_LOGIN_CODE=<one valid release login code>
 NPCINK_CLOUD_RELEASE_SITE_ID=<runtime smoke site id>
@@ -165,12 +174,16 @@ NPCINK_CLOUD_RELEASE_KEY_ID=<runtime smoke key id>
 NPCINK_CLOUD_RELEASE_KEY_SECRET=<runtime smoke key secret>
 ```
 
-Keep production runtime secrets outside every release payload in the matching
-per-release state file:
+Keep generated database credentials and runtime security roots outside both the
+release payload and `.env.deploy`, under the protected shared config root. The
+matching per-release state remains for non-secret deploy inputs and image
+evidence:
 
 ```text
 /opt/npcink-ai-cloud/.release-state/<release-name>/env.deploy
 /opt/npcink-ai-cloud/.release-state/<release-name>/target-daemon-images.json
+/opt/npcink-ai-cloud/shared/config/runtime-config.json
+/opt/npcink-ai-cloud/shared/config/install-state.json
 ```
 
 `/opt/npcink-ai-cloud/current` selects code only. Its basename selects the
@@ -182,16 +195,17 @@ basename and cannot be overridden. A separately uploaded env is staged under
 the protected incoming directory and installed here before Compose runs; it is
 never extracted into the release directory.
 
-Do not put database passwords, SMTP passwords, provider API keys, portal JWT
-secrets, or internal auth tokens in GitHub Actions unless you intentionally move
-to a managed secret store.
+Do not put database passwords, SMTP passwords, provider API keys, or generated
+runtime roots in GitHub Actions. The internal token and admin key appear in the
+formal smoke secret list only as explicit operator-controlled test credentials;
+they are never runtime `.env.deploy` inputs.
 
 ## Production Host Prerequisites
 
 The production SSH secret must identify the root-managed release account; do
 not fall back to a guessed `deploy` user. All managed paths under
 `/opt/npcink-ai-cloud` are `root:root` and must not be group- or world-writable.
-Before P1-E06, normalize and verify that tree, then create
+Before the current first installation, normalize and verify that tree, then create
 `/var/backups/npcink-ai-cloud` and `/run/npcink-ai-cloud` as root-owned mode
 `0700` directories.
 
@@ -212,9 +226,9 @@ interpreter before any remote mkdir, upload, or deployment lock.
 
 ## Production Runtime Shape
 
-`docker-compose.runtime.yml` is the low-memory production runtime:
+`docker-compose.runtime.yml` is the low-memory production runtime. PostgreSQL
+is the configured external Alibaba RDS 18 instance and is intentionally absent:
 
-- `postgres`
 - `redis`
 - `api`
 - `frontend`
@@ -265,7 +279,12 @@ The exact-bundle smoke is the formal release workflow's plain-HTTP exception:
 it may replay the artifact through loopback NGINX without an external Edge.
 Never use that local smoke topology as a production public origin.
 
-P1-E06 treats the external Edge as an independent hard gate. Before invoking
+### Historical external-Edge P1-E06 procedure (non-normative)
+
+The following external-Edge procedure records the retired P1-E06 activation.
+It is not a current first-install or ordinary-deploy database contract.
+
+P1-E06 treated the external Edge as an independent hard gate. Before invoking
 the cutover, the governed Edge migration must install and activate host NGINX,
 pass `nginx -t` and the exact-host loopback-resolved HTTPS check, stop the
 retired project Caddy, and complete the certificate-readiness evidence. It must
@@ -339,7 +358,7 @@ Inventory note (2026-07-20): host NGINX was absent, the retired Caddy was still
 running, and the readiness flag was absent. This is a dated operator snapshot,
 not a permanent release-policy condition.
 
-## First Migration to the External Edge
+### Historical first migration to the external Edge (non-normative)
 
 Before the first deploy of this topology:
 
@@ -417,6 +436,30 @@ point, and Caddy route. Restore only one public ingress chain; do not start
 Caddy beside host NGINX or attach retired observability containers to the
 current release project.
 
+## First Installation
+
+A host with missing or `pending` installation state takes the bounded first-
+install path. Before remote mkdir, upload, deployment lock, image, container, or
+database mutation, the deploy helper reads the protected state with
+`/usr/bin/python3.11` and rejects the exact bundle while its canonical CVE
+allowlist contains any of the three blocked Python 3.14.6 exceptions. No
+historical operator-acceptance receipt bypasses this machine gate.
+
+The first deployment starts Redis, the setup-capable API, frontend, and proxy,
+then emits exactly `installation_state=pending`. The workflow skips ordinary
+post-install smoke and directs the root operator to rotate/display the setup
+code in a TTY, open `/setup`, configure the external RDS PostgreSQL 18
+connection and CA, and capture the one-time administrator key. The browser UI
+uses `/setup`; `/setup/v1/` remains the API namespace.
+
+After independent release smoke, WordPress text/image round trips, RDS restore,
+and the 24–72 hour observation pass, run `deploy/first-install-finalize.sh` from
+the active direct managed release. Finalization publishes the permanent
+root-owned mode-`0600` `.installation-complete` sentinel. Every ordinary deploy
+and mutating `safe-prune` requires that positive sentinel plus current protected
+`complete`, `pg18_empty_initialization.v1`, and runtime-config digest evidence.
+Deleting a pending marker or losing database connectivity never reopens setup.
+
 ## Promotion Flow
 
 ```text
@@ -433,10 +476,12 @@ local feature work
 The remote cutover order is fixed:
 
 ```text
-prepare images
+validate complete-state and protected runtime-config digest
+  -> prepare images
+  -> candidate-image RDS PostgreSQL 18/TLS/Alembic preflight
   -> stop old application/write services
-  -> data services
-  -> migration and provider refresh
+  -> Redis
+  -> external RDS migration and provider refresh
   -> current pointer
   -> API readiness
   -> workers plus cutoff/container/heartbeat stability
@@ -446,14 +491,14 @@ prepare images
 
 Before `prepare images`, both release env files must resolve the same Compose
 project name. Ordinary production deployment also requires an existing managed
-`current` release; it is not a host-bootstrap path. It queries the frozen previous
-PostgreSQL before image loading and unconditionally rejects revision
-`20260710_0058`. The formal `Deploy Production` workflow requires the persistent
-global `p1_e06_global_activation.v1` receipt, validates the complete
-digest-bound activation/cutover evidence, and accepts only revision `0068` or a
-descendant proven by the staged bundle's Alembic graph. Ordinary production
-deployment requires receipt enforcement, and `deploy/workspace-target.env.sh`
-pins it to `1` for the supported production CLI path. Migration and provider
+`current` release; it is not a host-bootstrap path. Before image mutation it
+proves `complete`, `database_contract=pg18_empty_initialization.v1`, and the
+exact protected runtime-config digest. After exact images load and before old
+writers stop, the candidate API proves private RDS resolution, TLS
+`verify-full`, PostgreSQL major 18, and one known Alembic revision that is the
+candidate head or its ancestor. After migration the exact sole candidate head
+is required. The retired
+PG16/P1-E06 receipt is not an ordinary deployment input. Migration and provider
 refresh use the profiled `release-one-off` API service, pinned to the recorded
 target-local daemon ID. Compose creates exactly one stopped candidate with
 `up --no-start --pull never --no-build --no-deps --force-recreate`. Post-load
@@ -507,9 +552,10 @@ directory and remove it with `rmdir`; any ambiguous query or filesystem state
 keeps the lock and escalates to manual recovery.
 
 Runtime configuration changes are releases. Never edit the active release's
-external `.release-state/<release-name>/env.deploy` or directly restart its
-Compose services. Prepare a complete protected env file on the trusted
-workstation and apply it through `deploy/deploy-to-ssh-host.sh`, so the same
+external `.release-state/<release-name>/env.deploy`, protected
+`shared/config/`, or directly restart its Compose services. Apply non-secret
+host/runtime-tuning changes through `deploy/deploy-to-ssh-host.sh`; database and
+runtime-root changes require their dedicated governed procedure. The same
 deploy lock, exact bundle/image proof, rollback point, and readiness gates own
 the change. The ordinary governed path still does not apply to either
 encryption pair:
@@ -521,7 +567,7 @@ ordinary deploy path because existing ciphertext must be re-encrypted while
 all four writers are stopped. Code, policy, billing, governance, and provider
 routing logic changes must go through Git.
 
-The first P1-E06 operation has one narrow exception implemented only inside
+The retired first P1-E06 operation had one narrow exception implemented only inside
 its orchestrator: while `.deploy-lock` is held, it may atomically add the exact
 five non-secret Edge-readiness keys from a separate protected file. It first
 freezes the original env bytes and digest, records value-free handoff evidence,
@@ -529,7 +575,11 @@ restores the original bytes on pre-migration failure, and retains that snapshot
 for whole recovery after migration begins. This is not a general active-env
 update mechanism and does not authorize direct editing.
 
-## One-Time P1-E06 Dual-Domain Encryption Maintenance
+## Historical One-Time P1-E06 Dual-Domain Encryption Maintenance (non-normative)
+
+This preserved PostgreSQL 16 procedure is an audit record only. It is not a
+current promotion gate, activation-receipt requirement, or supported
+compatibility path after the fresh PostgreSQL 18 initialization.
 
 This maintenance path is deliberately separate from the normal deployment
 sequence above. The first Runtime Data and Service Settings raw-ciphertext

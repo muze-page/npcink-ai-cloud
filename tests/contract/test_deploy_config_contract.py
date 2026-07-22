@@ -24,6 +24,119 @@ def _cloud_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def test_first_install_preparation_refuses_unmanaged_source_tree_before_mutation(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "shared" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "runtime-config.json").write_text("{}")
+    environment = os.environ.copy()
+    environment["NPCINK_CLOUD_CONFIG_DIR_HOST"] = str(config_dir)
+    environment["NPCINK_CLOUD_RELEASE_TOOL_PYTHON"] = sys.executable
+
+    result = subprocess.run(
+        ["bash", str(_cloud_root() / "deploy" / "prepare-first-install.sh")],
+        cwd=_cloud_root(),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "direct managed release-* directory" in result.stderr
+    assert not (config_dir / "install-state.json").exists()
+    assert not (config_dir / "setup-auth.json").exists()
+
+
+def test_prepare_setup_code_rotation_refuses_unmanaged_source_tree(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "shared" / "config"
+    config_dir.mkdir(parents=True, mode=0o700)
+    (config_dir / "install-state.json").write_text(
+        json.dumps(
+            {
+                "installation_state": "pending",
+                "retry_allowed": True,
+                "setup_revision": "first-install-v1",
+                "updated_at": "2026-07-22T00:00:00Z",
+            }
+        )
+    )
+    (config_dir / "install-state.json").chmod(0o640)
+    environment = os.environ.copy()
+    environment["NPCINK_CLOUD_CONFIG_DIR_HOST"] = str(config_dir)
+    environment["NPCINK_CLOUD_RELEASE_TOOL_PYTHON"] = sys.executable
+
+    result = subprocess.run(
+        ["bash", str(_cloud_root() / "deploy" / "prepare-first-install.sh"), "--rotate"],
+        cwd=_cloud_root(),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "direct managed release-* directory" in result.stderr
+    assert "nca_setup_" not in result.stdout
+    assert not (config_dir / "setup-auth.json").exists()
+
+
+def test_unmanaged_setup_code_rotation_does_not_mutate_retry_or_auth_evidence(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "shared" / "config"
+    config_dir.mkdir(parents=True, mode=0o700)
+    state_path = config_dir / "install-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "attempt_id": "install_interrupted",
+                "idempotency_key_sha256": "a" * 64,
+                "install_request_hmac_sha256": "b" * 64,
+                "installation_state": "pending",
+                "retry_allowed": True,
+                "setup_revision": "first-install-v1",
+                "updated_at": "2026-07-22T00:00:00Z",
+            }
+        )
+    )
+    state_path.chmod(0o640)
+    auth_path = config_dir / "setup-auth.json"
+    auth_path.write_text(
+        json.dumps(
+            {
+                "created_at": "2026-07-22T00:00:00Z",
+                "session_secret": "x" * 43,
+                "setup_code_sha256": "c" * 64,
+            }
+        )
+    )
+    auth_path.chmod(0o600)
+    original_state = state_path.read_bytes()
+    original_auth = auth_path.read_bytes()
+    environment = os.environ.copy()
+    environment["NPCINK_CLOUD_CONFIG_DIR_HOST"] = str(config_dir)
+    environment["NPCINK_CLOUD_RELEASE_TOOL_PYTHON"] = sys.executable
+
+    result = subprocess.run(
+        ["bash", str(_cloud_root() / "deploy" / "prepare-first-install.sh"), "--rotate"],
+        cwd=_cloud_root(),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "direct managed release-* directory" in result.stderr
+    assert "nca_setup_" not in result.stdout
+    assert state_path.read_bytes() == original_state
+    assert auth_path.read_bytes() == original_auth
+
+
 def _release_policy_fixture_root(tmp_path: Path, dependabot_text: str) -> Path:
     cloud_root = _cloud_root()
     fixture_root = tmp_path / "release-policy-fixture"
@@ -33,6 +146,7 @@ def _release_policy_fixture_root(tmp_path: Path, dependabot_text: str) -> Path:
         "AGENTS.md",
         ".env.example",
         "docker-compose.dev.yml",
+        "docker-compose.pg18-proof.yml",
         "docker-compose.p5-b4-runtime-proof.yml",
         "docker-compose.prod.yml",
         "docker-compose.runtime.yml",
@@ -64,12 +178,17 @@ def _release_policy_fixture_root(tmp_path: Path, dependabot_text: str) -> Path:
     )
     for name in (
         "bundle-images.sh",
+        "alembic_revision_gate.py",
+        "check-first-install-cve-gate.py",
+        "check-pg18-proof.sh",
         "check-pr-backend-gate.sh",
         "cloud-deploy-bundle-smoke-flow.sh",
         "dev-compose.sh",
         "dev-frontend-recover.sh",
+        "local-alpha-smoke.sh",
         "production-image-supply.py",
         "production-python-extras-smoke.sh",
+        "pg18-semantic-proof.py",
         "verify-release-bundle-manifest.py",
     ):
         (fixture_scripts / name).symlink_to(cloud_root / "scripts" / name)
@@ -246,6 +365,7 @@ def test_dev_compose_wrapper_layers_local_env_for_frontend_token(
         "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}" in frontend_block
     )
     for forbidden_secret in (
+        "NPCINK_CLOUD_ADMIN_KEY",
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
         "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
@@ -1180,8 +1300,10 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
     playbook = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
     deploy_guide = (cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md").read_text()
     release_policy = (cloud_root / "docs" / "cloud-production-release-policy-v1.md").read_text()
+    pg18_runbook = (
+        cloud_root / "docs" / "cloud-first-install-rds-pg18-runbook.md"
+    ).read_text()
     deploy_to_ssh = (cloud_root / "deploy" / "deploy-to-ssh-host.sh").read_text()
-    cutover = (cloud_root / "deploy" / "runtime-data-encryption-cutover.sh").read_text()
 
     encryption_secret = "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET"
     encryption_key_id = "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID"
@@ -1189,10 +1311,9 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
     service_key_id = "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID"
     backend_services = ("api", "worker", "callback-worker", "ops-worker")
 
-    assert env_example.count(f"{encryption_secret}=") == 1
-    assert env_example.count(f"{encryption_key_id}=") == 1
-    assert env_example.count(f"{service_secret}=") == 1
-    assert env_example.count(f"{service_key_id}=") == 1
+    for protected_key in (encryption_secret, encryption_key_id, service_secret, service_key_id):
+        assert protected_key in env_example
+        assert f"{protected_key}=" not in env_example
     assert deploy_smoke.count(encryption_secret) >= 2
     assert deploy_smoke.count(encryption_key_id) >= 2
     assert deploy_smoke.count(service_secret) >= 2
@@ -1200,10 +1321,15 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
 
     for service in backend_services:
         prod_block = _compose_service_block(prod_compose, service)
-        assert encryption_secret in prod_block
-        assert encryption_key_id in prod_block
-        assert service_secret in prod_block
-        assert service_key_id in prod_block
+        assert "NPCINK_CLOUD_CONFIG_DIR: /run/npcink-config" in prod_block
+        assert "/run/npcink-config" in prod_block
+        assert encryption_secret not in prod_block
+        assert encryption_key_id not in prod_block
+        assert service_secret not in prod_block
+        assert service_key_id not in prod_block
+        assert "NPCINK_CLOUD_DATABASE_URL" not in prod_block
+        assert "env_file:" in prod_block
+        assert "- ${NPCINK_CLOUD_BACKEND_ENV_FILE:-/dev/null}" in prod_block
 
         runtime_block = _compose_service_block(runtime_compose, service)
         assert "env_file:" in runtime_block
@@ -1220,6 +1346,7 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
             "CLOUD_API_BASE_URL",
             "CLOUD_PUBLIC_BASE_URL",
             "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
+            "NPCINK_CLOUD_DEV_ADMIN_KEY",
             "NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT",
             "NODE_OPTIONS",
             "NEXT_TELEMETRY_DISABLED",
@@ -1228,13 +1355,15 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         "docker-compose.prod.yml": {
             "CLOUD_API_BASE_URL",
             "CLOUD_PUBLIC_BASE_URL",
-            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
+            "NEXT_PUBLIC_ENV",
+            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN_FILE",
+            "NPCINK_CLOUD_SETUP_STATE_OVERRIDE",
             "NODE_ENV",
         },
         "docker-compose.runtime.yml": {
             "CLOUD_API_BASE_URL",
             "CLOUD_PUBLIC_BASE_URL",
-            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
+            "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN_FILE",
             "NODE_ENV",
         },
     }
@@ -1248,6 +1377,7 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         encryption_key_id,
         service_secret,
         service_key_id,
+        "NPCINK_CLOUD_ADMIN_KEY",
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
         "NPCINK_CLOUD_PORTAL_JWT_SECRET",
@@ -1260,60 +1390,50 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         for forbidden_secret in forbidden_frontend_secrets:
             assert forbidden_secret not in frontend_block
 
+    prod_frontend = _compose_service_block(prod_compose, "frontend")
+    assert "${NPCINK_CLOUD_DEPLOY_SMOKE_FRONTEND_ENV:-production}" in prod_frontend
+    assert "${NPCINK_CLOUD_DEPLOY_SMOKE_SETUP_STATE_OVERRIDE:-}" in prod_frontend
+    assert "NPCINK_CLOUD_DEPLOY_SMOKE_FRONTEND_ENV" not in _compose_service_block(
+        runtime_compose, "frontend"
+    )
+
     assert "127.0.0.1:${NPCINK_CLOUD_PORT:-8010}:8080" in prod_compose
     assert '- "${NPCINK_CLOUD_PORT:-8010}:8080"' not in prod_compose
 
-    maintenance_sections = (
-        playbook.split("### P1-E06 persisted-encryption dual-domain cutover", 1)[1].split(
-            "## Worker Operations", 1
-        )[0],
-        deploy_guide.split("## One-Time P1-E06 Dual-Domain Encryption Maintenance", 1)[1],
+    assert "Current PostgreSQL 18 Release Contract" in release_policy
+    assert "Historical PG16 and P1-E06 Policy (non-normative)" in release_policy
+    assert "must not be used to reopen compatibility" in release_policy
+    assert "database_contract=pg18_empty_initialization.v1" in release_policy
+    assert "candidate head or one of its known ancestors" in release_policy
+    assert "exact sole\n  candidate head" in release_policy
+    assert "candidate-image RDS PostgreSQL 18/TLS/Alembic preflight" in release_policy
+    documented_release_order = (
+        "5. Runs the explicit `prepare-only` phase",
+        "6. Uses the exact candidate API image",
+        "7. Stops the old public/write services",
+        "8. Runs the explicit `data-only` phase",
+        "9. Runs the external RDS migration",
+        "10. Moves `current` atomically",
     )
-    for maintenance in maintenance_sections:
-        normalized_maintenance = " ".join(maintenance.split())
-        assert "deploy/runtime-data-encryption-cutover.sh" in maintenance
-        assert "deploy/deploy-to-ssh-host.sh --stage-only" in maintenance
-        assert "staged_release=/absolute/release-path" in maintenance
-        assert "--edge-readiness-env /run/npcink-ai-cloud/p1-e06-edge-readiness.env" in (
-            maintenance
-        )
-        assert "p1_e06_edge_readiness_env_handoff.v1" in maintenance
-        assert ".current-env.snapshot" in maintenance
-        assert ".maintenance-env.snapshot" in maintenance
-        assert "digest-bound" in maintenance
-        assert "p1_e06_off_host_backup_receipt.v1" in maintenance
-        assert "independent PostgreSQL 16" in normalized_maintenance
-        assert "0058 -> 0068" in maintenance
-        assert "release-one-off` stopped candidate" in maintenance
-        assert "docker exec -i --env VARIABLE_NAME" in maintenance
-        assert "env-file run option" in normalized_maintenance
-        assert "--env-from-file" not in maintenance
-        assert "off-host-receipt-verified.json" in maintenance
-        assert "activation-commit.json" in maintenance
-        assert "activation_committed_terminalization_incomplete" in maintenance
-        assert "/usr/bin/python3.11" in maintenance
-        assert "--old-root-env NPCINK_CLOUD_ADMIN_SESSION_SECRET" not in maintenance
-        assert "--old-root-env NPCINK_CLOUD_PORTAL_JWT_SECRET" not in maintenance
-        assert "--old-root-env NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" not in maintenance
-        assert "first raw-ciphertext cutover" in maintenance.lower()
-        assert "`--old-key-id`" in maintenance
-        assert "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET=<old-runtime-root>" in maintenance
-        assert (
-            "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET=<old-service-settings-root>"
-            in maintenance
-        )
-        assert "python -m app.dev.reencrypt_service_secrets" in maintenance
-        assert "remote-load-and-up.sh" in maintenance
-        assert "prepare-only" in maintenance
-        assert ".deploy-lock" in maintenance
-        assert ".cutover-failed" in maintenance
-        assert "cutover-result.json" in maintenance
-        assert "Migration `0061`" in maintenance
-        assert "Normal runtime has no legacy or dual-read path" in maintenance
-        assert "migration-only" in maintenance.lower()
+    documented_positions = [
+        deploy_guide.index(marker) for marker in documented_release_order
+    ]
+    assert documented_positions == sorted(documented_positions)
+    assert "The Python image CVE exception must be closed" in release_policy
+    for marker in (
+        "pg18_empty_initialization.v1",
+        "`verify-full`",
+        "deploy/first-install-finalize.sh",
+        "deploy/first-install-rollback.sh",
+        ".installation-complete",
+    ):
+        assert marker in pg18_runbook
 
-    assert "The sole planned exception is the first P1-E06 cutover" in release_policy
-    assert "not a reusable active-env update path" in " ".join(release_policy.split())
+    assert "assert_fresh_pg18_install_gate" in deploy_to_ssh
+    assert "candidate-runtime-config-and-pg18-preflight" in deploy_to_ssh
+    assert "remote-runtime-config-preflight.sh" in deploy_to_ssh
+    assert "assert_p1_e06_ordinary_deploy_gate" not in deploy_to_ssh
+    assert "NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT" not in deploy_to_ssh
 
     assert "--stage-only)" in deploy_to_ssh
     assert "--host-python)" in deploy_to_ssh
@@ -1335,74 +1455,20 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
     ):
         assert forbidden not in stage_branch
 
-    for marker in (
-        'CONTRACT="p1_e06_runtime_data_encryption_cutover.v1"',
-        'EXPECTED_SOURCE_REVISION="20260710_0058"',
-        'EXPECTED_TARGET_REVISION="20260717_0068"',
-        "p1_e06_off_host_backup_handoff.v1",
-        "p1_e06_off_host_backup_receipt.v1",
-        "p1_e06_independent_pg16_restore.v1",
-        "NPCINK_CLOUD_LOAD_MODE=prepare-only",
-        "systemctl is-active --quiet nginx",
-        'nginx -t >"${EVIDENCE_DIR}/host-nginx-test.log"',
-        'CURRENT_STAGE="switch-production-data-services-to-target-images"',
-        "off-host-receipt-verified.json",
-        "activation-commit.json",
-        "activation_committed_terminalization_incomplete",
-        "stop_expected_services_and_verify",
-    ):
-        assert marker in cutover
-    assert "--env-from-file" not in cutover
-    assert "run --rm --no-deps --pull never" not in cutover
-    for name in (
-        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
-        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
-        "NPCINK_CLOUD_RUNTIME_DATA_OLD_ROOT_SECRET",
-        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
-        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
-        "NPCINK_CLOUD_SERVICE_SETTINGS_OLD_ROOT_SECRET",
-        "NPCINK_CLOUD_DATABASE_URL",
-    ):
-        assert f"-e {name}" in cutover
-
-    ordered_cutover_markers = (
-        'CURRENT_STAGE="verify-local-docker-and-host-edge"',
-        'CURRENT_STAGE="prepare-exact-bundle-images"',
-        'CURRENT_STAGE="create-fresh-custom-backup"',
-        'CURRENT_STAGE="wait-for-off-host-backup-receipt"',
-        'CURRENT_STAGE="independent-postgres16-restore"',
-        'CURRENT_STAGE="switch-production-data-services-to-target-images"',
-        'CURRENT_STAGE="production-migrate-0058-to-head"',
-        'CURRENT_STAGE="commit-validated-activation"',
-        'CURRENT_STAGE="cleanup-rollback-images-and-map"',
-        'CURRENT_STAGE="publish-terminal-success-evidence"',
-        'CURRENT_STAGE="publish-global-activation-receipt"',
-        'CURRENT_STAGE="release-deploy-lock"',
-        'CURRENT_STAGE="complete"',
+    current_gate_markers = (
+        "assert_fresh_pg18_install_gate",
+        'CUTOVER_PHASE="prepare-release-images"',
+        'CUTOVER_PHASE="candidate-runtime-config-and-pg18-preflight"',
+        'CUTOVER_PHASE="stop-old-application-services"',
     )
-    positions = [cutover.index(marker) for marker in ordered_cutover_markers]
+    positions = [deploy_to_ssh.index(marker) for marker in current_gate_markers]
     assert positions == sorted(positions)
+    assert "runtime-data-encryption-cutover.sh" not in deploy_to_ssh
 
-    assert "normal deploy/secret rotation must not directly rotate" in " ".join(checklist.split())
-    assert "stage-only upload/verification was allowed to precede this gate" in checklist
-    assert "operator-owned external Edge and TLS" in checklist
-    assert "Runtime Compose sets `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`" in checklist
-    assert "certificate-renewal owner" in checklist
-    assert "/usr/bin/python3.11" in checklist
-    assert "supplies old key IDs" in checklist
-    assert "normal runtime has no legacy/dual-read path" in checklist
-    assert "accepts only active `rde.v1` and `sse.v1` envelopes" in checklist
-    assert "rejects raw Fernet" in checklist
-    assert encryption_secret in release_policy
-    assert "application revision" in release_policy
-    assert "release-one-off` stopped candidate" in release_policy
-    assert "docker exec -i --env VARIABLE_NAME" in release_policy
-    assert "pull_policy: never" in release_policy
-    assert "Future `rde.v1`" in release_policy
-    assert "certificate-renewal owner" in release_policy
-    assert "Pure stage-only archive upload/verification" in release_policy
-    assert "pass each old key ID" in release_policy
-    assert "Normal runtime has no legacy or dual-read path" in release_policy
+    assert "Current PostgreSQL 18 Release Contract" in release_policy
+    assert "protected structured configuration" in release_policy
+    assert "database_contract=pg18_empty_initialization.v1" in release_policy
+
     for surface in (playbook, deploy_guide, checklist, release_policy):
         assert "--env-from-file" not in surface
         assert "run --rm --no-deps --pull never" not in surface
@@ -1419,9 +1485,9 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
         cloud_root / "docs" / "provider-connection-production-runbook-2026-06-30.md"
     ).read_text()
 
-    for text in (compose_text, env_example_text, readme_text, checklist_text):
+    for text in (env_example_text, readme_text, checklist_text):
         assert "NPCINK_CLOUD_ADMIN_SESSION_SECRET" in text
-        assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" in text
+        assert "NPCINK_CLOUD_ADMIN_KEY" in text
         assert "NPCINK_CLOUD_BASE_URL" in text or text is readme_text
         assert "NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS" in text
         assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in text or text is checklist_text
@@ -1431,6 +1497,29 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
         )
         assert "NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT" in text
         assert "NPCINK_CLOUD_OTEL_TRACE_QUERY_URL" in text
+
+    assert "NPCINK_CLOUD_ADMIN_SESSION_SECRET" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_KEY" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" not in compose_text
+    assert "NPCINK_CLOUD_DATABASE_URL" not in compose_text
+    assert "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:" not in compose_text
+    assert "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN_FILE" in compose_text
+    assert "NPCINK_CLOUD_CONFIG_DIR: /run/npcink-config" in compose_text
+    prod_compose = (cloud_root / "docker-compose.prod.yml").read_text()
+    runtime_compose = (cloud_root / "docker-compose.runtime.yml").read_text()
+    for service in ("api", "worker", "callback-worker", "ops-worker"):
+        assert (
+            "NPCINK_CLOUD_ENVIRONMENT: "
+            "${NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV:-production}"
+        ) in _compose_service_block(prod_compose, service)
+        assert "NPCINK_CLOUD_ENVIRONMENT: production" in _compose_service_block(
+            runtime_compose,
+            service,
+        )
+        assert "NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV" not in _compose_service_block(
+            runtime_compose,
+            service,
+        )
 
     assert "callback-worker:" in compose_text
     for retired_service in ("caddy", "otel-collector", "jaeger"):
@@ -1443,10 +1532,12 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
         playbook_text,
     ):
         assert "NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT" not in text
-    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID" in compose_text
-    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID" in env_example_text
-    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE" in compose_text
-    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE" in env_example_text
+    assert "NPCINK_CLOUD_ADMIN_PRINCIPAL_ID" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_PRINCIPAL_ID" in env_example_text
+    assert "NPCINK_CLOUD_ADMIN_PLATFORM_ADMIN_ROLE" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_PLATFORM_ADMIN_ROLE" not in env_example_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE" not in compose_text
     assert "NPCINK_CLOUD_PORTAL_JWT_ISSUER=npcink-ai-cloud" in env_example_text
     assert "NPCINK_CLOUD_PORTAL_JWT_AUDIENCE=npcink-ai-cloud-portal" in env_example_text
     assert (
@@ -1490,6 +1581,7 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     )
     assert _documented_https_host(playbook_text, "NPCINK_CLOUD_BASE_URL") == "cloud.npc.ink"
     assert "Resource Tuning Baseline" in playbook_text
+    assert "fixes Gunicorn to exactly one API worker" in playbook_text
     assert "NPCINK_CLOUD_API_WORKERS" in playbook_text
     assert "NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS" in playbook_text
     assert "db_managed_provider_connections" in provider_runbook_text
@@ -1512,66 +1604,230 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in playbook_text
 
 
-def test_env_example_production_payload_validates_with_canonical_names(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    for key in list(os.environ):
-        if key.startswith("NPCINK_CLOUD_"):
-            monkeypatch.delenv(key, raising=False)
-
+def test_env_example_does_not_restore_first_install_runtime_secrets() -> None:
     env_text = (_cloud_root() / ".env.example").read_text()
-    env_text = env_text.replace(
-        "NPCINK_CLOUD_ENVIRONMENT=development",
-        "NPCINK_CLOUD_ENVIRONMENT=production",
+
+    for retired_or_protected in (
+        "NPCINK_CLOUD_DATABASE_URL=",
+        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=",
+        "NPCINK_CLOUD_ADMIN_KEY=",
+        "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=",
+        "NPCINK_CLOUD_ADMIN_SESSION_SECRET=",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=",
+        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=",
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=",
+        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=",
+        "NPCINK_CLOUD_PORTAL_JWT_SECRET=",
+        "POSTGRES_PASSWORD=",
+    ):
+        assert retired_or_protected not in env_text
+
+    assert "NPCINK_CLOUD_ADMIN_PRINCIPAL_ID=platform:internal_root" in env_text
+    assert "NPCINK_CLOUD_ADMIN_PLATFORM_ADMIN_ROLE" not in env_text
+
+
+def test_admin_key_rotation_publishes_recoverable_dual_digest_transition() -> None:
+    script = (_cloud_root() / "deploy" / "admin-key-rotate.sh").read_text()
+
+    transition = 'state["config_transition"] = "admin_key_rotation.v1"'
+    previous = 'state["previous_config_digest"] = observed_digest'
+    publish_transition = "atomic_write(state_path, transition_state_bytes, 0o640)"
+    publish_runtime = "atomic_write(runtime_path, runtime_bytes, 0o600)"
+    clear_transition = 'state.pop("config_transition", None)'
+    publish_final_state = "atomic_write(state_path, canonical_bytes(state), 0o640)"
+
+    for marker in (
+        transition,
+        previous,
+        publish_transition,
+        publish_runtime,
+        clear_transition,
+        publish_final_state,
+    ):
+        assert marker in script
+    assert script.index(transition) < script.index(publish_transition)
+    assert script.index(previous) < script.index(publish_transition)
+    assert script.index(publish_transition) < script.index(publish_runtime)
+    assert script.index(publish_runtime) < script.index(clear_transition)
+    assert script.index(clear_transition) < script.index(publish_final_state)
+    assert 'LOCK_DIR="${MANAGED_ROOT}/.deploy-lock"' in script
+    assert "Another deployment or administrator-key rotation is active" in script
+    assert 'CURRENT_LINK="${MANAGED_ROOT}/current"' in script
+    active_release_check = "Administrator-key rotation must run from the active managed release."
+    assert active_release_check in script
+    assert script.index(active_release_check) < script.index('mkdir -m 0700 "${LOCK_DIR}"')
+    assert '.admin-key-rotate.lock' not in script
+
+
+def test_operator_secret_rotation_fails_closed_without_tty() -> None:
+    cloud_root = _cloud_root()
+    setup_rotate = (cloud_root / "deploy" / "setup-code-rotate.sh").read_text()
+    prepare_setup = (cloud_root / "deploy" / "prepare-first-install.sh").read_text()
+    admin_rotate = (cloud_root / "deploy" / "admin-key-rotate.sh").read_text()
+
+    assert '[ ! -t 1 ]' in setup_rotate
+    assert setup_rotate.index('[ ! -t 1 ]') < setup_rotate.index("prepare-first-install.sh")
+    assert 'if [ "${MODE}" = "rotate" ]; then' in prepare_setup
+    assert '[ ! -t 1 ]' in prepare_setup
+    assert '[ "${EUID}" -ne 0 ]' in prepare_setup
+    assert prepare_setup.index('[ ! -t 1 ]') < prepare_setup.index("setup_code = token")
+    assert prepare_setup.index('[ "${EUID}" -ne 0 ]') < prepare_setup.index(
+        "setup_code = token"
     )
-    replacements = {
-        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=": "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=" + ("i" * 32),
-        "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=": "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=" + ("b" * 32),
-        "NPCINK_CLOUD_ADMIN_SESSION_SECRET=": "NPCINK_CLOUD_ADMIN_SESSION_SECRET=" + ("a" * 32),
-        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=": (
-            "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=" + SERVICE_SETTINGS_ROOT
-        ),
-        "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=": (
-            "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID=" + SERVICE_SETTINGS_KEY_ID
-        ),
-        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=": (
-            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET=" + RUNTIME_DATA_ROOT
-        ),
-        "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=": (
-            "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID=" + RUNTIME_DATA_KEY_ID
-        ),
-        "NPCINK_CLOUD_PORTAL_JWT_SECRET=": "NPCINK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
-        "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=": (
-            "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.example.com"
-        ),
-        "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=": (
-            "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.example.com"
-        ),
-    }
-    for original, updated in replacements.items():
-        env_text = env_text.replace(original, updated)
+    assert '[ ! -t 1 ]' in admin_rotate
+    assert admin_rotate.index('[ ! -t 1 ]') < admin_rotate.index(
+        'ADMIN_KEY="$("${RELEASE_TOOL_PYTHON}"'
+    )
+    for script in (setup_rotate, admin_rotate):
+        assert "refusing to expose plaintext to captured output" in script
 
-    env_file = tmp_path / ".env.production"
-    env_file.write_text(env_text)
 
-    settings = Settings(_env_file=env_file)
+def test_host_first_install_helpers_use_controlled_python_311() -> None:
+    deploy_dir = _cloud_root() / "deploy"
+    for name in (
+        "prepare-first-install.sh",
+        "admin-key-rotate.sh",
+        "first-install-finalize.sh",
+        "first-install-rollback.sh",
+        "remote-runtime-config-preflight.sh",
+    ):
+        source = (deploy_dir / name).read_text()
+        assert 'NPCINK_CLOUD_RELEASE_TOOL_PYTHON:-/usr/bin/python3.11' in source
+        assert "npcink_ai_cloud_require_host_release_tool_python" in source
+        assert "\npython3 " not in source
+        assert "$(python3 " not in source
 
-    assert settings.environment == "production"
-    assert settings.admin_bootstrap_token == "b" * 32
-    assert settings.admin_session_secret == "a" * 32
-    assert settings.service_settings_secret == SERVICE_SETTINGS_ROOT
-    assert settings.service_settings_encryption_key_id == SERVICE_SETTINGS_KEY_ID
-    assert settings.runtime_data_encryption_secret == RUNTIME_DATA_ROOT
-    assert settings.runtime_data_encryption_key_id == RUNTIME_DATA_KEY_ID
-    assert settings.portal_jwt_issuer == "npcink-ai-cloud"
-    assert settings.portal_jwt_audience == "npcink-ai-cloud-portal"
-    assert settings.ops_cadence_poll_seconds == 30
-    assert settings.worker_heartbeat_interval_seconds == 60
-    assert settings.provider_health_scan_interval_seconds == 900
-    assert settings.otel_exporter_otlp_endpoint is None
-    assert settings.otel_trace_query_url is None
-    assert settings.openai_base_url == "https://api.openai.com/v1"
+    worker_wait = (deploy_dir / "wait-for-install.sh").read_text()
+    candidate_preflight = (deploy_dir / "remote-runtime-config-preflight.sh").read_text()
+    assert "while ! python -" in worker_wait
+    assert "sh -ceu 'python -" in candidate_preflight
+
+
+def test_production_deploy_explicitly_rejects_contract_overrides_in_dotenv() -> None:
+    deploy = (_cloud_root() / "deploy" / "deploy-to-ssh-host.sh").read_text()
+    rejection = "Production .env.deploy explicitly forbids contract overrides"
+    copy_to_release = 'install -m 0600 "${NEW_ENV_SOURCE}" "${RELEASE_ENV_TMP}"'
+
+    for key in (
+        "NPCINK_CLOUD_API_WORKERS",
+        "NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV",
+        "NPCINK_CLOUD_DEPLOY_SMOKE_FRONTEND_ENV",
+        "NPCINK_CLOUD_DEPLOY_SMOKE_SETUP_STATE_OVERRIDE",
+    ):
+        assert key in deploy
+    assert rejection in deploy
+    assert deploy.index(rejection) < deploy.index(copy_to_release)
+
+
+def test_production_api_worker_count_is_fixed_to_one() -> None:
+    cloud_root = _cloud_root()
+    for name in ("docker-compose.prod.yml", "docker-compose.runtime.yml"):
+        api = _compose_service_block((cloud_root / name).read_text(), "api")
+        assert "-w 1" in api
+        assert "NPCINK_CLOUD_API_WORKERS" not in api
+
+
+def test_pg18_proof_covers_runtime_semantics_but_not_rds_tls() -> None:
+    cloud_root = _cloud_root()
+    gate = (cloud_root / "scripts" / "check-pg18-proof.sh").read_text()
+    proof = (cloud_root / "scripts" / "pg18-semantic-proof.py").read_text()
+    compose = (cloud_root / "docker-compose.pg18-proof.yml").read_text()
+
+    assert "python scripts/pg18-semantic-proof.py" in gate
+    assert "PYTHONPATH: /app" in compose
+    assert "no TLS; not RDS evidence" in gate
+    for semantic in (
+        "jsonb",
+        "timestamp with time zone",
+        "WHERE active",
+        "ON CONFLICT",
+        "FOR UPDATE SKIP LOCKED",
+        "fence_token = 1",
+        "stale fencing token unexpectedly mutated",
+    ):
+        assert semantic in proof
+
+
+def test_pending_first_install_preserves_stopped_postgres_for_rollback() -> None:
+    cloud_root = _cloud_root()
+    deploy = (cloud_root / "deploy" / "deploy-to-ssh-host.sh").read_text()
+    loader = (cloud_root / "deploy" / "remote-load-and-up.sh").read_text()
+    rollback = (cloud_root / "deploy" / "first-install-rollback.sh").read_text()
+
+    assert 'NPCINK_CLOUD_PRESERVE_FIRST_INSTALL_POSTGRES="${FIRST_INSTALL_PENDING}"' in deploy
+    assert "stop_retired_postgres_for_first_install_rollback" in loader
+    traffic = loader.split('if [ "${LOAD_MODE}" = "traffic-only" ]; then', 1)[1]
+    assert traffic.index("wait_for_public_health") < traffic.index(
+        "stop_retired_postgres_for_first_install_rollback"
+    )
+    assert 'docker stop --time 30 "${container_id}"' in loader
+    assert 'docker rm -f "${container_id}"' not in loader.split(
+        "stop_retired_postgres_for_first_install_rollback() {", 1
+    )[1].split("\n}", 1)[0]
+    assert 'npcink_ai_cloud_compose "${root}" up -d' in rollback
+    assert "First-install rollback is allowed only before installation completes." in rollback
+
+
+def test_first_install_lifecycle_mutations_validate_shared_lock_metadata() -> None:
+    deploy_dir = _cloud_root() / "deploy"
+    for name in ("first-install-finalize.sh", "first-install-rollback.sh"):
+        source = (deploy_dir / name).read_text()
+        assert 'INSTALL_LOCK_FILE="${CONFIG_DIR}/.install.lock"' in source
+        assert "npcink_ai_cloud_start_install_lock_broker" in source
+        assert '"${ROOT_DIR}" "${INSTALL_LOCK_FILE}" 0' in source
+        assert 'exec 8<>"${INSTALL_LOCK_FILE}"' not in source
+        assert "flock -n" not in source
+
+    common = (deploy_dir / "common.sh").read_text()
+    helper = (deploy_dir / "install-lock.py").read_text()
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in helper
+    assert 'getattr(os, "O_NONBLOCK", 0)' in helper
+    assert helper.count("_validate_descriptor_path(") >= 3
+    assert "fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)" in helper
+    assert "path changed while it was opened" in helper
+    assert "npcink_ai_cloud_start_install_lock_broker" in common
+
+
+def test_production_deploy_branches_post_install_gates_on_explicit_state() -> None:
+    cloud_root = _cloud_root()
+    deploy = (cloud_root / "deploy" / "deploy-to-ssh-host.sh").read_text()
+    workflow = (cloud_root / ".github" / "workflows" / "deploy-production.yml").read_text()
+
+    assert "printf 'installation_state=pending\\n'" in deploy
+    assert "printf 'installation_state=complete\\n'" in deploy
+    assert "id: deploy" in workflow
+    assert "^installation_state=(pending|complete)$" in workflow
+    assert "exactly one explicit installation_state=pending|complete" in workflow
+    assert "steps.deploy.outputs.installation_state == 'pending'" in workflow
+    assert workflow.count("steps.deploy.outputs.installation_state == 'complete'") == 2
+    assert "Post-install preflight and release smoke were intentionally skipped." in workflow
+    assert (
+        "While the lifecycle remains pending, run the complete-only Release Smoke workflow"
+        in workflow
+    )
+    assert "Only after those acceptance checks pass" in workflow
+    assert workflow.index(
+        "While the lifecycle remains pending, run the complete-only Release Smoke workflow"
+    ) < workflow.index("Only after those acceptance checks pass")
+    assert "setup-code-rotate.sh" in workflow
+    assert "first-install-finalize.sh" in workflow
+    assert "setup/v1/state" not in workflow
+    assert "setup.installation_required" not in workflow
+
+
+def test_current_release_docs_separate_pg18_gates_from_retired_p1_e06() -> None:
+    deploy_dir = _cloud_root() / "deploy"
+    checklist = (deploy_dir / "RELEASE_CHECKLIST.md").read_text()
+    playbook = (deploy_dir / "OPS_PLAYBOOK.md").read_text()
+
+    assert "Current deployment authority is the fresh PostgreSQL 18 contract" in checklist
+    assert "Historical P1-E06 Edge migration evidence (non-normative)" in checklist
+    assert "unchecked evidence above is not authoritative for current deployment" in checklist
+    assert "Current deployment authority is the fresh PostgreSQL 18 path" in playbook
+    assert "Historical P1-E06 Edge migration procedure (non-normative)" in playbook
+    assert "neither receipt is a current PostgreSQL 18 deployment gate" in playbook
+    assert "Both gates are required." not in playbook
+    assert "P1-E06 has an independent production Edge hard gate." not in playbook
 
 
 def test_openai_provider_ceiling_supports_bounded_long_form_runtime(monkeypatch) -> None:
@@ -1599,6 +1855,7 @@ def test_settings_ignore_retired_admin_and_openai_aliases(monkeypatch) -> None:
     monkeypatch.setenv("NPCINK_CLOUD_REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("NPCINK_CLOUD_INTERNAL_AUTH_TOKEN", "i" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_ADMIN_KEY_SHA256", "c" * 64)
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", SERVICE_SETTINGS_ROOT)
@@ -1630,6 +1887,7 @@ def test_retired_ops_secret_does_not_satisfy_production_config(monkeypatch) -> N
     monkeypatch.setenv("NPCINK_CLOUD_ENVIRONMENT", "production")
     monkeypatch.setenv("NPCINK_CLOUD_INTERNAL_AUTH_TOKEN", "i" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_ADMIN_KEY_SHA256", "c" * 64)
     monkeypatch.delenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", raising=False)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", SERVICE_SETTINGS_ROOT)
@@ -1883,6 +2141,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     deploy_bundle_smoke = (cloud_root / "scripts" / "cloud-deploy-bundle-smoke-flow.sh").read_text()
     remote_smoke_script = (cloud_root / "deploy" / "remote-smoke.sh").read_text()
     nginx_prod_conf = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
+    frontend_proxy = (cloud_root / "frontend" / "src" / "proxy.ts").read_text()
 
     package_manager = json.loads(package_json)["packageManager"]
     assert package_manager == (
@@ -1905,6 +2164,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert 'export NPCINK_CLOUD_ENVIRONMENT="${NPCINK_CLOUD_ENVIRONMENT:-test}"' in (
         deploy_bundle_smoke
     )
+    assert 'export NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV="test"' in deploy_bundle_smoke
     assert "NPCINK_CLOUD_ENVIRONMENT" in deploy_bundle_smoke
     assert "NPCINK_CLOUD_SKIP_FRONTEND_IMAGE" in deploy_bundle_smoke
     assert 'docker image rm "${rollback_reference}"' in deploy_bundle_smoke
@@ -1920,8 +2180,33 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "map $http_x_forwarded_host $npcink_forwarded_host" in nginx_prod_conf
     assert "proxy_set_header X-Forwarded-Host $host;" not in nginx_prod_conf
     assert "proxy_set_header X-Forwarded-Proto $npcink_forwarded_proto;" in nginx_prod_conf
-    assert "location = /admin/auth/bootstrap" in nginx_prod_conf
+    assert "location = /admin/auth/login" in nginx_prod_conf
+    assert "location = /admin/auth/bootstrap" not in nginx_prod_conf
+    assert "location = /setup" in nginx_prod_conf
+    assert "location /setup/" in nginx_prod_conf
+    assert "location /setup/v1/" in nginx_prod_conf
     assert "location /open/" in nginx_prod_conf
+    admin_login_block = nginx_prod_conf.split("location = /admin/auth/login {", 1)[1].split(
+        "\n    }",
+        1,
+    )[0]
+    assert "proxy_pass http://$npcink_ai_cloud_frontend;" in admin_login_block
+    assert "proxy_pass http://npcink_ai_cloud_api;" not in admin_login_block
+    assert "proxy_set_header X-Forwarded-Host" not in admin_login_block
+    assert "proxy_connect_timeout 5s;" in admin_login_block
+    assert "proxy_read_timeout 30s;" in admin_login_block
+    setup_page_block = nginx_prod_conf.split("location = /setup {", 1)[1].split(
+        "\n    }", 1
+    )[0]
+    setup_api_block = nginx_prod_conf.split("location /setup/v1/ {", 1)[1].split(
+        "\n    }", 1
+    )[0]
+    assert "proxy_pass http://$npcink_ai_cloud_frontend;" in setup_page_block
+    assert "proxy_pass http://npcink_ai_cloud_api;" not in setup_page_block
+    assert "proxy_pass http://npcink_ai_cloud_api;" in setup_api_block
+    assert "proxy_pass http://$npcink_ai_cloud_frontend;" not in setup_api_block
+    assert "setup.installation_required" in frontend_proxy
+    assert "pathname.startsWith('/admin/auth/')" in frontend_proxy
     prod_open_block = nginx_prod_conf.split("location /open/ {", 1)[1].split("\n    }", 1)[0]
     prod_portal_api_block = nginx_prod_conf.split("location /portal/v1/ {", 1)[1].split(
         "\n    }",
@@ -1971,7 +2256,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
         assert "http://otel-collector:4318" not in production_compose
         assert "jaeger:4317" not in production_compose
 
-    assert "RETIRED_BUNDLE_SERVICES=(caddy jaeger otel-collector)" in remote_load_script
+    assert "RETIRED_BUNDLE_SERVICES=(postgres caddy jaeger otel-collector)" in remote_load_script
     assert "assert_retired_bundle_services_absent" in remote_load_script
     retired_marker = "[ok] Retired bundle services are absent:"
     assert retired_marker in remote_load_script
@@ -2187,7 +2472,8 @@ def test_release_gate_documents_current_cloud_blockers() -> None:
     assert "github.ref == 'refs/heads/production'" in release_smoke_workflow
     assert "environment: production" in release_smoke_workflow
     assert "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" in release_smoke_workflow
-    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" in release_smoke_workflow
+    assert "NPCINK_CLOUD_ADMIN_KEY" in release_smoke_workflow
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" not in release_smoke_workflow
     assert "NPCINK_CLOUD_RELEASE_MEMBER_EMAIL" in release_smoke_workflow
     assert "NPCINK_CLOUD_PORTAL_LOGIN_CODE" in release_smoke_workflow
     assert "NPCINK_CLOUD_RELEASE_SITE_ID" in release_smoke_workflow
@@ -2459,9 +2745,6 @@ def test_controlled_production_cve_risk_acceptance_is_manual_and_bundle_bound() 
     ops_playbook = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
     release_checklist = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
     release_policy = (cloud_root / "scripts" / "check-release-policy.sh").read_text()
-    cutover = (
-        cloud_root / "deploy" / "runtime-data-encryption-cutover.sh"
-    ).read_text()
 
     for marker in (
         contract,
@@ -2562,9 +2845,6 @@ def test_controlled_production_cve_risk_acceptance_is_manual_and_bundle_bound() 
     assert contract in ops_playbook
     assert contract in release_checklist
     assert contract in release_policy
-    assert "deployment, image-scan, and P1-E06 tooling do not consume this acceptance" in (
-        decision
-    )
     for marker in (
         "outside Git, the deploy bundle, and every release tree",
         "owner-only mode-`0600` file",
@@ -2572,19 +2852,8 @@ def test_controlled_production_cve_risk_acceptance_is_manual_and_bundle_bound() 
         "cannot contain a self-digest",
     ):
         assert marker in decision
-    assert "root-owned mode-`0400` custom-format backup and checksum" in ops_playbook
-    assert (
-        "root-owned non-symlink mode-`0400` backup and checksum"
-        in release_checklist
-    )
-    assert 'chmod 0400 "${BACKUP_PATH}"' in cutover
-    assert 'chmod 0400 "${BACKUP_PATH}.sha256"' in cutover
-    assert 'chmod 0600 "${BACKUP_PATH}"' not in cutover
-    assert 'chmod 0600 "${BACKUP_PATH}.sha256"' not in cutover
-
     for non_consumer in (
         cloud_root / "deploy" / "deploy-to-ssh-host.sh",
-        cloud_root / "deploy" / "runtime-data-encryption-cutover.sh",
         cloud_root / "scripts" / "production-image-supply.py",
     ):
         assert contract not in non_consumer.read_text()

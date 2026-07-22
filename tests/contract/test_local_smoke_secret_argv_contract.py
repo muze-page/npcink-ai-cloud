@@ -186,7 +186,7 @@ http_request \
             {
                 "NPCINK_CLOUD_SECRET": "local-runtime-secret",
                 "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN": "local-internal-secret",
-                "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN": "local-admin-secret",
+                "NPCINK_CLOUD_ADMIN_KEY": "local-admin-secret",
             },
             (
                 "local-runtime-secret",
@@ -366,7 +366,16 @@ def test_bundle_smoke_passes_runtime_secret_only_through_child_env(tmp_path: Pat
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _install_fake_child_bash(fake_bin)
-    _write(fake_bin / "docker", "#!/bin/sh\nexit 0\n", executable=True)
+    _write(
+        fake_bin / "docker",
+        '''#!/bin/sh
+case "$*" in
+  *"exec -T postgres18-proof"*) printf '%s\n' postgresql-18 ;;
+esac
+exit 0
+''',
+        executable=True,
+    )
     _write(
         fake_bin / "tar",
         '''#!/usr/bin/env python3

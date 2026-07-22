@@ -270,12 +270,6 @@ def image_lock() -> dict[str, object]:
                 "scan_by_default": True,
             },
             {
-                "key": "postgres",
-                "reference": "npcink-ai-cloud-postgres:prod",
-                "dockerfile": "Dockerfile.postgres",
-                "scan_by_default": True,
-            },
-            {
                 "key": "worker",
                 "reference": "npcink-ai-cloud-worker:prod",
                 "dockerfile": "Dockerfile",
@@ -310,28 +304,24 @@ def create_scan_evidence(bundle: Path, lock: dict[str, object]) -> dict[str, str
     references = {
         "api": "npcink-ai-cloud-api:prod",
         "frontend": "npcink-ai-cloud-frontend:prod",
-        "postgres": "npcink-ai-cloud-postgres:prod",
         "redis": "redis:7-alpine@sha256:" + "1" * 64,
         "nginx": "nginx:1.30-alpine-slim@sha256:" + "2" * 64,
     }
     archive_references = {
         "api": references["api"],
         "frontend": references["frontend"],
-        "postgres": references["postgres"],
         "redis": "npcink-ai-cloud-external-redis:prod",
         "nginx": "npcink-ai-cloud-external-nginx:prod",
     }
     source_ids = {
         "api": "sha256:" + "8" * 64,
         "frontend": "sha256:" + "9" * 64,
-        "postgres": "sha256:" + "a" * 64,
         "redis": "sha256:" + "b" * 64,
         "nginx": "sha256:" + "c" * 64,
     }
     archive_paths = {
         "api": bundle / "dist/api.tar.gz",
         "frontend": bundle / "dist/frontend.tar.gz",
-        "postgres": bundle / "dist/postgres.tar.gz",
         "redis": bundle / "dist/external-redis.tar.gz",
         "nginx": bundle / "dist/external-nginx.tar.gz",
     }
@@ -480,7 +470,6 @@ def exact_bundle_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         "pnpm-workspace.yaml": "packages: []\n",
         "frontend/package.json": "{}\n",
         "Dockerfile": "FROM scratch\n",
-        "Dockerfile.postgres": "FROM scratch\nUSER postgres\n",
         "frontend/Dockerfile": "FROM scratch\n",
         "docker-compose.prod.yml": "services: {}\n",
         "docker-compose.runtime.yml": "services: {}\n",
@@ -513,7 +502,6 @@ def exact_bundle_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     archive_specs = (
         ("api", "dist/api.tar.gz", "npcink-ai-cloud-api:prod"),
         ("frontend", "dist/frontend.tar.gz", "npcink-ai-cloud-frontend:prod"),
-        ("postgres", "dist/postgres.tar.gz", "npcink-ai-cloud-postgres:prod"),
         ("redis", "dist/external-redis.tar.gz", "npcink-ai-cloud-external-redis:prod"),
         ("nginx", "dist/external-nginx.tar.gz", "npcink-ai-cloud-external-nginx:prod"),
     )
@@ -536,9 +524,6 @@ def exact_bundle_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         + "dist/frontend.tar.gz\tfrontend\tnpcink-ai-cloud-frontend:prod\t"
         + "npcink-ai-cloud-frontend:prod\t"
         + f"{image_ids['source_frontend']}\t{image_ids['frontend']}\t1\t1\n"
-        + "dist/postgres.tar.gz\tpostgres\tnpcink-ai-cloud-postgres:prod\t"
-        + "npcink-ai-cloud-postgres:prod\t"
-        + f"{image_ids['source_postgres']}\t{image_ids['postgres']}\t1\t1\n"
         + "dist/external-redis.tar.gz\texternal_redis\t"
         + "npcink-ai-cloud-external-redis:prod\t"
         + f"redis:7-alpine@sha256:{'1' * 64}\t"
@@ -1391,7 +1376,7 @@ def test_real_prepare_only_loader_preserves_exact_payload_and_writes_external_st
     assert rollback_map.is_file()
     assert rollback_map.stat().st_mode & 0o777 == 0o600
     rollback_records = rollback_map.read_text(encoding="utf-8").splitlines()
-    assert len(rollback_records) == 8
+    assert len(rollback_records) == 7
     assert all(record.endswith("\t-\t-") for record in rollback_records)
     assert not (bundle / ".env.deploy").exists()
     assert not (bundle / "rollback-images.tsv").exists()
@@ -1611,6 +1596,9 @@ def test_release_scripts_enforce_pre_and_post_load_and_same_bundle_replay() -> N
     loader = (ROOT / "deploy/remote-load-and-up.sh").read_text(encoding="utf-8")
     ssh_deploy = (ROOT / "deploy/deploy-to-ssh-host.sh").read_text(encoding="utf-8")
     smoke = (ROOT / "scripts/cloud-deploy-bundle-smoke-flow.sh").read_text(encoding="utf-8")
+    bundle_contract = (ROOT / "docs/p5-b5-exact-release-bundle-v1.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "status --porcelain=v1 --untracked-files=all" in bundle
     assert "NPCINK_CLOUD_ALLOW_DIRTY" not in bundle
@@ -1618,6 +1606,12 @@ def test_release_scripts_enforce_pre_and_post_load_and_same_bundle_replay() -> N
     assert "production-images.json" in bundle
     assert "external-plan" in bundle
     assert "postgres:16-alpine|" not in bundle
+    assert "Dockerfile.postgres" not in bundle
+    assert "docker-compose.pg18-proof.yml" not in bundle
+    assert "Dockerfile.postgres" not in bundle_contract
+    assert "derived Postgres" not in bundle_contract
+    assert "external RDS PostgreSQL 18" in bundle_contract
+    assert "docker-compose.pg18-proof.yml" in bundle_contract
     assert bundle.count("Building API image exactly once") == 1
     assert bundle.count('${BUILD_CACHE_ARGS[@]+"${BUILD_CACHE_ARGS[@]}"}') == 3
     assert 'local exit_status="$?"' in bundle
@@ -1669,13 +1663,18 @@ def test_release_scripts_enforce_pre_and_post_load_and_same_bundle_replay() -> N
     assert smoke.count("run_deploy_command bash deploy/remote-load-and-up.sh") == 5
     assert smoke.count("replay_staged_release") == 3
     data_index = smoke.index("NPCINK_CLOUD_LOAD_MODE=data-only")
+    pg18_index = smoke.index("\tensure_external_pg18_proof", data_index)
     migrate_index = smoke.index("run_deploy_command bash deploy/remote-migrate.sh")
     api_index = smoke.index("NPCINK_CLOUD_LOAD_MODE=api-only")
     workers_index = smoke.index("NPCINK_CLOUD_LOAD_MODE=workers-only")
     traffic_index = smoke.index("NPCINK_CLOUD_LOAD_MODE=traffic-only")
-    assert data_index < migrate_index < api_index < workers_index < traffic_index
+    assert data_index < pg18_index < migrate_index < api_index < workers_index < traffic_index
     assert smoke.index("stop_replay_application_services") < data_index
     assert "same exact bundle receipt was reused" in smoke
+    assert 'PG18_PROOF_COMPOSE="${ROOT_DIR}/docker-compose.pg18-proof.yml"' in smoke
+    assert 'COMPOSE_PROJECT_NAME="${PROJECT_NAME}"' in smoke
+    assert "local no-TLS fixture; not RDS evidence" in smoke
+    assert "@postgres18-proof:5432/npcink_ai_cloud" in smoke
     assert "preflight_status=\\$?" in ssh_deploy
     assert 'rm -rf $(remote_shell_arg "${REMOTE_PREFLIGHT_DIR}")' in ssh_deploy
 

@@ -2,7 +2,7 @@
 
 > Status: active
 >
-> Updated: 2026-07-20
+> Updated: 2026-07-22
 >
 > Scope: standalone `npcink-ai-cloud` production operations, cadence recovery, signed runtime smoke, release-time troubleshooting
 
@@ -10,6 +10,15 @@
 
 This playbook is the minimum operator contract for Npcink AI Cloud production work.
 If a release depends on manual knowledge that is not written here, the release is not closed.
+
+Current deployment authority is the fresh PostgreSQL 18 path. A first deploy
+must emit `installation_state=pending`, stop before every post-install
+preflight/smoke, complete `/setup`, pass the independent Release Smoke,
+WordPress text/image, RDS restore, and 24–72 hour acceptance checks, and only
+then be accepted with `deploy/first-install-finalize.sh`. An ordinary deploy must emit
+`installation_state=complete` before the existing post-install gates run.
+Sections explicitly labelled `Historical` or `non-normative` are retained only
+for audit context; their PG16/P1-E06 receipts are not current deploy inputs.
 
 Primary internal checkpoints:
 
@@ -98,7 +107,7 @@ Install or repair that host prerequisite before retrying; do not upload a
 bundle first and hope a later remote phase can recover.
 
 All managed production paths under `/opt/npcink-ai-cloud` are root-owned. Before
-the P1-E06 cutover, normalize the managed tree to `root:root` and prove that no
+the current first install or ordinary deploy, normalize the managed tree to `root:root` and prove that no
 managed directory or file is group- or world-writable. Create the transient and
 backup roots explicitly:
 
@@ -136,7 +145,14 @@ The exact-bundle smoke may replay the artifact through loopback NGINX over
 plain HTTP. That is a local verification exception, never a production public
 origin.
 
-P1-E06 has an independent production Edge hard gate. Before invoking the
+#### Historical P1-E06 Edge migration procedure (non-normative)
+
+The following Edge binding, certificate receipt, and retired-Caddy sequence is
+preserved as dated migration evidence. It is not a current first-install or
+ordinary-deploy prerequisite; current deployment only requires the already
+operator-owned TLS Edge to satisfy the active runtime contract above.
+
+P1-E06 had an independent production Edge hard gate. Before invoking the
 cutover, install and activate host NGINX through the governed binding helper,
 pass `nginx -t` and the exact-host loopback-resolved HTTPS check, stop the
 retired project Caddy, and complete the certificate-readiness evidence below.
@@ -147,7 +163,7 @@ mutation. The encryption cutover neither creates nor repairs the Edge topology.
 Pure `--stage-only` upload and verification may run while this gate is pending
 because it does not inspect runtime state or mutate images.
 
-The gate also requires a named certificate-renewal owner, an enabled automatic
+The historical gate also required a named certificate-renewal owner, an enabled automatic
 renewal service/timer, a persistent root-owned non-writable executable hook in
 `renewal-hooks/deploy`, a successful renewal dry run, direct hook/reload proof,
 and at least 30 days remaining on both the named PEM leaf and the leaf actually
@@ -170,7 +186,7 @@ or other permissions. Readiness parses the effective `nginx -T` server block,
 binds both directives and their digest, proves keypair equality, then compares
 the named and loopback-served leaves.
 
-After host NGINX is active, generate the fail-closed evidence from the exact
+After host NGINX was active, the migration generated fail-closed evidence from the exact
 staged release. The script is root-only, requires `/usr/bin/python3.11`, runs a
 real Certbot dry run followed by a direct persistent deploy-hook/reload test,
 and atomically writes a root-owned
@@ -202,7 +218,7 @@ NPCINK_CLOUD_CERTIFICATE_RENEWAL_TIMER=certbot-renew.timer
 NPCINK_CLOUD_CERTIFICATE_RENEWAL_HOOK_PATH=/etc/letsencrypt/renewal-hooks/deploy/reload-nginx
 ```
 
-The explicit `prepare-only` image phase and P1-E06 itself run `verify` before
+The historical explicit `prepare-only` image phase and P1-E06 itself ran `verify` before
 image snapshot/tag/load or database work. `generate` first removes and
 fsyncs any prior receipt, so a failed regeneration leaves no reusable success.
 Regenerate after certificate or hook rotation and before the receipt becomes
@@ -213,7 +229,7 @@ running, and the external-Edge readiness flag was absent. This dated note is
 operator context, not a permanent policy assertion; update it after the gate is
 closed without weakening the stable checks above.
 
-For the first migration from the retired bundled edge:
+The first migration from the retired bundled edge used this historical sequence:
 
 1. Retain the previous bundle and matched database recovery point while the old
    Caddy route remains active. Provision the certificate, preinstall host NGINX,
@@ -280,30 +296,30 @@ Compose project label must match it. A project rename or label drift during an
 ordinary deploy is a blocking configuration error because it can leave old
 writers outside the stop/recovery set. `--skip-frontend-image` is valid only
 when exactly one running old frontend exists to preserve; never use it for a
-first deploy or a missing frontend. Ordinary production deployment also
-requires an existing managed `current` release and must not bootstrap a new
-host. Before
-image loading it queries PostgreSQL through the frozen previous release;
-revision `20260710_0058` is a hard stop requiring the P1-E06 orchestrator.
-The protected env file remains the complete Compose/backend runtime input.
-Root-owned host helpers import only their explicit reviewed key allowlist;
-unlisted `NPCINK_CLOUD_*`, database, provider, and PostgreSQL values stay in
-the file for Compose and do not become shell controls.
-Formal production dispatch additionally verifies the persistent global
-activation receipt, its complete digest-bound cutover evidence, and that the
-current revision is `0068` or a descendant in the staged Alembic graph. The
-ordinary production deployment requires that receipt gate and cannot disable
-it; the production workspace target also exports
-`NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT=1`. Only
-`--stage-only` omits the receipt.
+first deploy or a missing frontend. An already installed ordinary production
+deployment requires an existing managed `current` release. The separately
+bounded first-install path may bootstrap only a protected configuration tree
+with no installation state and no runtime artifacts. An installed deployment
+must prove `complete`, `database_contract=pg18_empty_initialization.v1`, and the
+exact protected runtime-config digest before image mutation. After exact
+candidate images are loaded and before old writers stop, the candidate API
+must load the structured config and prove private RDS resolution, TLS
+`verify-full`, PostgreSQL major 18, and exactly one known Alembic revision at
+the candidate head or on its ancestor chain. After migration, the exact sole
+candidate head is required. Database
+credentials and runtime roots come only from `shared/config/`; `.env.deploy`
+contains non-secret host, edge, provider, and tuning inputs and explicitly
+rejects exact-bundle smoke overrides.
 
 The normal deploy sequence is fixed:
 
 ```text
-prepare exact images
+validate complete-state and runtime-config digest
+  -> prepare exact images
+  -> candidate-image RDS PostgreSQL 18/TLS/Alembic preflight
   -> stop old public and write-capable services
-  -> start/retain PostgreSQL and Redis
-  -> migrate and refresh providers with staged one-off API containers
+  -> start/retain Redis
+  -> migrate external RDS and refresh providers with staged one-off API containers
   -> atomically update current
   -> start and verify API
   -> start workers
@@ -311,6 +327,14 @@ prepare exact images
   -> pass generic operational-ready
   -> restore frontend/proxy traffic
 ```
+
+The manually dispatched production workflow consumes only the explicit final
+line emitted by the deploy helper: `installation_state=pending|complete`. It
+does not infer pending from HTTP failures. `pending` produces an operator
+summary for root/TTY setup-code rotation, `/setup`, one-time administrator-key
+capture, independent complete-only smoke, WordPress/RDS/observation acceptance,
+and explicit finalization; it skips the deploy job's small-customer preflight
+and formal release smoke. `complete` runs those ordinary-deploy gates.
 
 Migration and provider refresh use the profiled `release-one-off` API service.
 Compose pins it to the recorded target-local daemon ID and creates it with
@@ -350,8 +374,8 @@ its images, Compose project, external env state, containers, pointer, and public
 health are all proven. Previous Compose runs execute in an isolated process
 environment so new-release variables cannot override the previous env file;
 restored tags must match their recorded old image IDs and formerly absent tags
-must be proven absent again. Recovery explicitly recreates `postgres`, `redis`,
-`proxy`, `frontend`, `api`, `worker`, `callback-worker`, and `ops-worker` and
+must be proven absent again. Recovery explicitly recreates `redis`, `proxy`,
+`frontend`, `api`, `worker`, `callback-worker`, and `ops-worker` and
 binds every recovered container's Compose image reference and actual `.Image`
 to the unique old SHA256 recorded in the rollback map. A mismatch stops the
 recovery generation and retains `.deploy-lock`. Once migration begins, any failure is fail-closed: do not
@@ -399,30 +423,39 @@ Manual refresh guidance:
 
 ## Secret Rotation
 
-### Admin bootstrap token
+### Admin key
 
-1. Generate a new `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`.
-2. Update the deploy secret store.
-3. Restart `api`.
-4. Verify `POST /admin/auth/bootstrap` succeeds with the new token and fails with the old token.
-5. Record the rotation window in operator notes.
+1. Run `deploy/admin-key-rotate.sh` against the protected shared config root.
+2. Save the one-time printed `nca_admin_...` value in the operator password manager.
+3. Restart `api` and `frontend` if the helper did not do so through the governed host path.
+4. Verify `POST /admin/auth/login` accepts the new key, rejects the old key, and rejects the old admin cookie.
+5. Update the operator-only GitHub Actions `NPCINK_CLOUD_ADMIN_KEY` smoke secret; never copy it into `.env.deploy`.
+6. Record the rotation window in operator notes.
 
 ### Internal service token
 
-1. Generate a new `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`.
-2. Update the deploy secret store for `api`, `frontend`, `worker`, `callback-worker`, and `ops-worker`.
-3. Restart those services together.
-4. Verify `GET /health/ready` and `GET /internal/service/observability/summary` with the new token.
-5. Verify old-token requests fail closed.
+The first-install runtime owns this token in protected shared config and exposes
+only the bounded frontend projection. It is not an `.env.deploy` value. Until a
+dedicated atomic rotation helper lands, do not hand-edit the two copies or
+claim an independent rotation. For this no-user validation environment, treat
+compromise as a controlled rebuild from an empty database and record the gap as
+a first-real-user gate.
 
 ### Session invalidation
 
-1. Rotate `NPCINK_CLOUD_ADMIN_SESSION_SECRET` to invalidate `/admin/*` sessions.
-2. Rotate `NPCINK_CLOUD_PORTAL_JWT_SECRET` to invalidate `/portal/*` sessions.
-3. Restart `api` and `frontend`.
-4. Verify stale cookies no longer access `/admin/session` or `/portal/v1/session`.
+1. Run `deploy/admin-key-rotate.sh`; it rotates the admin-key digest and admin
+   session root together, invalidating `/admin/*` sessions.
+2. Do not hand-edit the generated Portal JWT root. A dedicated atomic Portal
+   session rotation remains a first-real-user gate.
+3. Restart `api` and `frontend` through the governed host path.
+4. Verify stale admin cookies no longer access `/admin/session`.
 
-### P1-E06 persisted-encryption dual-domain cutover
+### Historical P1-E06 persisted-encryption dual-domain cutover (non-normative)
+
+This section preserves the retired PostgreSQL 16 cutover procedure as an audit
+record. It is not an ordinary-deploy prerequisite, must not require an
+activation receipt, and must not reopen a compatibility path after the fresh
+PostgreSQL 18 initialization.
 
 Neither the Service Settings pair
 `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` /
@@ -443,12 +476,12 @@ The first raw-ciphertext migration is a one-time P1-E06 dual-domain operation.
 Use the single fail-closed orchestrator; do not reproduce its migration,
 backup, restore, key rewrite, pointer, worker, or cleanup sequence by hand.
 
-#### Controlled production CVE acceptance gate
+#### Historical controlled-production CVE acceptance (non-normative)
 
-Before staging or any production-host mutation, follow
+Before the retired P1-E06 staging or production-host mutation, operators followed
 `docs/python-3-14-6-controlled-production-validation-risk-decision-2026-07-21.md`.
-After the final Linux/AMD64 bundle has a fresh passed scan and successful
-same-bundle double replay, create the bundle-external
+After the final Linux/AMD64 bundle had a fresh passed scan and successful
+same-bundle double replay, the operator created the bundle-external
 `npcink.controlled_production_cve_risk_acceptance.v1` file in the trusted
 operator evidence store. It must be owner-only mode `0600`, use
 `status=accepted_by_operator` and `scope=controlled_production_validation_only`,
@@ -468,7 +501,8 @@ cannot replace this manual pre-mutation gate.
 This acceptance is not `p1_e06_off_host_backup_receipt.v1`. The CVE acceptance
 binds an exact release artifact and operator risk decision; the later P1-E06
 receipt is machine-consumed proof that the database backup was copied to and
-verified on independent storage. Both gates are required.
+verified on independent storage. Both gates were required for that historical
+cutover; neither receipt is a current PostgreSQL 18 deployment gate.
 
 1. From the trusted operator workstation, stage the already-built exact bundle
    with `deploy/deploy-to-ssh-host.sh --stage-only`. Set the production host
@@ -773,8 +807,12 @@ rollback state, and readiness evidence in one release transaction.
 
 Primary knobs:
 
-- `NPCINK_CLOUD_API_WORKERS`: gunicorn API worker count. Keep it within the
-  release host CPU and memory budget.
+The validation topology fixes Gunicorn to exactly one API worker so the
+in-process Setup IP limiter has one authoritative state and the 1-core/2-GB RDS
+contract stays bounded. `NPCINK_CLOUD_API_WORKERS` is rejected by production
+deployment; changing worker count requires a new rate-limit and capacity
+contract.
+
 - `NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS`: runtime queue polling cadence.
 - `NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS`: callback dispatch polling
   cadence.
@@ -804,7 +842,7 @@ The artifact volume root must remain stable and writable only by the service
 owner or trusted operators. Do not replace its mount, shard directories, or
 private publication-fence file while API/runtime/ops workers are running.
 C2a `orphan_eligible` remains age evidence and never authorizes manual
-deletion. Keep C2b automatic cleanup off until PostgreSQL 16 multi-connection
+deletion. Keep C2b automatic cleanup off until PostgreSQL 18 multi-connection
 and real named-volume proof is complete. Before any later enablement, verify
 service-account ownership and safe modes for root/shards/files, private `0600`
 single-link generation marker and lock files, stable mount/root identity, and
@@ -866,10 +904,12 @@ required:
 5. Verify `/health/ready`, `/health/operational-ready`, and
    `/internal/service/observability/summary` before reopening traffic.
 
-For the P1-E06 dual-domain encryption cutover, this general database-only
-procedure is insufficient. Restore the matched old backup, old application revision,
-old external env, and both old roots together as specified in
-**P1-E06 persisted-encryption dual-domain cutover**.
+For historical recovery of the retired P1-E06 dual-domain encryption cutover,
+this general database-only procedure was insufficient. Its matched PG16
+backup, old application revision, old external env, and both old roots remain
+only as a recovery record in
+**Historical P1-E06 persisted-encryption dual-domain cutover (non-normative)**;
+it is not a current PostgreSQL 18 rollback path.
 
 ## Provider Failover
 

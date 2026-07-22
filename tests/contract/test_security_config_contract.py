@@ -19,7 +19,7 @@ def _production_settings_payload(**overrides: object) -> dict[str, object]:
         "database_url": "sqlite+pysqlite:///:memory:",
         "redis_url": "redis://localhost:6379/0",
         "internal_auth_token": "npcink-cloud-internal-prod-token-32b",
-        "admin_bootstrap_token": "npcink-cloud-admin-bootstrap-prod-token",
+        "admin_key_sha256": "a" * 64,
         "admin_session_secret": "npcink-cloud-ops-session-secret-prod-32b",
         "service_settings_secret": SERVICE_SETTINGS_ROOT,
         "service_settings_encryption_key_id": "service-settings-key-2026-07",
@@ -94,7 +94,8 @@ def test_settings_accept_hardened_production_auth_settings() -> None:
 
     assert settings.environment == "production"
     assert settings.admin_session_secret == "npcink-cloud-ops-session-secret-prod-32b"
-    assert settings.admin_bootstrap_token == "npcink-cloud-admin-bootstrap-prod-token"
+    assert settings.admin_key_sha256 == "a" * 64
+    assert settings.admin_principal_id == "platform:internal_root"
     assert settings.service_settings_secret == SERVICE_SETTINGS_ROOT
     assert settings.service_settings_encryption_key_id == "service-settings-key-2026-07"
     assert settings.runtime_data_encryption_secret == RUNTIME_DATA_ROOT
@@ -174,14 +175,14 @@ def test_settings_reject_openai_sample_catalog_profile_outside_dev_and_test() ->
             "internal_auth_token is required outside development/test environments",
         ),
         (
-            {"admin_bootstrap_token": ""},
-            "admin_bootstrap_token is required outside development/test environments",
+            {"admin_key_sha256": ""},
+            "admin_key_sha256 is required outside development/test environments",
         ),
         (
             {
-                "admin_bootstrap_token": "npcink-cloud-internal-prod-token-32b",
+                "admin_key_sha256": "A" * 64,
             },
-            "admin_bootstrap_token must differ from internal_auth_token outside development/test environments",
+            "admin_key_sha256 must be a lowercase SHA-256 digest",
         ),
         (
             {"portal_jwt_secret": ""},

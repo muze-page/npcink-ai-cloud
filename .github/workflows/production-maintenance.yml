@@ -118,14 +118,25 @@ jobs:
           remote_dir="$2"
           keep_count="$3"
           maintenance_lock_held=0
+          install_lock_held=0
+          release_tool_python="/usr/bin/python3.11"
+          current_release=""
 
           cleanup_maintenance_lock() {
             exit_status="$?"
             trap - EXIT
+            if [ "${install_lock_held}" = "1" ]; then
+              npcink_ai_cloud_stop_install_lock_broker || exit_status=1
+              install_lock_held=0
+            fi
             if [ "${maintenance_lock_held}" = "1" ]; then
-              if ! rmdir -- "${remote_dir}/.deploy-lock"; then
+              if [ -L "${remote_dir}/.deploy-lock" ] || \
+                [ ! -d "${remote_dir}/.deploy-lock" ] || \
+                [ "$(stat -c '%u:%g:%a' -- "${remote_dir}/.deploy-lock" 2>/dev/null || true)" != "0:0:700" ] || \
+                ! rmdir -- "${remote_dir}/.deploy-lock" || \
+                [ -e "${remote_dir}/.deploy-lock" ] || [ -L "${remote_dir}/.deploy-lock" ]; then
                 echo "[fail] Production maintenance lock cleanup failed." >&2
-                exit 1
+                exit_status=1
               fi
             fi
             exit "${exit_status}"
@@ -179,11 +190,69 @@ jobs:
               echo "[fail] Remote directory missing: ${remote_dir}" >&2
               exit 1
             }
-            if ! mkdir -- "${remote_dir}/.deploy-lock"; then
+            if [ "$(id -u)" != "0" ] || [ ! -x "${release_tool_python}" ] || \
+              ! "${release_tool_python}" -c \
+                'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'; then
+              echo "[fail] safe-prune requires root and /usr/bin/python3.11 or newer before host mutation." >&2
+              exit 1
+            fi
+            current_release="$(readlink -f "${remote_dir}/current" 2>/dev/null || true)"
+            if [[ "${current_release}" != "${remote_dir}"/release-* ]] || \
+              [ "$(dirname "${current_release}")" != "${remote_dir}" ] || \
+              [ ! -f "${current_release}/deploy/common.sh" ] || \
+              [ -L "${current_release}/deploy/common.sh" ] || \
+              [ ! -f "${current_release}/deploy/install-lock.py" ] || \
+              [ -L "${current_release}/deploy/install-lock.py" ] || \
+              [ ! -f "${current_release}/deploy/validate-installation-complete.py" ] || \
+              [ -L "${current_release}/deploy/validate-installation-complete.py" ]; then
+              echo "[fail] safe-prune requires an exact direct managed current release." >&2
+              exit 1
+            fi
+            export NPCINK_CLOUD_RELEASE_TOOL_PYTHON="${release_tool_python}"
+            # shellcheck source=/dev/null
+            . "${current_release}/deploy/common.sh"
+            validate_completed_installation() {
+              "${release_tool_python}" \
+                "${current_release}/deploy/validate-installation-complete.py" \
+                --managed-root "${remote_dir}" \
+                --sentinel "${remote_dir}/.installation-complete" \
+                --state "${remote_dir}/shared/config/install-state.json" \
+                --runtime "${remote_dir}/shared/config/runtime-config.json" >/dev/null
+              if [ -e "${remote_dir}/.first-install-pending.json" ] || \
+                [ -L "${remote_dir}/.first-install-pending.json" ]; then
+                echo "[fail] safe-prune is forbidden until explicit first-install finalize acceptance." >&2
+                return 1
+              fi
+            }
+            # A missing permanent sentinel never becomes permission to mutate,
+            # even when install-state.json says complete.
+            validate_completed_installation || {
+              echo "[fail] safe-prune requires durable installation-complete acceptance and matching current PostgreSQL 18 runtime state." >&2
+              exit 1
+            }
+            if ! mkdir -m 0700 -- "${remote_dir}/.deploy-lock"; then
               echo "[fail] Production deploy or another mutating operation holds the lock." >&2
               exit 1
             fi
             maintenance_lock_held=1
+            if [ -L "${remote_dir}/.deploy-lock" ] || \
+              [ "$(stat -c '%u:%g:%a' -- "${remote_dir}/.deploy-lock")" != "0:0:700" ]; then
+              echo "[fail] safe-prune mutation lock must be a root-owned mode-0700 directory." >&2
+              exit 1
+            fi
+            install_lock_file="${remote_dir}/shared/config/.install.lock"
+            if ! npcink_ai_cloud_start_install_lock_broker \
+              "${current_release}" "${install_lock_file}" 0; then
+              echo "[fail] Setup installation is active; safe-prune is forbidden." >&2
+              exit 1
+            fi
+            install_lock_held=1
+            # Re-read all positive evidence after both mutation locks so no
+            # state/marker replacement can race the destructive operation.
+            validate_completed_installation || {
+              echo "[fail] safe-prune installation evidence changed while locks were acquired." >&2
+              exit 1
+            }
             echo "[info] Pruning stopped containers, unused images, and build cache"
             docker container prune -f || true
             docker image prune -af || true

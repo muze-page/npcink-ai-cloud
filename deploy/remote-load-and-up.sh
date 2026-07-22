@@ -9,7 +9,7 @@ ROLLBACK_IMAGE_MAP="${NPCINK_CLOUD_ROLLBACK_IMAGE_MAP:-}"
 ROLLBACK_TAG_SUFFIX="${NPCINK_CLOUD_ROLLBACK_TAG_SUFFIX:-}"
 MANIFEST_HELPER="${ROOT_DIR}/scripts/verify-release-bundle-manifest.py"
 RELEASE_VERIFIER="${ROOT_DIR}/deploy/verify-release-bundle.sh"
-RETIRED_BUNDLE_SERVICES=(caddy jaeger otel-collector)
+RETIRED_BUNDLE_SERVICES=(postgres caddy jaeger otel-collector)
 CERTIFICATE_RENEWAL_READINESS="${ROOT_DIR}/deploy/certificate-renewal-readiness.sh"
 
 # Shared compose/env helpers for deploy scripts.
@@ -21,6 +21,32 @@ npcink_ai_cloud_require_release_tool_python "${RELEASE_TOOL_PYTHON}"
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 COMPOSE_FILE="${NPCINK_CLOUD_COMPOSE_FILE:-${ROOT_DIR}/docker-compose.prod.yml}"
 COMPOSE_PROJECT_NAME_EFFECTIVE="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-npcink-ai-cloud}}"
+CONFIG_DIR_HOST="${NPCINK_CLOUD_CONFIG_DIR_HOST:-$(dirname "${ROOT_DIR}")/shared/config}"
+PRESERVE_FIRST_INSTALL_POSTGRES="${NPCINK_CLOUD_PRESERVE_FIRST_INSTALL_POSTGRES:-0}"
+
+if [ "${PRESERVE_FIRST_INSTALL_POSTGRES}" != "0" ] && \
+	[ "${PRESERVE_FIRST_INSTALL_POSTGRES}" != "1" ]; then
+	echo "[fail] NPCINK_CLOUD_PRESERVE_FIRST_INSTALL_POSTGRES must be 0 or 1." >&2
+	exit 1
+fi
+if [ "${PRESERVE_FIRST_INSTALL_POSTGRES}" = "1" ] && [ "${LOAD_MODE}" != "traffic-only" ]; then
+	echo "[fail] PostgreSQL rollback preservation is only valid during first-install traffic activation." >&2
+	exit 1
+fi
+
+if [[ "${CONFIG_DIR_HOST}" != /* ]] || [ -L "${CONFIG_DIR_HOST}" ]; then
+	echo "[fail] NPCINK_CLOUD_CONFIG_DIR_HOST must name a non-symlink absolute path." >&2
+	exit 1
+fi
+case "${LOAD_MODE}" in
+	api-only|workers-only|traffic-only)
+		if [ ! -d "${CONFIG_DIR_HOST}" ]; then
+			echo "[fail] NPCINK_CLOUD_CONFIG_DIR_HOST must name the prepared shared configuration directory." >&2
+			exit 1
+		fi
+		;;
+esac
+export NPCINK_CLOUD_CONFIG_DIR_HOST="${CONFIG_DIR_HOST}"
 
 COMPOSE_FILE="$(
 	"${RELEASE_TOOL_PYTHON}" - "${ROOT_DIR}" "${COMPOSE_FILE}" <<'PY'
@@ -48,7 +74,6 @@ export NPCINK_CLOUD_COMPOSE_FILE="${COMPOSE_FILE}"
 
 npcink_ai_cloud_require_cmd docker
 npcink_ai_cloud_require_cmd curl
-npcink_ai_cloud_require_internal_token
 
 case "${LOAD_MODE}" in
 	prepare-only|data-only|api-only|workers-only|traffic-only)
@@ -407,7 +432,7 @@ source = Path(sys.argv[1])
 target = Path(sys.argv[2])
 gateway = sys.argv[3]
 mode = sys.argv[4]
-parent_stat = target.parent.stat(follow_symlinks=False)
+parent_stat = target.parent.lstat()
 if (
     not stat.S_ISDIR(parent_stat.st_mode)
     or parent_stat.st_uid != os.geteuid()
@@ -563,6 +588,9 @@ assert_retired_bundle_services_absent() {
 	local service_name=""
 	local container_ids=""
 	for service_name in "${RETIRED_BUNDLE_SERVICES[@]}"; do
+		if [ "${PRESERVE_FIRST_INSTALL_POSTGRES}" = "1" ] && [ "${service_name}" = "postgres" ]; then
+			continue
+		fi
 		container_ids="$(docker ps -aq \
 			--filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
 			--filter "label=com.docker.compose.service=${service_name}")"
@@ -572,6 +600,37 @@ assert_retired_bundle_services_absent() {
 		fi
 	done
 	echo "[ok] Retired bundle services are absent: ${RETIRED_BUNDLE_SERVICES[*]}"
+}
+
+remove_non_database_retired_orphans() {
+	local service_name=""
+	local container_ids=""
+	for service_name in caddy jaeger otel-collector; do
+		container_ids="$(docker ps -aq \
+			--filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
+			--filter "label=com.docker.compose.service=${service_name}")"
+		if [ -n "${container_ids}" ]; then
+			docker rm -f ${container_ids} >/dev/null
+		fi
+	done
+	assert_retired_bundle_services_absent
+}
+
+stop_retired_postgres_for_first_install_rollback() {
+	local container_id=""
+	local container_ids=""
+	container_ids="$(docker ps -aq \
+		--filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_EFFECTIVE}" \
+		--filter "label=com.docker.compose.service=postgres")"
+	while IFS= read -r container_id; do
+		[ -n "${container_id}" ] || continue
+		docker stop --time 30 "${container_id}" >/dev/null
+		if [ "$(docker inspect --format '{{.State.Running}}' "${container_id}")" != "false" ]; then
+			echo "[fail] Retired PostgreSQL rollback container could not be proved stopped." >&2
+			return 1
+		fi
+	done <<<"${container_ids}"
+	echo "[ok] Retired local PostgreSQL container is stopped but retained for pre-install rollback."
 }
 
 prepare_runtime_network_contract
@@ -738,7 +797,6 @@ fi
 
 data_service_reference() {
 	case "$1" in
-		postgres) printf '%s' 'npcink-ai-cloud-postgres:prod' ;;
 		redis) printf '%s' 'npcink-ai-cloud-external-redis:prod' ;;
 		*) return 1 ;;
 	esac
@@ -746,7 +804,6 @@ data_service_reference() {
 
 release_service_role() {
 	case "$1" in
-		postgres) printf '%s' 'postgres' ;;
 		redis) printf '%s' 'external_redis' ;;
 		api) printf '%s' 'api' ;;
 		worker) printf '%s' 'worker' ;;
@@ -760,7 +817,6 @@ release_service_role() {
 
 release_service_reference() {
 	case "$1" in
-		postgres) printf '%s' 'npcink-ai-cloud-postgres:prod' ;;
 		redis) printf '%s' 'npcink-ai-cloud-external-redis:prod' ;;
 		api) printf '%s' 'npcink-ai-cloud-api:prod' ;;
 		worker) printf '%s' 'npcink-ai-cloud-worker:prod' ;;
@@ -826,7 +882,7 @@ remove_exact_candidate_services() {
 				docker rm -f "${container_id}" >/dev/null 2>&1 || true
 			done <<<"${unique_ids}"
 			attempt=$((attempt + 1))
-		done
+	done
 		while IFS= read -r container_id; do
 			[ -n "${container_id}" ] || continue
 			remaining_ids="$(
@@ -1017,31 +1073,48 @@ wait_for_exact_data_service() {
 }
 
 if [ "${LOAD_MODE}" = "data-only" ]; then
-	SERVICES=(postgres redis)
-	POSTGRES_REFERENCE="$(data_service_reference postgres)"
+	SERVICES=(redis)
 	REDIS_REFERENCE="$(data_service_reference redis)"
-	echo "[info] Starting data services only: ${SERVICES[*]}"
-	npcink_ai_cloud_run_timed "create, prove, and start exact data services" \
+	echo "[info] Starting the release-bundled data substrate only: ${SERVICES[*]}"
+	npcink_ai_cloud_run_timed "create, prove, and start exact bundled data substrate" \
 		create_prove_and_start_exact_services 0 "${SERVICES[@]}"
-	POSTGRES_IMAGE_ID="$(awk -F '\t' '$1 == "postgres" {print $3}' <<<"${EXACT_SERVICE_CONTAINER_PLAN}")"
 	REDIS_IMAGE_ID="$(awk -F '\t' '$1 == "redis" {print $3}' <<<"${EXACT_SERVICE_CONTAINER_PLAN}")"
-	POSTGRES_CONTAINER_ID="$(awk -F '\t' '$1 == "postgres" {print $2}' <<<"${EXACT_SERVICE_CONTAINER_PLAN}")"
 	REDIS_CONTAINER_ID="$(awk -F '\t' '$1 == "redis" {print $2}' <<<"${EXACT_SERVICE_CONTAINER_PLAN}")"
-	wait_for_exact_data_service postgres "${POSTGRES_REFERENCE}" "${POSTGRES_IMAGE_ID}" "${POSTGRES_CONTAINER_ID}" || {
-		echo "[fail] PostgreSQL did not reach the frozen exact healthy generation." >&2
-		exit 1
-	}
 	wait_for_exact_data_service redis "${REDIS_REFERENCE}" "${REDIS_IMAGE_ID}" "${REDIS_CONTAINER_ID}" || {
 		echo "[fail] Redis did not reach the frozen exact healthy generation." >&2
 		exit 1
 	}
-	echo "[ok] Data services are ready for one-off migration."
+	echo "[ok] Redis is ready; PostgreSQL remains an external runtime dependency."
 	exit 0
 fi
 
 wait_for_internal_api_ready() {
+	local installation_state=""
+	installation_state="$("${RELEASE_TOOL_PYTHON}" - "${CONFIG_DIR_HOST}/install-state.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+state = payload.get("installation_state")
+if state not in {"pending", "initializing", "complete"}:
+    raise SystemExit(1)
+print(state)
+PY
+	)" || {
+		echo "[fail] Installation state could not be read before API readiness." >&2
+		return 1
+	}
+	if [ "${installation_state}" = "complete" ]; then
+		npcink_ai_cloud_wait_for_internal_endpoint \
+			"${ROOT_DIR}" "/health/ready" "[ok] Installed API is internally ready."
+		return
+	fi
 	npcink_ai_cloud_wait_for_internal_endpoint \
-		"${ROOT_DIR}" "/health/ready" "[ok] Staged API is internally ready."
+		"${ROOT_DIR}" "/health/live" "[ok] Setup-capable API is live."
 }
 
 wait_for_public_health() {
@@ -1082,8 +1155,14 @@ if [ "${LOAD_MODE}" = "traffic-only" ]; then
 	fi
 	SERVICES+=(proxy)
 	echo "[info] Restoring public traffic last: ${SERVICES[*]}"
+	remove_orphans=1
+	if [ "${PRESERVE_FIRST_INSTALL_POSTGRES}" = "1" ]; then
+		remove_orphans=0
+		remove_non_database_retired_orphans
+		echo "[info] Preserving the retired local PostgreSQL container only until first-install finalize or rollback."
+	fi
 	npcink_ai_cloud_run_timed "create, prove, and start exact frontend and proxy" \
-		create_prove_and_start_exact_services 1 "${SERVICES[@]}"
+		create_prove_and_start_exact_services "${remove_orphans}" "${SERVICES[@]}"
 
 	wait_for_public_health
 	for service in "${SERVICES[@]}"; do
@@ -1092,6 +1171,13 @@ if [ "${LOAD_MODE}" = "traffic-only" ]; then
 			exit 1
 		}
 	done
+	if [ "${PRESERVE_FIRST_INSTALL_POSTGRES}" = "1" ]; then
+		# Stop only after the new public path is proved. Every earlier
+		# pre-migration failure therefore leaves the previous PostgreSQL running;
+		# explicit first-install rollback can later recreate/start it from the
+		# preserved previous Compose release.
+		stop_retired_postgres_for_first_install_rollback
+	fi
 	echo "[ok] Public traffic now serves the new Cloud release at ${BASE_URL}"
 	exit 0
 fi

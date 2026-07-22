@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: npcink
       POSTGRES_PASSWORD: npcink
     ports:
-      - "5433:5432"
+      - "${NPCINK_CLOUD_DEV_POSTGRES_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U npcink -d npcink_ai_cloud"]
       interval: 5s
@@ -20,7 +20,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "${NPCINK_CLOUD_DEV_REDIS_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -190,6 +190,7 @@ services:
       CLOUD_API_BASE_URL: http://api:8000
       CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:8010}
       NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
+      NPCINK_CLOUD_DEV_ADMIN_KEY: ${NPCINK_CLOUD_DEV_ADMIN_KEY:-}
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       NODE_OPTIONS: --max-old-space-size=1536
       NEXT_TELEMETRY_DISABLED: "1"

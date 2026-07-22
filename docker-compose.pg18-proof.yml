@@ -1,0 +1,39 @@
+services:
+  postgres18-proof:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    environment:
+      POSTGRES_DB: npcink_ai_cloud
+      POSTGRES_USER: npcink
+      POSTGRES_PASSWORD: ${NPCINK_CLOUD_PG18_PROOF_PASSWORD:-npcink-pg18-proof-only}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U npcink -d npcink_ai_cloud"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql
+
+  migration-proof:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+      args:
+        PACKAGE_EXTRAS: "[dev]"
+    environment:
+      PYTHONPATH: /app
+      NPCINK_CLOUD_ENVIRONMENT: test
+      NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:${NPCINK_CLOUD_PG18_PROOF_PASSWORD:-npcink-pg18-proof-only}@postgres18-proof:5432/npcink_ai_cloud
+      NPCINK_CLOUD_REDIS_URL: redis://127.0.0.1:6379/0
+      NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: npcink-pg18-proof-internal-token-32b
+      NPCINK_CLOUD_ADMIN_SESSION_SECRET: npcink-pg18-proof-admin-session-32b
+      NPCINK_CLOUD_SERVICE_SETTINGS_SECRET: Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4=
+      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: pg18-proof-service-settings-v1
+      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET: UlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlI=
+      NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID: pg18-proof-runtime-data-v1
+      NPCINK_CLOUD_PORTAL_JWT_SECRET: npcink-pg18-proof-portal-jwt-secret-32b
+    depends_on:
+      postgres18-proof:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    profiles: ["proof"]

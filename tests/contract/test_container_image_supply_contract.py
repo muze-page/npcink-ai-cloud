@@ -279,7 +279,8 @@ def test_production_image_lock_matches_every_dockerfile_and_deploy_compose() -> 
     assert receipt["status"] == "passed"
     assert inputs["python_runtime"]["tag"] == "python:3.14-alpine"
     assert inputs["uv_builder"]["reference"].startswith("ghcr.io/astral-sh/uv:0.11.29@sha256:")
-    assert inputs["postgres_base"]["source_file"] == "Dockerfile.postgres"
+    assert "postgres_base" not in inputs
+    assert not (ROOT / "Dockerfile.postgres").exists()
     assert inputs["node_frontend"]["tag"] == "node:22-alpine"
     assert inputs["nginx"]["source_files"] == [
         "docker-compose.prod.yml",
@@ -299,11 +300,7 @@ def test_production_image_lock_matches_every_dockerfile_and_deploy_compose() -> 
             assert "@" not in record["release_reference"]
 
     outputs = {record["key"]: record for record in lock["application_outputs"]}
-    assert outputs["postgres"]["reference"] == "npcink-ai-cloud-postgres:prod"
-    assert outputs["postgres"]["scan_by_default"] is True
-    postgres_dockerfile = (ROOT / "Dockerfile.postgres").read_text()
-    assert "rm /usr/local/bin/gosu" in postgres_dockerfile
-    assert postgres_dockerfile.rstrip().endswith("USER postgres")
+    assert "postgres" not in outputs
 
     for record in [*lock["production_inputs"], *lock["scanner_images"]]:
         assert re.fullmatch(r"sha256:[0-9a-f]{64}", record["digest"])
@@ -372,7 +369,6 @@ def test_compose_release_image_variables_reject_ungoverned_forms(
         ("callback-worker", "npcink-ai-cloud-callback-worker:prod"),
         ("frontend", "npcink-ai-cloud-frontend:prod"),
         ("ops-worker", "npcink-ai-cloud-ops-worker:prod"),
-        ("postgres", "npcink-ai-cloud-postgres:prod"),
         ("proxy", "npcink-ai-cloud-external-nginx:prod"),
         ("redis", "npcink-ai-cloud-external-redis:prod"),
         ("release-one-off", "npcink-ai-cloud-api:prod"),

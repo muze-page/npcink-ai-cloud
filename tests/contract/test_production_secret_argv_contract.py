@@ -223,7 +223,7 @@ elif path == "/portal/v1/session":
             "site_id": "site_runtime",
         },
     }
-elif path == "/admin/auth/bootstrap":
+elif path == "/admin/auth/login":
     state_path = Path(os.environ["CURL_STATE_PATH"])
     count = int(state_path.read_text(encoding="utf-8") or "0") if state_path.exists() else 0
     state_path.write_text(str(count + 1), encoding="utf-8")
@@ -278,9 +278,21 @@ def test_production_workflows_serialize_host_mutation_and_confirm_prune() -> Non
     assert "printf '%q' \"$1\"" in maintenance
     assert '"${ssh_target}" "${remote_command}"' in maintenance
     assert '"${ssh_target}" bash -s --' not in maintenance
-    assert 'mkdir -- "${remote_dir}/.deploy-lock"' in maintenance
+    assert 'mkdir -m 0700 -- "${remote_dir}/.deploy-lock"' in maintenance
     assert 'rmdir -- "${remote_dir}/.deploy-lock"' in maintenance
     assert "Production deploy or another mutating operation holds the lock." in maintenance
+    assert 'exec 9<>"${install_lock_file}"' not in maintenance
+    assert 'stat -c \'%u:%g:%a\'' in maintenance
+    assert '"0:0:700"' in maintenance
+    assert "npcink_ai_cloud_start_install_lock_broker" in maintenance
+    assert 'release_tool_python="/usr/bin/python3.11"' in maintenance
+    assert "validate-installation-complete.py" in maintenance
+    assert '"${remote_dir}/.installation-complete"' in maintenance
+    assert '"${remote_dir}/.first-install-pending.json"' in maintenance
+    assert "explicit first-install finalize acceptance" in maintenance
+    assert maintenance.index("validate_completed_installation") < maintenance.index(
+        "docker image prune -af"
+    )
 
 
 def test_secret_bearing_cli_and_http_argv_patterns_are_retired() -> None:
@@ -488,7 +500,7 @@ exec /bin/bash "$@"
     credentials = tmp_path / "release-credentials.json"
     sentinels = {
         "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN": "internal-token-sentinel",
-        "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN": "admin-token-sentinel",
+        "NPCINK_CLOUD_ADMIN_KEY": "admin-key-sentinel",
         "NPCINK_CLOUD_RELEASE_MEMBER_EMAIL": "member@example.test",
         "NPCINK_CLOUD_PORTAL_LOGIN_CODE": "login-code-sentinel",
         "NPCINK_CLOUD_RELEASE_SITE_ID": "site_runtime",
@@ -508,7 +520,7 @@ exec /bin/bash "$@"
             "FORBIDDEN_CURL_ENV_KEYS": ",".join(
                 (
                     "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
-                    "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
+                    "NPCINK_CLOUD_ADMIN_KEY",
                     "NPCINK_CLOUD_PORTAL_LOGIN_CODE",
                     "NPCINK_CLOUD_RELEASE_KEY_SECRET",
                     "NPCINK_CLOUD_SECRET",

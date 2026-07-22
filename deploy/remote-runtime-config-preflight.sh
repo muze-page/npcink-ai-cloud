@@ -1,48 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-
-# Shared compose/env helpers for deploy scripts.
 . "${ROOT_DIR}/deploy/common.sh"
 npcink_ai_cloud_require_deploy_lock_owner "${ROOT_DIR}"
-
+npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 npcink_ai_cloud_require_cmd docker
-RELEASE_TOOL_PYTHON="$(npcink_ai_cloud_release_tool_python)"
+
+RELEASE_TOOL_PYTHON="${NPCINK_CLOUD_RELEASE_TOOL_PYTHON:-/usr/bin/python3.11}"
 MANIFEST_HELPER="${ROOT_DIR}/scripts/verify-release-bundle-manifest.py"
-npcink_ai_cloud_require_release_tool_python "${RELEASE_TOOL_PYTHON}"
+npcink_ai_cloud_require_host_release_tool_python "${RELEASE_TOOL_PYTHON}"
+export NPCINK_CLOUD_RELEASE_TOOL_PYTHON="${RELEASE_TOOL_PYTHON}"
 EXPECTED_API_IMAGE_ID="$(
 	"${RELEASE_TOOL_PYTHON}" "${MANIFEST_HELPER}" loaded-role-daemon-id \
 		--root "${ROOT_DIR}" --role api
 )"
 
-npcink_ai_cloud_run_timed "wait for configured external database" \
-	npcink_ai_cloud_compose_run_with_image_proof \
+if ! npcink_ai_cloud_compose_run_with_image_proof \
 	"${ROOT_DIR}" api npcink-ai-cloud-api:prod "${EXPECTED_API_IMAGE_ID}" \
-	sh -ceu '
-		attempt=0
-		while [ "${attempt}" -lt 30 ]; do
-			if alembic current >/dev/null 2>&1; then
-				exit 0
-			fi
-			attempt=$((attempt + 1))
-			sleep 2
-		done
-		echo "[fail] Configured external database did not become ready." >&2
-		exit 1
-	'
-npcink_ai_cloud_run_timed "alembic upgrade" \
-	npcink_ai_cloud_compose_run_with_image_proof \
-	"${ROOT_DIR}" api npcink-ai-cloud-api:prod "${EXPECTED_API_IMAGE_ID}" \
-	sh -ceu 'alembic upgrade head
-python - <<'"'"'PY'"'"'
+	sh -ceu 'python - <<'"'"'PY'"'"'
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.core.db import get_engine
-from scripts.alembic_revision_gate import require_exact_candidate_heads
+from scripts.alembic_revision_gate import require_upgradeable_revisions
 
 settings = get_settings()
 engine = get_engine(
@@ -54,12 +38,22 @@ engine = get_engine(
     connect_timeout_seconds=settings.database_connect_timeout_seconds,
 )
 with engine.connect() as connection:
+    version_num = int(connection.execute(text("SHOW server_version_num")).scalar_one())
+    if version_num // 10000 != 18:
+        raise SystemExit(2)
     observed = {
         str(row[0])
         for row in connection.execute(text("SELECT version_num FROM alembic_version"))
     }
-require_exact_candidate_heads(
-    ScriptDirectory.from_config(Config("alembic.ini")), observed
-)
-PY'
-echo "[ok] Migration completed without starting application services; exact candidate Alembic head was proved."
+try:
+    require_upgradeable_revisions(
+        ScriptDirectory.from_config(Config("alembic.ini")), observed
+    )
+except ValueError:
+    raise SystemExit(3)
+PY' >/dev/null 2>&1; then
+	echo "[fail] Candidate image could not prove protected runtime config, PostgreSQL 18 TLS reachability, and an upgradeable Alembic revision." >&2
+	exit 1
+fi
+
+echo "[ok] Candidate image proved protected runtime config, PostgreSQL 18 TLS reachability, and an upgradeable Alembic revision before writers stopped."

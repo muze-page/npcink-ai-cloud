@@ -14,6 +14,9 @@ npcink_ai_cloud_require_cmd mktemp
 
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
+if [ -z "${INTERNAL_AUTH_TOKEN}" ]; then
+	INTERNAL_AUTH_TOKEN="$(npcink_ai_cloud_read_internal_token_projection "${ROOT_DIR}")"
+fi
 SITE_ID="${NPCINK_CLOUD_SITE_ID:-site_smoke}"
 KEY_ID="${NPCINK_CLOUD_KEY_ID:-key_default}"
 SECRET="${NPCINK_CLOUD_SECRET:-}"

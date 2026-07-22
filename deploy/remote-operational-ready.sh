@@ -7,9 +7,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 RELEASE_TOOL_PYTHON="$(npcink_ai_cloud_release_tool_python)"
 
-npcink_ai_cloud_require_internal_token
-INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
-
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 WORKER_CUTOFF="${NPCINK_CLOUD_WORKER_CUTOFF:-}"
 
@@ -142,6 +139,8 @@ import time
 import urllib.error
 import urllib.request
 
+from app.core.runtime_config import production_runtime_enabled, read_internal_auth_token
+
 cutoff_raw, attempts_raw, sleep_raw = sys.argv[1:]
 required_workers = {"runtime_queue", "callback_dispatch", "ops_cadence"}
 
@@ -166,11 +165,22 @@ if host.startswith("*."):
 if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", host):
     raise SystemExit("[fail] Internal readiness Host is invalid.")
 
+try:
+    internal_token = read_internal_auth_token()
+except (OSError, RuntimeError, ValueError):
+    if production_runtime_enabled():
+        raise
+    # Focused dev/test harnesses may retain the explicit environment seam;
+    # production internal readiness must always consume the projection.
+    internal_token = os.environ.get("NPCINK_CLOUD_INTERNAL_AUTH_TOKEN", "").strip()
+if not internal_token:
+    raise SystemExit("[fail] Internal readiness credential is unavailable.")
+
 request = urllib.request.Request(
     "http://127.0.0.1:8000/internal/service/observability/summary",
     headers={
         "Host": host,
-        "X-Npcink-Internal-Token": os.environ["NPCINK_CLOUD_INTERNAL_AUTH_TOKEN"],
+        "X-Npcink-Internal-Token": internal_token,
     },
 )
 last_error = "no response"
@@ -227,6 +237,8 @@ PY
 	exit 0
 fi
 
+npcink_ai_cloud_require_internal_token
+INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 npcink_ai_cloud_require_cmd curl
 npcink_ai_cloud_require_cmd mktemp
 unset NPCINK_CLOUD_INTERNAL_AUTH_TOKEN

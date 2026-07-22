@@ -2,7 +2,7 @@
 
 > Status: canonical release gate
 >
-> Updated: 2026-07-20
+> Updated: 2026-07-22
 >
 > Scope: formal Cloud release execution, production environment verification,
 > smoke, and rollback readiness
@@ -24,6 +24,19 @@ It is intentionally split into:
 Cloud may be promoted for controlled production validation with explicit
 operator approval. It may be declared generally available only when every
 `Required` item below is complete.
+
+Current deployment authority is the fresh PostgreSQL 18 contract:
+
+- first deployment must report the explicit non-secret state
+  `installation_state=pending`, skip all post-install preflight/smoke, complete
+  `/setup`, run the complete-only smoke, WordPress/RDS/observation acceptance,
+  and only then run `deploy/first-install-finalize.sh`;
+- ordinary deployment must report `installation_state=complete`, pass the
+  candidate RDS PostgreSQL 18/TLS/Alembic preflight, and then run the existing
+  small-customer preflight and release smoke;
+- any section explicitly labelled `Historical` or `non-normative` preserves
+  evidence only. Its unchecked boxes are not current release gates and no
+  historical activation or backup receipt is consumed by ordinary deployment.
 
 ## 2. Current Repository Status
 
@@ -69,11 +82,11 @@ All items in this section are `Required`.
 
 ### 3.1 Secrets
 
-- [x] `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` is set to a production value
-- [x] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
-- [x] `NPCINK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
-- [ ] `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is a dedicated canonical padded
-  URL-safe Base64 value that decodes to exactly 32 random bytes
+- [ ] first install generated the internal token, `NPCINK_CLOUD_ADMIN_KEY`, and
+  `NPCINK_CLOUD_ADMIN_SESSION_SECRET` under protected shared config; none is an
+  `.env.deploy` assignment
+- [ ] the generated Service Settings root is canonical padded URL-safe Base64
+  that decodes to exactly 32 random bytes
 - [ ] `NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID` identifies the Service
   Settings target root without containing secret material
 - [ ] `NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET` is a separate canonical
@@ -85,18 +98,28 @@ All items in this section are `Required`.
 - [ ] both target root/key-ID pairs are present for `api`, `worker`,
   `callback-worker`, and `ops-worker`, and all four variables are absent from
   `frontend`
+
+#### Historical PG16 persisted-secret migration evidence (non-normative)
+
+The following item records the retired in-place migration. A fresh PostgreSQL
+18 empty initialization has no legacy rows to migrate and does not consume this
+evidence.
+
 - [ ] all eight Provider Connection ciphertexts and four Service Setting secret
   entries were migrated losslessly by
   `python -m app.dev.reencrypt_service_secrets`; migration preserved credential
   values without manual entry or a replacement save operation
+
+#### Current first-install secret checks resume
+
 - [x] retired `OPS_*` and runtime `OPENAI_COMPATIBLE_*` names are absent from `.env.deploy`
 - [x] QQ Open Platform uses only `/open/auth/qq/callback`
 - [ ] stored service credentials use active `sse.v1` envelopes and decrypt after
   restart without raw-Fernet, legacy, dual-read, Admin-session, Portal JWT, or
   internal-token fallback
-- [x] `NPCINK_CLOUD_PORTAL_JWT_SECRET` is set to a production value
+- [ ] the generated Portal JWT root is protected by `runtime-config.json` mode `0600`
 - [x] at least one real hosted-runtime provider credential is configured for the release host
-- [x] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is not equal to `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
+- [ ] the admin-key digest differs from SHA-256 of the projected internal token
 - [x] browser origin allowlist and trusted host settings match the public release origin
 - [ ] the exact release payload contains no `.env.deploy`; any uploaded env was
   transferred separately through the protected incoming directory
@@ -117,6 +140,18 @@ All items in this section are `Required`.
   baseline; production also includes required internal container/loopback hosts
 - [x] `/admin/service-settings` Portal public URL matches the real public portal URL
 - [ ] operator-owned external Edge and TLS are valid for the release host
+- [ ] Runtime Compose sets `NPCINK_CLOUD_EXTERNAL_EDGE_READY=true`, and
+  `NPCINK_CLOUD_DOMAIN_NAME=cloud.npc.ink` exactly matches the HTTPS base URL
+- [ ] production deploy and mutating maintenance share
+  `production-host-mutation`; `safe-prune` requires its exact confirmation and
+  acquires both the remote `.deploy-lock` and the validated shared install lock
+
+#### Historical P1-E06 Edge migration evidence (non-normative)
+
+The detailed binding and certificate-receipt checklist below preserves the
+retired Edge/P1-E06 migration evidence. It is not a current PostgreSQL 18 first
+install or ordinary-deploy gate.
+
 - [ ] host NGINX references the Certbot live-lineage `fullchain.pem` and
   `privkey.pem` directly; both symlinks resolve to root-owned non-symlink files
   inside their matching `/etc/letsencrypt/archive` lineage, the private-key
@@ -159,8 +194,8 @@ All items in this section are `Required`.
   `/usr/bin/python3.11`; its root-owned mode-`0600` evidence is no older than
   seven days, binds `renewal_service`, `certbot_real_path`,
   `renewal_exec_start_sha256`, certificate/private-key archive targets, and the
-  actual NGINX TLS binding, and `verify` rechecked all of them; there is
-  currently no real receipt, so production remains blocked
+  actual NGINX TLS binding, and `verify` rechecked all of them; at that dated
+  snapshot no receipt existed
 - [ ] the active env explicitly persists all four values without defaults
   after the initial P1-E06 orchestrator's lock-held handoff; the operator did
   not edit the active env:
@@ -178,8 +213,8 @@ All items in this section are `Required`.
   acquires the remote `.deploy-lock` before pruning any image or release
 
 P1-E06 inventory note (2026-07-20): host NGINX was absent, Caddy was still
-running, and the readiness flag was absent. This dated context may be updated
-after remediation; the stable unchecked gate above remains authoritative.
+running, and the readiness flag was absent. This is historical context only;
+the unchecked evidence above is not authoritative for current deployment.
 
 ### 3.3 Portal Login And Email Service Settings
 
@@ -193,26 +228,24 @@ after remediation; the stable unchecked gate above remains authoritative.
 
 ### 3.4 Production Guardrails
 
-- [ ] the decision in
-  `docs/python-3-14-6-controlled-production-validation-risk-decision-2026-07-21.md`
-  is still within its 2026-08-05 expiry; all three NVD/CISA SSVC exploitation
-  values were freshly rechecked as `none`, and GA is not authorized
-- [ ] the owner-only mode-`0600`, bundle-external
-  `npcink.controlled_production_cve_risk_acceptance.v1` file uses
-  `status=accepted_by_operator` and `scope=controlled_production_validation_only`;
-  it is absent from Git, the bundle, and every release tree
-- [ ] the operator manually compared the acceptance with the exact manifest,
-  commit, tree, outer bundle SHA-256, scan-index SHA-256, API scan-receipt
-  SHA-256, allowlist SHA-256, Linux/AMD64 platform, exact three findings, and
-  zero unallowlisted blocking findings, then recorded the acceptance file's
-  own SHA-256 separately
-- [ ] deployment, image-scan, and P1-E06 tooling do not consume the CVE
-  acceptance; absence, mismatch, expiry, changed threat intelligence, or
-  changed scan evidence stopped all production-host mutation
+- [ ] the exact release canonical allowlist no longer contains any Python
+  `3.14.6` exception for `CVE-2026-11940`, `CVE-2026-11972`, or
+  `CVE-2026-15308`, and a fresh exact-image scan is green
+- [ ] while any of those entries remains, the machine-executable first-install
+  gate fails before remote mkdir, upload, deployment lock, image, container, or
+  database mutation; the old bundle-external
+  `npcink.controlled_production_cve_risk_acceptance.v1` operator acceptance
+  cannot bypass this current PostgreSQL 18 gate
 - [ ] the production SSH user is explicit and the manually dispatched
   `Deploy Production` workflow accepted the exact operator confirmation,
   GitHub `production` Environment approval, and a completed successful
   `Cloud CI` run for the exact production commit; no push triggered deployment
+- [ ] the deployment emitted exactly one explicit `installation_state` result;
+  no HTTP failure or Setup-route response was interpreted as pending
+- [ ] a `pending` result skipped every post-install preflight/smoke step and
+  produced the root/TTY setup-code, `/setup`, admin-key, complete-only smoke,
+  WordPress/RDS/observation, and final acceptance handoff; a `complete` result
+  ran the ordinary-deploy post-install gates
 - [ ] host release tooling selected `/usr/bin/python3.11`, proved Python
   `>=3.11` before any remote mkdir/upload/lock, and remained separate from the
   Cloud application image's Python `>=3.12` runtime
@@ -227,7 +260,8 @@ after remediation; the stable unchecked gate above remains authoritative.
 - [x] no stub-only login path is used during production smoke
 - [x] `ops-worker` is deployed and running with the intended cadence intervals
 - [x] `callback-worker` is deployed and running for terminal callback delivery
-- [x] `NPCINK_CLOUD_API_WORKERS=1` matches the current 2 CPU / 1.8GiB RAM host budget
+- [ ] production Compose fixes Gunicorn to exactly one API worker and
+  `.env.deploy` contains no `NPCINK_CLOUD_API_WORKERS` override
 - [x] `NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS` is set for the release host
 - [x] `NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS` is set for the release host
 - [x] `NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS` is set for the release host
@@ -246,11 +280,16 @@ after remediation; the stable unchecked gate above remains authoritative.
   was proven before mutation; the option was not used for a first deploy
 - [ ] ordinary production deployment proved an existing managed `current` release;
   no missing-pointer state was treated as an implicit host bootstrap
-- [ ] before image loading, the frozen previous PostgreSQL revision was read;
-  `20260710_0058` was rejected outside the P1-E06 orchestrator
-- [ ] formal production deploy validated the root-owned
-  `p1_e06_global_activation.v1` receipt, its complete digest-bound per-release
-  evidence, and revision `0068` or a descendant in the staged Alembic graph
+- [ ] before image mutation, protected state proved `complete`,
+  `database_contract=pg18_empty_initialization.v1`, and the exact
+  `runtime-config.json` SHA-256
+- [ ] after exact images loaded and before old writers stopped, the candidate
+  API proved private RDS resolution, TLS `verify-full`, PostgreSQL major 18,
+  and exactly one known Alembic revision at the candidate head or on its
+  ancestor chain; after migration it proved the exact sole candidate head
+- [ ] `.env.deploy` contained no database credential, database URL, runtime
+  root secret, or exact-bundle smoke override; these values remained in the
+  protected structured configuration where applicable
 - [ ] post-load verification published only the fixed
   `.release-state/<release-name>/target-daemon-images.json` map; both state
   directories were owner-controlled non-symlink mode-`0700` directories, the
@@ -267,8 +306,9 @@ after remediation; the stable unchecked gate above remains authoritative.
   revalidated map binding, current governed tags, and candidate containers;
   any unprovable release-root trust stopped the cutover and required a fresh
   `prepare-only` plus full verifier run
-- [ ] the observed cutover order was `prepare images -> stop old app/write
-  services -> data -> migration/refresh -> pointer -> API -> workers ->
+- [ ] the observed cutover order was `state/digest -> prepare images ->
+  candidate RDS PG18/TLS/Alembic preflight -> stop old app/write services ->
+  Redis -> RDS migration/refresh -> pointer -> API -> workers ->
   release-specific worker proof -> generic operational-ready -> traffic`
 - [ ] each `data-only`, `api-only`, `workers-only`, and `traffic-only` batch
   froze all required target-daemon IDs and pinned its Compose image seams,
@@ -294,13 +334,13 @@ after remediation; the stable unchecked gate above remains authoritative.
   fail-closed and never auto-starts the old application
 - [ ] a recovery with incomplete stopped-service, pointer, or failure-marker
   evidence retains `.deploy-lock` for manual recovery
-- [ ] previous Compose recovery used an isolated process environment so new env
-  values could not override the previous release env; restored/removed image
-  tags were verified against the rollback map; the recovered PostgreSQL, Redis,
-  proxy, frontend, API, and three worker containers each matched the previous
-  Compose reference and rollback-map SHA256
-- [ ] the protected runtime env remained available to Compose/backend by file,
-  while the root host shell imported only the reviewed exact key allowlist
+- [ ] recovery used an isolated process environment so new env values could not
+  override the matched release inputs; RDS recovery used the matching restore
+  point and protected structured configuration, never old code against a
+  migrated database
+- [ ] protected structured configuration remained available read-only to the
+  backend, while the root host shell imported only the reviewed exact env-key
+  allowlist
 - [ ] successful deployment retained the per-release external env state and
   removed the temporary rollback-image map and private rollback tags
 - [ ] post-activation incoming/tag/map/marker/unlock failure returned nonzero,
@@ -329,30 +369,29 @@ after remediation; the stable unchecked gate above remains authoritative.
 
 All items in this section are `Required`.
 
-- [x] target database backup exists and restore path is known
-- [ ] the P1-E06 pre-cutover
-  root-owned non-symlink mode-`0400` backup and checksum are fresh and match
-  the source revision `20260710_0058`
-- [ ] the operator pulled the backup and checksum from production with `scp` to
-  independent off-host storage and verified SHA-256 on that local copy
-- [ ] the waiting cutover accepted only the atomically uploaded mode-`0600`
-  `p1_e06_off_host_backup_receipt.v1` receipt with that same SHA
-- [ ] `off-host-receipt-verified.json` persists the exact validated receipt,
-  source path, and receipt SHA-256, and terminal evidence contains that digest
-- [ ] an independent disposable PostgreSQL 16 restore passed the `0058 -> 0068`
-  migration and both encryption rehearsals: Runtime Data `18 = 17 + 1`, Service
-  Settings `12 = 8 + 4`, and `30` legacy rows total
-- [ ] the pre-cutover code revision, old Runtime Data root, and old Service
-  Settings root are recoverable together with that backup
-- [x] migration state is confirmed on the release target
-- [ ] schema drift has been checked on the target host
-- [x] rollback plan for the database has been written down
-
-Operator note:
-
-- if the target database was originally bootstrapped outside Alembic control, verify migration baseline explicitly before release
-- the 2026-07-10 production restore drill passed against migration `0057`; see
-  `docs/production-backup-restore-drill-2026-07-10.md`
+- [ ] Alibaba RDS PostgreSQL major version is exactly 18, uses only the approved
+  private endpoint, and resolves only to approved private addresses
+- [ ] the application account and empty database exist with only the required
+  DDL, index, sequence, and transaction permissions
+- [ ] the authoritative RDS CA is stored as protected `rds-ca.pem`; the real
+  connection passed TLS `verify-full`
+- [ ] the local/CI PG18 proof passed the complete empty Alembic upgrade,
+  idempotent replay, JSONB, timestamptz, partial index, `ON CONFLICT`,
+  `SKIP LOCKED`, and queue-fencing semantics; this proof is not accepted as RDS
+  TLS evidence
+- [ ] protected `install-state.json` and `runtime-config.json` carry the
+  current `pg18_empty_initialization.v1` contract and matching SHA-256
+- [ ] the candidate-image RDS/TLS/PG18/Alembic preflight passed before old
+  writers stopped
+- [ ] an RDS backup exists, its restore path is known, and a restore drill to a
+  separate validation target passed
+- [ ] the Basic Edition instance is used only for development/validation and is
+  scheduled to upgrade to high availability before the first real user, paid
+  workload, or irreplaceable data
+- [ ] migration state and schema drift are confirmed on the release target
+- [ ] rollback identifies a matched release, protected runtime configuration,
+  and RDS restore point; no automatic old-code connection to a migrated schema
+  is allowed
 
 ## 5. Formal Release Smoke
 
@@ -373,16 +412,19 @@ Preferred GitHub Actions path:
 
 - add the same values to GitHub Actions secrets before the formal release:
   - `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
-  - `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`
+  - `NPCINK_CLOUD_ADMIN_KEY`
   - `NPCINK_CLOUD_RELEASE_MEMBER_EMAIL`
   - `NPCINK_CLOUD_PORTAL_LOGIN_CODE`
   - `NPCINK_CLOUD_RELEASE_SITE_ID`
   - `NPCINK_CLOUD_RELEASE_KEY_ID`
   - `NPCINK_CLOUD_RELEASE_KEY_SECRET`
-- after a successful manually dispatched `Deploy Production` run, confirm its
-  `Small-customer preflight` step passed and its optional `Formal release smoke`
-  step either passed or explicitly reported that the required secrets were not
-  configured;
+- after a successful manually dispatched `Deploy Production` run, first inspect
+  its explicit `installation_state` output. For `pending`, confirm both
+  post-install steps were skipped, then follow the Setup, independent smoke,
+  WordPress/RDS/observation, and finalization handoff. For `complete`, confirm
+  `Small-customer preflight` passed and optional
+  `Formal release smoke` either passed or explicitly reported that the required
+  secrets were not configured;
 - manually run the `Release Smoke` workflow from the `production` branch;
 - keep `require_alipay_enabled=true` for a paid trial release;
 - treat a green `Release Smoke` run as the formal smoke evidence for the items
@@ -419,7 +461,7 @@ Required outcomes:
 - [ ] `POST /portal/v1/auth/code/verify` succeeds with a real login code in the formal release smoke
 - [ ] `GET /portal/v1/session` succeeds after formal smoke login
 - [x] `GET /admin/login` loads
-- [ ] `POST /admin/auth/bootstrap` succeeds in the formal release smoke with the production admin token
+- [ ] `POST /admin/auth/login` succeeds in the formal release smoke with the operator admin key
 - [ ] `GET /admin/session` succeeds after formal smoke admin login
 - [x] signed `GET /v1/catalog/models` returns the model catalog
 - [x] signed `POST /v1/runtime/execute` succeeds against the production provider configuration
@@ -460,8 +502,8 @@ Post-release timing evidence:
 
 All items in this section are `Required`.
 
-- [x] `platform_admin` bootstrap token storage location is defined
-- [x] bootstrap token rotation procedure is defined
+- [x] `platform_admin` admin-key digest storage location is defined
+- [x] admin-key and admin-session rotation procedure is defined
 - [x] internal service token rotation procedure is defined
 - [x] session invalidation procedure is defined
 - [ ] the exact Linux/AMD64 bundle was staged with
@@ -475,6 +517,13 @@ All items in this section are `Required`.
   refreshing, seeding, smoking, or starting traffic; the remote argument
   envelope contained only mode/root/release/incoming/host-Python values and
   early failure left no incoming object, partial release, or lock
+### Historical PG16/P1-E06 evidence (non-normative)
+
+The following unchecked boxes are preserved as an audit record of the retired
+cutover. They are not current release gates, do not require an activation
+receipt, and must not reopen a compatibility path after fresh PostgreSQL 18
+initialization.
+
 - [ ] the independent P1-E06 Edge topology and certificate evidence were closed
   before the orchestrator: host NGINX active, `nginx -t` green, exact-host
   loopback HTTPS green, retired Caddy stopped, and explicit renewal
@@ -573,6 +622,9 @@ All items in this section are `Required`.
   accepts only active `rde.v1` and `sse.v1` envelopes, and rejects raw Fernet
 - [ ] the operator understands that normal deploy/secret rotation must not
   directly rotate either the Service Settings or Runtime Data root/key-ID pair
+
+### Current operational checks
+
 - [x] operator has checked `GET /internal/service/ops/cadence` and all required cadence tasks are fresh
 - [x] operator has checked `GET /internal/service/observability/summary` and worker heartbeats are fresh
 - [ ] operator has retained the exact worker cutoff and evidence that each new

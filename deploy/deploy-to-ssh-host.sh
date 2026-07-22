@@ -39,7 +39,6 @@ WITH_PORTAL_SMOKE=0
 REFRESH_PROVIDERS="${NPCINK_CLOUD_REFRESH_PROVIDERS:-0}"
 WITH_OPERATIONAL_READY="${NPCINK_CLOUD_WITH_OPERATIONAL_READY:-0}"
 SKIP_FRONTEND_IMAGE="${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
-REQUIRE_P1_E06_RECEIPT="${NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT:-1}"
 STAGE_ONLY_DISALLOWED_CLI=()
 
 while [ "$#" -gt 0 ]; do
@@ -222,15 +221,16 @@ case "/${REMOTE_DIR#/}/" in
 		;;
 esac
 
-if [ "${REQUIRE_P1_E06_RECEIPT}" != "0" ] && [ "${REQUIRE_P1_E06_RECEIPT}" != "1" ]; then
-	echo "[fail] NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT must be 0 or 1." >&2
-	exit 1
-fi
-if [ "${STAGE_ONLY}" != "1" ] && [ "${REQUIRE_P1_E06_RECEIPT}" != "1" ]; then
-	echo "[fail] Full deployment cannot disable the P1-E06 activation receipt gate." >&2
-	exit 1
-fi
-
+for forbidden_deploy_override in \
+	NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV \
+	NPCINK_CLOUD_DEPLOY_SMOKE_FRONTEND_ENV \
+	NPCINK_CLOUD_DEPLOY_SMOKE_SETUP_STATE_OVERRIDE \
+	NPCINK_CLOUD_API_WORKERS; do
+	if [ -n "${!forbidden_deploy_override:-}" ]; then
+		echo "[fail] Production deployment rejects contract override: ${forbidden_deploy_override}" >&2
+		exit 1
+	fi
+done
 if [ -z "${SSH_HOST}" ]; then
 	echo "[fail] Missing --ssh-host or NPCINK_CLOUD_DEPLOY_SSH_HOST" >&2
 	exit 1
@@ -390,6 +390,108 @@ if [ "${BUNDLE_PLATFORM}" != "${IMAGE_PLATFORM}" ]; then
 	exit 1
 fi
 
+if [ "${STAGE_ONLY}" != "1" ]; then
+	REMOTE_INSTALLATION_STATE="$(
+		ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" \
+			"$(remote_shell_arg "${DEPLOY_HOST_PYTHON}") - $(remote_shell_arg "${REMOTE_DIR}/shared/config/install-state.json")" <<'PY'
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+MAX_INSTALL_STATE_BYTES = 1024 * 1024
+
+
+def validate_metadata(metadata: os.stat_result) -> None:
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o640
+        or (metadata.st_uid, metadata.st_gid) != (999, 999)
+    ):
+        raise ValueError("Remote install-state.json protection is unsafe.")
+
+
+def snapshot(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+path = Path(sys.argv[1])
+try:
+    path_metadata_before = path.lstat()
+except FileNotFoundError:
+    print("missing")
+    raise SystemExit(0)
+descriptor = -1
+try:
+    validate_metadata(path_metadata_before)
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0),
+    )
+    descriptor_metadata_before = os.fstat(descriptor)
+    validate_metadata(descriptor_metadata_before)
+    expected_snapshot = snapshot(descriptor_metadata_before)
+    if snapshot(path_metadata_before) != expected_snapshot:
+        raise ValueError("install-state path changed while opening")
+    chunks: list[bytes] = []
+    observed_bytes = 0
+    while True:
+        chunk = os.read(descriptor, 65536)
+        if not chunk:
+            break
+        observed_bytes += len(chunk)
+        if observed_bytes > MAX_INSTALL_STATE_BYTES:
+            raise ValueError("install-state.json exceeds the protected size limit")
+        chunks.append(chunk)
+    descriptor_metadata_after = os.fstat(descriptor)
+    path_metadata_after = path.lstat()
+    validate_metadata(descriptor_metadata_after)
+    validate_metadata(path_metadata_after)
+    if (
+        snapshot(descriptor_metadata_after) != expected_snapshot
+        or snapshot(path_metadata_after) != expected_snapshot
+    ):
+        raise ValueError("install-state path changed while reading")
+    payload = json.loads(b"".join(chunks).decode("utf-8"))
+except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+    raise SystemExit("[fail] Remote installation state is unreadable.") from exc
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+state = payload.get("installation_state") if isinstance(payload, dict) else None
+if state not in {"pending", "initializing", "complete"}:
+    raise SystemExit("[fail] Remote installation state is unsupported.")
+print(state)
+PY
+	)"
+	case "${REMOTE_INSTALLATION_STATE}" in
+		missing|pending)
+			"${LOCAL_RELEASE_TOOL_PYTHON}" \
+				"${ROOT_DIR}/scripts/check-first-install-cve-gate.py" \
+				--bundle "${BUNDLE_PATH}" >/dev/null || {
+				echo "[fail] First-install host mutation is forbidden while the exact release retains the Python 3.14.6 CVE exceptions." >&2
+				exit 1
+			}
+			;;
+		initializing)
+			echo "[fail] Remote first installation is initializing; deployment will not mutate the host." >&2
+			exit 1
+			;;
+		complete) ;;
+	esac
+fi
+
 BUNDLE_CHECKSUM_LINE="$(cat "${BUNDLE_CHECKSUM_PATH}")"
 BUNDLE_SHA256="${BUNDLE_CHECKSUM_LINE%% *}"
 if [[ ! "${BUNDLE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -501,7 +603,6 @@ if [ "${STAGE_ONLY}" != "1" ]; then
 	NPCINK_INPUT_REMOTE_COMPOSE_FILE="${REMOTE_COMPOSE_FILE}" \
 	NPCINK_INPUT_REFRESH_PROVIDERS="${REFRESH_PROVIDERS}" \
 	NPCINK_INPUT_WITH_OPERATIONAL_READY="${WITH_OPERATIONAL_READY}" \
-	NPCINK_INPUT_REQUIRE_P1_E06_RECEIPT="${REQUIRE_P1_E06_RECEIPT}" \
 		"${LOCAL_RELEASE_TOOL_PYTHON}" - "${LOCAL_DEPLOY_INPUT_PATH}" <<'PY'
 from __future__ import annotations
 
@@ -623,7 +724,6 @@ case "${REMOTE_SEQUENCE_MODE}" in
 		REMOTE_COMPOSE_FILE=""
 		REFRESH_PROVIDERS=0
 		WITH_OPERATIONAL_READY=0
-		REQUIRE_P1_E06_RECEIPT=0
 		STAGE_ONLY=1
 		;;
 	deploy)
@@ -678,7 +778,6 @@ mapping = {
     "REMOTE_COMPOSE_FILE": "REMOTE_COMPOSE_FILE",
     "REFRESH_PROVIDERS": "REFRESH_PROVIDERS",
     "WITH_OPERATIONAL_READY": "WITH_OPERATIONAL_READY",
-    "REQUIRE_P1_E06_RECEIPT": "REQUIRE_P1_E06_RECEIPT",
 }
 if not isinstance(payload, dict) or set(payload) != set(mapping):
     raise SystemExit("[fail] Protected deployment input schema mismatch.")
@@ -742,8 +841,16 @@ if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 	APPLICATION_SERVICES+=(frontend)
 fi
 APPLICATION_SERVICES+=(api worker callback-worker ops-worker jaeger otel-collector release-one-off)
-RECOVERY_REQUIRED_SERVICES=(postgres redis proxy frontend api worker callback-worker ops-worker)
+RECOVERY_REQUIRED_SERVICES=(redis proxy frontend api worker callback-worker ops-worker)
 PREVIOUS_WRITER_SERVICES=(api worker callback-worker ops-worker)
+CONFIG_DIR_HOST="${REMOTE_DIR}/shared/config"
+INSTALL_LOCK_FILE="${CONFIG_DIR_HOST}/.install.lock"
+FIRST_INSTALL_PENDING_MARKER="${REMOTE_DIR}/.first-install-pending.json"
+INSTALLATION_COMPLETE_MARKER="${REMOTE_DIR}/.installation-complete"
+INSTALLATION_STATE=""
+FIRST_INSTALL_PENDING=0
+FRESH_PG18_INSTALL=0
+INSTALL_LOCK_HELD=0
 APPLICATIONS_STOPPED=0
 MIGRATION_STARTED=0
 CUTOVER_MUTATION_STARTED=0
@@ -1010,6 +1117,83 @@ discard_rollback_image_tags() {
 	return "${cleanup_failed}"
 }
 
+write_first_install_pending_marker() {
+	local marker_tmp="${FIRST_INSTALL_PENDING_MARKER}.tmp.$$"
+	"${RELEASE_TOOL_PYTHON}" - \
+		"${marker_tmp}" "${FIRST_INSTALL_PENDING_MARKER}" "${REMOTE_DIR_CANONICAL}" \
+		"${RELEASE_DIR}" "${PREVIOUS_RELEASE_DIR}" "${PREVIOUS_ENV_FILE}" \
+		"${PREVIOUS_COMPOSE_FILE}" "${PREVIOUS_COMPOSE_PROJECT_NAME}" \
+		"${ROLLBACK_IMAGE_MAP}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+(
+    temporary_raw,
+    marker_raw,
+    managed_root_raw,
+    release_raw,
+    previous_release_raw,
+    previous_env_raw,
+    previous_compose_raw,
+    previous_project,
+    rollback_map_raw,
+) = sys.argv[1:]
+managed_root = Path(managed_root_raw)
+marker = Path(marker_raw)
+temporary = Path(temporary_raw)
+
+def managed_path(value: str, *, required: bool) -> str:
+    if not value:
+        if required:
+            raise SystemExit("[fail] First-install lifecycle path is missing.")
+        return ""
+    path = Path(value)
+    if not path.is_absolute() or path == managed_root or managed_root not in path.parents:
+        raise SystemExit("[fail] First-install lifecycle path escapes the managed root.")
+    return str(path)
+
+payload = {
+    "contract": "first_install_pending.v1",
+    "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "release": managed_path(release_raw, required=True),
+    "previous_release": managed_path(previous_release_raw, required=False),
+    "previous_env_file": managed_path(previous_env_raw, required=False),
+    "previous_compose_file": managed_path(previous_compose_raw, required=False),
+    "previous_compose_project": previous_project,
+    "rollback_image_map": managed_path(rollback_map_raw, required=True),
+}
+descriptor = os.open(
+    temporary,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+    0o600,
+)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, separators=(",", ":"), sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(temporary, 0o600, follow_symlinks=False)
+    os.chown(temporary, 0, 0, follow_symlinks=False)
+    os.replace(temporary, marker)
+    directory_fd = os.open(marker.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+finally:
+    try:
+        temporary.unlink()
+    except FileNotFoundError:
+        pass
+PY
+}
+
 restore_rollback_image_map_snapshot() {
 	local restore_tmp="${ROLLBACK_IMAGE_MAP}.restore.$$"
 	if [ "${ROLLBACK_IMAGE_MAP_SNAPSHOT_OPEN}" != "1" ] || \
@@ -1272,342 +1456,79 @@ compose_previous_release() {
 		' bash "${RELEASE_DIR}/deploy/common.sh" "${PREVIOUS_RELEASE_DIR}" "$@"
 }
 
-assert_p1_e06_ordinary_deploy_gate() {
-	local database_revision=""
-	local receipt_active_release=""
-	local active_state_dir=""
-	local evidence_dir=""
-	local global_receipt="${RELEASE_STATE_ROOT}/p1-e06-activation.json"
-	local activation_commit=""
-	local cutover_result=""
-	local protected_dir=""
-	local protected_file=""
+assert_fresh_pg18_install_gate() {
+	local state_file="${CONFIG_DIR_HOST}/install-state.json"
+	local runtime_file="${CONFIG_DIR_HOST}/runtime-config.json"
+	local ca_file="${CONFIG_DIR_HOST}/rds-ca.pem"
+	local internal_token_file="${CONFIG_DIR_HOST}/frontend/internal-auth-token"
 
 	if [ -z "${PREVIOUS_RELEASE_DIR}" ]; then
-		echo "[fail] Ordinary full deployment requires an existing managed current release; use a separately governed bootstrap path for a new host." >&2
+		echo "[fail] An installed deployment requires an existing managed current release." >&2
 		return 1
 	fi
-
-	if ! database_revision="$(compose_previous_release exec -T postgres sh -ceu \
-		'exec psql -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select version_num from alembic_version"')"; then
-		echo "[fail] Could not prove the current production database revision before image mutation." >&2
+	"${RELEASE_TOOL_PYTHON}" \
+		"${RELEASE_DIR}/deploy/validate-installation-complete.py" \
+		--managed-root "${REMOTE_DIR}" \
+		--sentinel "${INSTALLATION_COMPLETE_MARKER}" \
+		--state "${state_file}" \
+		--runtime "${runtime_file}" >/dev/null || {
+		echo "[fail] Ordinary deployment requires durable installation-complete acceptance and matching current PostgreSQL 18 runtime state." >&2
 		return 1
-	fi
-	database_revision="${database_revision//$'\r'/}"
-	if [[ ! "${database_revision}" =~ ^[0-9]{8}_[0-9]{4}$ ]]; then
-		echo "[fail] Current production database revision is missing, multiple, or malformed." >&2
-		return 1
-	fi
-	if [ "${database_revision}" = "20260710_0058" ]; then
-		echo "[fail] Ordinary production deployment cannot migrate revision 0058. Run the governed P1-E06 runtime-data encryption cutover first." >&2
-		return 1
-	fi
-
-	if [ "${REQUIRE_P1_E06_RECEIPT}" != "1" ]; then
-		echo "[ok] Current database is not the forbidden P1-E06 source revision: ${database_revision}."
-		return 0
-	fi
-	if [ "${database_revision}" != "20260717_0068" ] && \
-		! "${RELEASE_TOOL_PYTHON}" - \
-			"${RELEASE_DIR}/migrations/versions" "${database_revision}" <<'PY'
-from __future__ import annotations
-
-import ast
-import re
-import sys
-from pathlib import Path
-
-versions_dir = Path(sys.argv[1])
-current_revision = sys.argv[2]
-baseline_revision = "20260717_0068"
-revision_pattern = re.compile(r"^[0-9]{8}_[0-9]{4}$")
-if not versions_dir.is_dir() or not revision_pattern.fullmatch(current_revision):
-    raise SystemExit(1)
-
-parents_by_revision: dict[str, tuple[str, ...]] = {}
-for migration_path in sorted(versions_dir.glob("*.py")):
-    module = ast.parse(migration_path.read_text(encoding="utf-8"), migration_path.name)
-    values: dict[str, object] = {}
-    for node in module.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-        elif isinstance(node, ast.AnnAssign):
-            target = node.target
-        else:
-            continue
-        if not isinstance(target, ast.Name) or target.id not in {"revision", "down_revision"}:
-            continue
-        values[target.id] = ast.literal_eval(node.value)
-    revision = values.get("revision")
-    down_revision = values.get("down_revision")
-    if not isinstance(revision, str) or not revision_pattern.fullmatch(revision):
-        raise SystemExit(1)
-    if revision in parents_by_revision:
-        raise SystemExit(1)
-    if down_revision is None:
-        parents: tuple[str, ...] = ()
-    elif isinstance(down_revision, str):
-        parents = (down_revision,)
-    elif isinstance(down_revision, (tuple, list)) and all(
-        isinstance(item, str) for item in down_revision
-    ):
-        parents = tuple(down_revision)
-    else:
-        raise SystemExit(1)
-    if any(not revision_pattern.fullmatch(parent) for parent in parents):
-        raise SystemExit(1)
-    parents_by_revision[revision] = parents
-
-pending = [current_revision]
-visited: set[str] = set()
-while pending:
-    revision = pending.pop()
-    if revision == baseline_revision:
-        raise SystemExit(0)
-    if revision in visited or revision not in parents_by_revision:
-        continue
-    visited.add(revision)
-    pending.extend(parents_by_revision[revision])
-raise SystemExit(1)
-PY
-	then
-		echo "[fail] Current database revision is not 0068 or a migration-graph descendant shipped by this release: ${database_revision}." >&2
-		return 1
-	fi
-
-	if [ ! -d "${RELEASE_STATE_ROOT}" ] || [ -L "${RELEASE_STATE_ROOT}" ] || \
-		[ "$(stat -c '%u' "${RELEASE_STATE_ROOT}")" != "0" ] || \
-		[ "$(stat -c '%a' "${RELEASE_STATE_ROOT}")" != "700" ]; then
-		echo "[fail] P1-E06 release-state root must be root-owned, non-symlink, and mode 0700." >&2
-		return 1
-	fi
-	if [ ! -f "${global_receipt}" ] || [ -L "${global_receipt}" ] || \
-		[ "$(stat -c '%u' "${global_receipt}")" != "0" ] || \
-		[ "$(stat -c '%a' "${global_receipt}")" != "600" ]; then
-		echo "[fail] Global P1-E06 receipt must be a root-owned, non-symlink mode-0600 file." >&2
-		return 1
-	fi
-	if ! receipt_active_release="$("${RELEASE_TOOL_PYTHON}" - \
-		"${global_receipt}" "${REMOTE_DIR_CANONICAL}" <<'PY'
-from __future__ import annotations
-
-import json
-import pathlib
-import re
-import sys
-
-receipt_path = pathlib.Path(sys.argv[1])
-managed_root = pathlib.Path(sys.argv[2])
-with receipt_path.open(encoding="utf-8") as handle:
-    receipt = json.load(handle)
-if not isinstance(receipt, dict):
-    raise SystemExit(1)
-active_release = receipt.get("active_release")
-if not isinstance(active_release, str):
-    raise SystemExit(1)
-active_path = pathlib.Path(active_release)
-if active_path.parent != managed_root or not re.fullmatch(
-    r"release-[A-Za-z0-9._-]+", active_path.name
-):
-    raise SystemExit(1)
-print(active_path)
-PY
-	)"; then
-		echo "[fail] Global P1-E06 receipt does not identify a managed cutover release." >&2
-		return 1
-	fi
-	active_state_dir="${RELEASE_STATE_ROOT}/$(basename "${receipt_active_release}")"
-	evidence_dir="${active_state_dir}/p1-e06-runtime-data-cutover"
-	activation_commit="${evidence_dir}/activation-commit.json"
-	cutover_result="${evidence_dir}/cutover-result.json"
-	for protected_dir in "${active_state_dir}" "${evidence_dir}"; do
-		if [ ! -d "${protected_dir}" ] || [ -L "${protected_dir}" ] || \
-			[ "$(stat -c '%u' "${protected_dir}")" != "0" ] || \
-			[ "$(stat -c '%a' "${protected_dir}")" != "700" ]; then
-			echo "[fail] P1-E06 evidence directory must be root-owned, non-symlink, and mode 0700: ${protected_dir}" >&2
-			return 1
-		fi
-	done
-	for protected_file in "${activation_commit}" "${cutover_result}"; do
-		if [ ! -f "${protected_file}" ] || [ -L "${protected_file}" ] || \
-			[ "$(stat -c '%u' "${protected_file}")" != "0" ] || \
-			[ "$(stat -c '%a' "${protected_file}")" != "600" ]; then
-			echo "[fail] P1-E06 evidence must be a root-owned, non-symlink mode-0600 file: ${protected_file}" >&2
-			return 1
-		fi
-	done
-
-	if ! "${RELEASE_TOOL_PYTHON}" - \
-		"${global_receipt}" \
-		"${activation_commit}" \
-		"${cutover_result}" \
-		"${receipt_active_release}" <<'PY'
+	}
+	"${RELEASE_TOOL_PYTHON}" - \
+		"${state_file}" "${runtime_file}" "${ca_file}" "${internal_token_file}" <<'PY'
 from __future__ import annotations
 
 import hashlib
 import json
-import re
+import os
+import stat
 import sys
 from pathlib import Path
 
-global_path, activation_path, result_path, active_release = map(Path, sys.argv[1:])
-
-
-def load_json(path: Path) -> tuple[dict[str, object], bytes]:
-    raw = path.read_bytes()
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise SystemExit(f"[fail] P1-E06 evidence is not a JSON object: {path}")
-    return value, raw
-
-
-def expect_exact(
-    payload: dict[str, object], expected: dict[str, object], label: str
-) -> None:
-    for key, expected_value in expected.items():
-        actual = payload.get(key)
-        if type(actual) is not type(expected_value) or actual != expected_value:
-            raise SystemExit(f"[fail] {label} mismatch: {key}")
-
-
-global_receipt, _global_raw = load_json(global_path)
-activation, activation_raw = load_json(activation_path)
-result, result_raw = load_json(result_path)
-expected_global_keys = {
-    "contract",
-    "status",
-    "source_revision",
-    "target_revision",
-    "runtime_legacy_rows_migrated",
-    "service_legacy_rows_migrated",
-    "legacy_rows_migrated",
-    "active_release",
-    "activation_commit_sha256",
-    "cutover_result_sha256",
-}
-if set(global_receipt) != expected_global_keys:
-    raise SystemExit("[fail] Global P1-E06 activation receipt schema mismatch.")
-expected_global = {
-    "contract": "p1_e06_global_activation.v1",
-    "status": "passed",
-    "source_revision": "20260710_0058",
-    "target_revision": "20260717_0068",
-    "runtime_legacy_rows_migrated": 18,
-    "service_legacy_rows_migrated": 12,
-    "legacy_rows_migrated": 30,
-    "active_release": str(active_release),
-}
-expect_exact(global_receipt, expected_global, "Global P1-E06 activation receipt")
-for key in ("activation_commit_sha256", "cutover_result_sha256"):
-    if not isinstance(global_receipt.get(key), str) or not re.fullmatch(
-        r"[0-9a-f]{64}", str(global_receipt[key])
-    ):
-        raise SystemExit(f"[fail] Global P1-E06 receipt digest is invalid: {key}")
-if global_receipt["activation_commit_sha256"] != hashlib.sha256(activation_raw).hexdigest():
-    raise SystemExit("[fail] P1-E06 activation commit digest mismatch.")
-if global_receipt["cutover_result_sha256"] != hashlib.sha256(result_raw).hexdigest():
-    raise SystemExit("[fail] P1-E06 cutover result digest mismatch.")
-
-expected_activation_keys = {
-    "contract",
-    "status",
-    "active_release",
-    "database_revision",
-    "runtime_legacy_rows_migrated",
-    "service_legacy_rows_migrated",
-    "legacy_rows_migrated",
-    "backup_sha256",
-    "off_host_receipt_sha256",
-}
-if set(activation) != expected_activation_keys:
-    raise SystemExit("[fail] P1-E06 activation commit schema mismatch.")
-expected_activation = {
-    "contract": "p1_e06_activation_commit.v1",
-    "status": "committed",
-    "active_release": str(active_release),
-    "database_revision": "20260717_0068",
-    "runtime_legacy_rows_migrated": 18,
-    "service_legacy_rows_migrated": 12,
-    "legacy_rows_migrated": 30,
-}
-expect_exact(activation, expected_activation, "P1-E06 activation commit")
-expected_result_keys = {
-    "contract",
-    "status",
-    "source_revision",
-    "target_revision",
-    "runtime_legacy_rows_migrated",
-    "service_legacy_rows_migrated",
-    "legacy_rows_migrated",
-    "backup_sha256",
-    "previous_release",
-    "active_release",
-    "off_host_receipt",
-    "off_host_receipt_sha256",
-    "off_host_receipt_evidence",
-    "off_host_copy_verified",
-    "independent_postgres16_restore_verified",
-    "exact_data_service_images_activated",
-    "activation_committed",
-    "old_code_automatically_restarted_after_failure",
-    "whole_database_restore_required_for_rollback",
-    "plaintext_included",
-    "ciphertext_included",
-    "root_secret_included",
-}
-if set(result) != expected_result_keys:
-    raise SystemExit("[fail] P1-E06 cutover result schema mismatch.")
-expected_result = {
-    "contract": "p1_e06_runtime_data_encryption_cutover.v1",
-    "status": "passed",
-    "source_revision": "20260710_0058",
-    "target_revision": "20260717_0068",
-    "runtime_legacy_rows_migrated": 18,
-    "service_legacy_rows_migrated": 12,
-    "legacy_rows_migrated": 30,
-    "active_release": str(active_release),
-    "off_host_copy_verified": True,
-    "independent_postgres16_restore_verified": True,
-    "exact_data_service_images_activated": True,
-    "activation_committed": True,
-    "old_code_automatically_restarted_after_failure": False,
-    "whole_database_restore_required_for_rollback": True,
-    "plaintext_included": False,
-    "ciphertext_included": False,
-    "root_secret_included": False,
-}
-expect_exact(result, expected_result, "P1-E06 cutover result")
-
-for payload, label in ((activation, "activation"), (result, "cutover result")):
-    for key in ("backup_sha256", "off_host_receipt_sha256"):
-        value = payload.get(key)
-        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
-            raise SystemExit(f"[fail] P1-E06 {label} digest is invalid: {key}")
-if activation["backup_sha256"] != result["backup_sha256"]:
-    raise SystemExit("[fail] P1-E06 backup digest differs across evidence files.")
-if activation["off_host_receipt_sha256"] != result["off_host_receipt_sha256"]:
-    raise SystemExit("[fail] P1-E06 off-host receipt digest differs across evidence files.")
-
-previous_release_value = result.get("previous_release")
-if not isinstance(previous_release_value, str):
-    raise SystemExit("[fail] P1-E06 previous release path is invalid.")
-previous_release = Path(previous_release_value)
-if (
-    previous_release.parent != active_release.parent
-    or previous_release == active_release
-    or not re.fullmatch(r"release-[A-Za-z0-9._-]+", previous_release.name)
+state_path = Path(sys.argv[1])
+runtime_path = Path(sys.argv[2])
+ca_path = Path(sys.argv[3])
+token_path = Path(sys.argv[4])
+for path, expected_mode in (
+    (state_path, 0o640),
+    (runtime_path, 0o600),
+    (ca_path, 0o600),
+    (token_path, 0o640),
 ):
-    raise SystemExit("[fail] P1-E06 previous release path is outside the managed release set.")
-for key in ("off_host_receipt", "off_host_receipt_evidence"):
-    value = result.get(key)
-    if not isinstance(value, str) or not Path(value).is_absolute():
-        raise SystemExit(f"[fail] P1-E06 cutover result path is invalid: {key}")
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise SystemExit(
+            f"[fail] Fresh PostgreSQL 18 installation evidence is unavailable: {type(exc).__name__}"
+        ) from exc
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise SystemExit("[fail] Fresh PostgreSQL 18 installation evidence must be regular files.")
+    if stat.S_IMODE(metadata.st_mode) != expected_mode or (metadata.st_uid, metadata.st_gid) != (
+        999,
+        999,
+    ):
+        raise SystemExit("[fail] Fresh PostgreSQL 18 installation evidence has unsafe ownership or mode.")
+
+try:
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    runtime_bytes = runtime_path.read_bytes()
+    runtime = json.loads(runtime_bytes)
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(
+        f"[fail] Fresh PostgreSQL 18 installation evidence is invalid: {type(exc).__name__}"
+    ) from exc
+if not isinstance(state, dict) or not isinstance(runtime, dict):
+    raise SystemExit("[fail] Fresh PostgreSQL 18 installation evidence must contain JSON objects.")
+if state.get("installation_state") != "complete":
+    raise SystemExit("[fail] Fresh PostgreSQL 18 installation is not complete.")
+if state.get("database_contract") != "pg18_empty_initialization.v1":
+    raise SystemExit("[fail] Fresh PostgreSQL 18 database contract marker is missing.")
+digest = state.get("config_digest")
+if not isinstance(digest, str) or digest != hashlib.sha256(runtime_bytes).hexdigest():
+    raise SystemExit("[fail] Fresh PostgreSQL 18 runtime configuration digest does not match.")
+print("[ok] Fresh PostgreSQL 18 installation marker and every protected runtime projection are valid.")
 PY
-	then
-		echo "[fail] Governed P1-E06 activation evidence could not be validated." >&2
-		return 1
-	fi
-	echo "[ok] Governed P1-E06 activation evidence matches the post-0068 database lineage."
 }
 
 previous_release_is_restartable() {
@@ -1923,6 +1844,9 @@ on_deploy_exit() {
 	fi
 	if [ "${exit_status}" -ne 0 ] && [ "${DEPLOY_SUCCEEDED}" != "1" ]; then
 		recover_failed_cutover || recovery_status=$?
+		if [ "${recovery_status}" -eq 0 ] && [ "${FIRST_INSTALL_PENDING}" = "1" ]; then
+			rm -f -- "${FIRST_INSTALL_PENDING_MARKER}" || recovery_status=1
+		fi
 	fi
 	if [ "${CUTOVER_MUTATION_STARTED}" = "1" ] && \
 		! assert_governed_one_off_absent; then
@@ -1968,8 +1892,17 @@ on_deploy_exit() {
 		exec 9<&-
 		ROLLBACK_IMAGE_MAP_SNAPSHOT_OPEN=0
 	fi
+	if [ "${INSTALL_LOCK_HELD}" = "1" ]; then
+		npcink_ai_cloud_stop_install_lock_broker || exit_status=1
+		INSTALL_LOCK_HELD=0
+	fi
 	if [ "${exit_status}" -eq 0 ] && [ "${DEPLOY_SUCCEEDED}" = "1" ]; then
 		echo "[ok] Remote release ready at ${RELEASE_DIR}"
+		if [ "${FIRST_INSTALL_PENDING}" = "1" ]; then
+			printf 'installation_state=pending\n'
+		else
+			printf 'installation_state=complete\n'
+		fi
 	fi
 	exit "${exit_status}"
 }
@@ -1991,6 +1924,72 @@ remote_run_timed "remote extract bundle" tar xzf "${REMOTE_BUNDLE_PATH}" -C "${R
 
 ensure_private_release_state_directory "${RELEASE_STATE_ROOT}"
 ensure_private_release_state_directory "${RELEASE_STATE_DIR}"
+export NPCINK_CLOUD_CONFIG_DIR_HOST="${CONFIG_DIR_HOST}"
+
+"${RELEASE_TOOL_PYTHON}" - "${CONFIG_DIR_HOST}" <<'PY'
+import os
+import stat
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+path.mkdir(parents=True, exist_ok=True, mode=0o700)
+metadata = path.lstat()
+if path.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
+    raise SystemExit("[fail] Shared configuration path must be a real directory.")
+if os.geteuid() == 0:
+    os.chown(path, 999, 999, follow_symlinks=False)
+os.chmod(path, 0o700)
+PY
+npcink_ai_cloud_start_install_lock_broker \
+	"${RELEASE_DIR}" "${INSTALL_LOCK_FILE}" 1 \
+	env \
+		NPCINK_CLOUD_RELEASE_TOOL_PYTHON="${RELEASE_TOOL_PYTHON}" \
+		NPCINK_CLOUD_CONFIG_DIR_HOST="${CONFIG_DIR_HOST}" \
+		bash "${RELEASE_DIR}/deploy/prepare-installation-under-lock.sh" || {
+	echo "[fail] A first-install operation is active; deployment will not race it." >&2
+	exit 1
+}
+INSTALL_LOCK_HELD=1
+if [ -e "${FIRST_INSTALL_PENDING_MARKER}" ] || [ -L "${FIRST_INSTALL_PENDING_MARKER}" ]; then
+	echo "[fail] A first-install release awaits explicit finalize or rollback; another deployment is forbidden." >&2
+	exit 1
+fi
+
+INSTALLATION_STATE="$("${RELEASE_TOOL_PYTHON}" - "${CONFIG_DIR_HOST}/install-state.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print("missing")
+    raise SystemExit(0)
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit("[fail] Shared install-state.json is invalid.")
+state = payload.get("installation_state")
+if state not in {"pending", "initializing", "complete"}:
+    raise SystemExit("[fail] Shared installation state is unsupported.")
+print(state)
+PY
+)"
+case "${INSTALLATION_STATE}" in
+	missing)
+		echo "[fail] Lock-governed first-install preparation did not publish pending state." >&2
+		exit 1
+		;;
+	pending)
+		FIRST_INSTALL_PENDING=1
+		;;
+	initializing)
+		echo "[fail] A first-install operation is already initializing; deployment will not race it." >&2
+		exit 1
+		;;
+	complete)
+		;;
+esac
 
 if [ -n "${PREVIOUS_RELEASE_DIR}" ]; then
 	PREVIOUS_ENV_FILE="$(NPCINK_CLOUD_ENV_FILE= npcink_ai_cloud_resolve_env_file "${PREVIOUS_RELEASE_DIR}")"
@@ -2019,6 +2018,30 @@ if [ ! -f "${NEW_ENV_SOURCE}" ] || [ -L "${NEW_ENV_SOURCE}" ] || \
 	echo "[fail] Deployment env source must be a root-owned, non-symlink mode-0600 regular file." >&2
 	exit 1
 fi
+"${RELEASE_TOOL_PYTHON}" - "${NEW_ENV_SOURCE}" <<'PY'
+import sys
+from pathlib import Path
+
+forbidden = {
+    "NPCINK_CLOUD_API_WORKERS",
+    "NPCINK_CLOUD_DEPLOY_SMOKE_BACKEND_ENV",
+    "NPCINK_CLOUD_DEPLOY_SMOKE_FRONTEND_ENV",
+    "NPCINK_CLOUD_DEPLOY_SMOKE_SETUP_STATE_OVERRIDE",
+}
+observed = set()
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in line:
+        continue
+    key = line.split("=", 1)[0].strip()
+    if key in forbidden:
+        observed.add(key)
+if observed:
+    raise SystemExit(
+        "[fail] Production .env.deploy explicitly forbids contract overrides: "
+        + ",".join(sorted(observed))
+    )
+PY
 if [ -e "${RELEASE_ENV_FILE}" ] || [ -L "${RELEASE_ENV_FILE}" ]; then
 	echo "[fail] Fresh per-release env destination already exists: ${RELEASE_ENV_FILE}" >&2
 	exit 1
@@ -2032,6 +2055,55 @@ if [ -e "${RELEASE_ENV_TMP}" ] || [ -L "${RELEASE_ENV_TMP}" ] || \
 	[ "$(stat -c '%a' "${RELEASE_ENV_TMP}" 2>/dev/null || true)" != "600" ]; then
 	echo "[fail] Protected per-release env staging failed." >&2
 	exit 1
+fi
+if [ "${FIRST_INSTALL_PENDING}" = "1" ]; then
+	"${RELEASE_TOOL_PYTHON}" - "${RELEASE_ENV_TMP}" <<'PY'
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+forbidden = {
+    "NPCINK_CLOUD_DATABASE_URL",
+    "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN",
+    "NPCINK_CLOUD_ADMIN_KEY",
+    "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN",
+    "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET",
+    "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID",
+    "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_SECRET",
+    "NPCINK_CLOUD_RUNTIME_DATA_ENCRYPTION_KEY_ID",
+    "NPCINK_CLOUD_PORTAL_JWT_SECRET",
+    "POSTGRES_DB",
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+}
+kept: list[str] = []
+for line in path.read_text(encoding="utf-8").splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        kept.append(line)
+        continue
+    key = line.split("=", 1)[0].strip()
+    if key not in forbidden:
+        kept.append(line)
+
+temporary = path.with_name(f".{path.name}.sanitized.{os.getpid()}")
+descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write("\n".join(kept).rstrip("\n") + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+finally:
+    try:
+        temporary.unlink()
+    except FileNotFoundError:
+        pass
+PY
 fi
 "${RELEASE_TOOL_PYTHON}" - "${RELEASE_ENV_TMP}" "${RELEASE_STATE_DIR}" <<'PY'
 import os
@@ -2116,7 +2188,12 @@ if [ -n "${PREVIOUS_RELEASE_DIR}" ]; then
 fi
 freeze_previous_runtime_network_contract
 assert_previous_writer_project_alignment
-assert_p1_e06_ordinary_deploy_gate
+if [ "${FIRST_INSTALL_PENDING}" = "1" ]; then
+	echo "[ok] First-install deployment defers empty PostgreSQL 18 initialization to setup."
+else
+	FRESH_PG18_INSTALL=1
+	assert_fresh_pg18_install_gate
+fi
 
 CUTOVER_PHASE="prove-governed-one-off-absence-before-mutation"
 if ! remote_run_timed "assert governed one-off absent before mutation" \
@@ -2135,6 +2212,17 @@ remote_run_timed "remote load and up" \
 	NPCINK_CLOUD_ROLLBACK_TAG_SUFFIX="${ROLLBACK_TAG_SUFFIX}" \
 	bash deploy/remote-load-and-up.sh </dev/null
 
+if [ "${FIRST_INSTALL_PENDING}" = "1" ]; then
+	CUTOVER_PHASE="publish-first-install-recovery-contract"
+	write_first_install_pending_marker
+fi
+
+if [ "${FRESH_PG18_INSTALL}" = "1" ]; then
+	CUTOVER_PHASE="candidate-runtime-config-and-pg18-preflight"
+	remote_run_timed "candidate runtime config, PostgreSQL 18, and Alembic-current preflight" \
+		bash deploy/remote-runtime-config-preflight.sh </dev/null
+fi
+
 CUTOVER_PHASE="stop-old-application-services"
 remote_run_timed "stop public and write-capable application services" stop_application_services
 remote_run_timed "assert application services stopped" assert_application_services_stopped
@@ -2144,14 +2232,19 @@ remote_run_timed "remote start data services only" \
 	env NPCINK_CLOUD_LOAD_MODE=data-only \
 	bash deploy/remote-load-and-up.sh </dev/null
 
-CUTOVER_PHASE="migrate-with-staged-image"
-# From this assignment forward the old application is never auto-started: a
-# failed/partial migration may have made the database incompatible with it.
-MIGRATION_STARTED=1
-remote_run_timed "remote migrate" \
-	bash deploy/remote-migrate.sh </dev/null
+if [ "${FIRST_INSTALL_PENDING}" = "1" ]; then
+	CUTOVER_PHASE="defer-empty-pg18-migration-to-setup"
+	echo "[ok] Empty PostgreSQL 18 migration is deferred to the authenticated setup installer."
+else
+	CUTOVER_PHASE="migrate-with-staged-image"
+	# From this assignment forward the old application is never auto-started: a
+	# failed/partial migration may have made the database incompatible with it.
+	MIGRATION_STARTED=1
+	remote_run_timed "remote migrate" \
+		bash deploy/remote-migrate.sh </dev/null
+fi
 
-if [ "${REFRESH_PROVIDERS}" = "1" ]; then
+if [ "${FIRST_INSTALL_PENDING}" != "1" ] && [ "${REFRESH_PROVIDERS}" = "1" ]; then
 	CUTOVER_PHASE="refresh-provider-projections-with-staged-image"
 	remote_run_timed "remote refresh providers" \
 		bash deploy/remote-refresh-providers.sh </dev/null
@@ -2176,22 +2269,35 @@ remote_run_timed "remote start new workers after API readiness" \
 	env NPCINK_CLOUD_LOAD_MODE=workers-only \
 	bash deploy/remote-load-and-up.sh </dev/null
 
-CUTOVER_PHASE="verify-worker-operational-readiness"
-remote_run_timed "remote internal operational readiness before traffic" \
-	env NPCINK_CLOUD_OPERATIONAL_READY_INTERNAL=1 \
-	bash deploy/remote-operational-ready.sh \
-		--base-url "${BASE_URL}" \
-		--worker-cutoff "${WORKER_CUTOFF}" </dev/null
+if [ "${FIRST_INSTALL_PENDING}" = "1" ]; then
+	CUTOVER_PHASE="workers-wait-for-first-install"
+	echo "[ok] Worker containers are running the bounded install-state wait wrapper."
+else
+	CUTOVER_PHASE="verify-worker-operational-readiness"
+	remote_run_timed "remote internal operational readiness before traffic" \
+		env NPCINK_CLOUD_OPERATIONAL_READY_INTERNAL=1 \
+		bash deploy/remote-operational-ready.sh \
+			--base-url "${BASE_URL}" \
+			--worker-cutoff "${WORKER_CUTOFF}" </dev/null
+fi
 
 CUTOVER_PHASE="restore-frontend-and-proxy-traffic"
 remote_run_timed "remote restore frontend and proxy traffic last" \
-	env NPCINK_CLOUD_LOAD_MODE=traffic-only \
+	env \
+	NPCINK_CLOUD_LOAD_MODE=traffic-only \
+	NPCINK_CLOUD_PRESERVE_FIRST_INSTALL_POSTGRES="${FIRST_INSTALL_PENDING}" \
 	bash deploy/remote-load-and-up.sh </dev/null
 
-CUTOVER_PHASE="validate-new-application-version"
-remote_run_timed "remote baseline status" bash deploy/remote-baseline-status.sh </dev/null
+if [ "${FIRST_INSTALL_PENDING}" = "1" ]; then
+	CUTOVER_PHASE="publish-first-install-entry"
+	echo "[ok] Setup-capable Cloud is live at ${BASE_URL%/}/setup"
+	echo "[info] Issue the setup code from an interactive SSH TTY with deploy/setup-code-rotate.sh, then complete PostgreSQL 18 installation in the browser."
+else
+	CUTOVER_PHASE="validate-new-application-version"
+	remote_run_timed "remote baseline status" bash deploy/remote-baseline-status.sh </dev/null
+fi
 
-if [ "${SKIP_SEED}" != "1" ]; then
+if [ "${FIRST_INSTALL_PENDING}" != "1" ] && [ "${SKIP_SEED}" != "1" ]; then
 	NPCINK_CLOUD_SECRET="${SECRET}" \
 	remote_run_timed "remote seed runtime" bash deploy/remote-seed-runtime.sh \
 		--site-id "${SITE_ID}" \
@@ -2200,7 +2306,7 @@ if [ "${SKIP_SEED}" != "1" ]; then
 		</dev/null
 fi
 
-if [ "${SKIP_SMOKE}" != "1" ]; then
+if [ "${FIRST_INSTALL_PENDING}" != "1" ] && [ "${SKIP_SMOKE}" != "1" ]; then
 	SMOKE_ARGS=(
 		--base-url "${BASE_URL}"
 		--site-id "${SITE_ID}"
@@ -2226,7 +2332,7 @@ if [ "${SKIP_SMOKE}" != "1" ]; then
 	remote_run_timed "remote smoke" bash deploy/remote-smoke.sh "${SMOKE_ARGS[@]}" </dev/null
 fi
 
-if [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
+if [ "${FIRST_INSTALL_PENDING}" != "1" ] && [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
 	if [ -z "${MEMBER_EMAIL}" ]; then
 		echo "[fail] --with-portal-smoke requires --member-email or NPCINK_CLOUD_MEMBER_EMAIL" >&2
 		exit 1
@@ -2243,9 +2349,13 @@ if [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
 		</dev/null
 fi
 
-if [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
+if [ "${FIRST_INSTALL_PENDING}" != "1" ] && [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
 	echo "[info] Running remote operational readiness gate"
-	remote_run_timed "remote operational readiness" bash deploy/remote-operational-ready.sh --base-url "${BASE_URL}" </dev/null
+	OPERATIONAL_READY_TOKEN="$(npcink_ai_cloud_read_internal_token_projection "${RELEASE_DIR}")"
+	NPCINK_CLOUD_INTERNAL_AUTH_TOKEN="${OPERATIONAL_READY_TOKEN}" \
+		remote_run_timed "remote operational readiness" \
+		bash deploy/remote-operational-ready.sh --base-url "${BASE_URL}" </dev/null
+	unset OPERATIONAL_READY_TOKEN
 	echo "[ok] Remote operational readiness gate passed"
 fi
 
@@ -2258,10 +2368,14 @@ if ! rm -rf -- "${REMOTE_INCOMING_DIR}" || \
 	exit 1
 fi
 CUTOVER_PHASE="finalize-rollback-image-tags"
-if ! discard_rollback_image_tags; then
-	record_post_commit_cleanup_failure \
-		"Release activated, but rollback image tag cleanup could not be proved."
-	exit 1
+if [ "${FIRST_INSTALL_PENDING}" != "1" ]; then
+	if ! discard_rollback_image_tags; then
+		record_post_commit_cleanup_failure \
+			"Release activated, but rollback image tag cleanup could not be proved."
+		exit 1
+	fi
+else
+	echo "[ok] First-install rollback image tags remain pinned until explicit post-install finalize."
 fi
 CUTOVER_PHASE="finalize-failure-evidence"
 if ! rm -f "${FAILURE_MARKER}" || \
@@ -2271,17 +2385,21 @@ if ! rm -f "${FAILURE_MARKER}" || \
 	exit 1
 fi
 CUTOVER_PHASE="finalize-rollback-image-map"
-if ! exec 9<"${ROLLBACK_IMAGE_MAP}"; then
-	record_post_commit_cleanup_failure \
-		"Release activated, but rollback image map snapshot could not be opened: ${ROLLBACK_IMAGE_MAP}"
-	exit 1
-fi
-ROLLBACK_IMAGE_MAP_SNAPSHOT_OPEN=1
-if ! rm -f "${ROLLBACK_IMAGE_MAP}" || \
-	[ -e "${ROLLBACK_IMAGE_MAP}" ] || [ -L "${ROLLBACK_IMAGE_MAP}" ]; then
-	record_post_commit_cleanup_failure \
-		"Release activated, but rollback image map cleanup could not be proved: ${ROLLBACK_IMAGE_MAP}"
-	exit 1
+if [ "${FIRST_INSTALL_PENDING}" != "1" ]; then
+	if ! exec 9<"${ROLLBACK_IMAGE_MAP}"; then
+		record_post_commit_cleanup_failure \
+			"Release activated, but rollback image map snapshot could not be opened: ${ROLLBACK_IMAGE_MAP}"
+		exit 1
+	fi
+	ROLLBACK_IMAGE_MAP_SNAPSHOT_OPEN=1
+	if ! rm -f "${ROLLBACK_IMAGE_MAP}" || \
+		[ -e "${ROLLBACK_IMAGE_MAP}" ] || [ -L "${ROLLBACK_IMAGE_MAP}" ]; then
+		record_post_commit_cleanup_failure \
+			"Release activated, but rollback image map cleanup could not be proved: ${ROLLBACK_IMAGE_MAP}"
+		exit 1
+	fi
+else
+	echo "[ok] First-install rollback map remains protected until explicit post-install finalize."
 fi
 CUTOVER_PHASE="finalize-current-release"
 EOF

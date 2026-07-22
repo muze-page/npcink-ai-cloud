@@ -12,7 +12,7 @@ npcink_ai_cloud_require_cmd mktemp
 
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
-ADMIN_TOKEN="${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}"
+ADMIN_KEY="${NPCINK_CLOUD_ADMIN_KEY:-}"
 MEMBER_EMAIL="${NPCINK_CLOUD_RELEASE_MEMBER_EMAIL:-}"
 LOGIN_CODE="${NPCINK_CLOUD_PORTAL_LOGIN_CODE:-}"
 RUNTIME_SITE_ID="${NPCINK_CLOUD_RELEASE_SITE_ID:-}"
@@ -31,8 +31,8 @@ while [ "$#" -gt 0 ]; do
 			echo "[fail] --internal-auth-token is forbidden because process arguments are observable; use --credentials-file or NPCINK_CLOUD_INTERNAL_AUTH_TOKEN." >&2
 			exit 1
 			;;
-		--admin-token)
-			echo "[fail] --admin-token is forbidden because process arguments are observable; use --credentials-file or NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN." >&2
+		--admin-key)
+			echo "[fail] --admin-key is forbidden because process arguments are observable; use --credentials-file or operator-only NPCINK_CLOUD_ADMIN_KEY." >&2
 			exit 1
 			;;
 		--member-email)
@@ -101,7 +101,7 @@ if not isinstance(payload, dict):
     raise SystemExit("[fail] Release smoke credentials must be a JSON object.")
 mapping = {
     "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN": "INTERNAL_AUTH_TOKEN",
-    "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN": "ADMIN_TOKEN",
+    "NPCINK_CLOUD_ADMIN_KEY": "ADMIN_KEY",
     "NPCINK_CLOUD_RELEASE_MEMBER_EMAIL": "MEMBER_EMAIL",
     "NPCINK_CLOUD_PORTAL_LOGIN_CODE": "LOGIN_CODE",
     "NPCINK_CLOUD_RELEASE_SITE_ID": "RUNTIME_SITE_ID",
@@ -132,15 +132,15 @@ fi
 # GitHub Actions, flow into every curl/Python child process.
 unset \
 	NPCINK_CLOUD_INTERNAL_AUTH_TOKEN \
-	NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN \
+	NPCINK_CLOUD_ADMIN_KEY \
 	NPCINK_CLOUD_PORTAL_LOGIN_CODE \
 	NPCINK_CLOUD_RELEASE_KEY_SECRET
 
 if [ -z "${INTERNAL_AUTH_TOKEN}" ]; then
 	fail "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN is required through --credentials-file or the process environment"
 fi
-if [ -z "${ADMIN_TOKEN}" ]; then
-	fail "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN is required through --credentials-file or the process environment"
+if [ -z "${ADMIN_KEY}" ]; then
+	fail "operator-only NPCINK_CLOUD_ADMIN_KEY is required through --credentials-file or the process environment"
 fi
 if [ -z "${MEMBER_EMAIL}" ]; then
 	fail "--member-email or NPCINK_CLOUD_RELEASE_MEMBER_EMAIL is required"
@@ -459,28 +459,28 @@ assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "portal session respons
 http_request "GET" "${BASE_URL%/}/admin/login" "${ADMIN_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "admin login page should load"
 
-ADMIN_BODY="$(ADMIN_TOKEN_VALUE="${ADMIN_TOKEN}" python3 - <<'PY'
+ADMIN_BODY="$(ADMIN_KEY_VALUE="${ADMIN_KEY}" python3 - <<'PY'
 import json
 import os
-print(json.dumps({"token": os.environ["ADMIN_TOKEN_VALUE"]}, ensure_ascii=True))
+print(json.dumps({"admin_key": os.environ["ADMIN_KEY_VALUE"]}, ensure_ascii=True))
 PY
 )"
 INTERNAL_AS_ADMIN_BODY="$(INTERNAL_TOKEN_VALUE="${INTERNAL_AUTH_TOKEN}" python3 - <<'PY'
 import json
 import os
-print(json.dumps({"token": os.environ["INTERNAL_TOKEN_VALUE"]}, ensure_ascii=True))
+print(json.dumps({"admin_key": os.environ["INTERNAL_TOKEN_VALUE"]}, ensure_ascii=True))
 PY
 )"
-http_request "POST" "${BASE_URL%/}/admin/auth/bootstrap" "${ADMIN_COOKIE_JAR}" "${INTERNAL_AS_ADMIN_BODY}" "Origin: ${BASE_URL%/}"
+http_request "POST" "${BASE_URL%/}/admin/auth/login" "${ADMIN_COOKIE_JAR}" "${INTERNAL_AS_ADMIN_BODY}" "Origin: ${BASE_URL%/}"
 if [ "${HTTP_STATUS}" = "200" ]; then
-	fail "internal token must not bootstrap an admin session"
+	fail "internal token must not authenticate an admin session"
 fi
-http_request "POST" "${BASE_URL%/}/admin/auth/bootstrap" "${ADMIN_COOKIE_JAR}" "${ADMIN_BODY}" "Origin: ${BASE_URL%/}"
+http_request "POST" "${BASE_URL%/}/admin/auth/login" "${ADMIN_COOKIE_JAR}" "${ADMIN_BODY}" "Origin: ${BASE_URL%/}"
 case "${HTTP_STATUS}" in
 	200 | 303) ;;
-	*) fail "admin bootstrap login should succeed (expected 200 or 303, got ${HTTP_STATUS})" ;;
+	*) fail "admin key login should succeed (expected 200 or 303, got ${HTTP_STATUS})" ;;
 esac
-assert_body_contains "${HTTP_HEADERS}" "npcink_admin_session_token" "admin bootstrap should set ops session cookie"
+assert_body_contains "${HTTP_HEADERS}" "npcink_admin_session_token" "admin key login should set ops session cookie"
 
 http_request "GET" "${BASE_URL%/}/admin/session" "${ADMIN_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "admin session should load"

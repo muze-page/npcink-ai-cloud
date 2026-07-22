@@ -283,20 +283,19 @@ fi
 
 http_request \
 	"GET" \
-	"${BASE_URL%/}/admin/auth/bootstrap?redirect=%2Fadmin" \
+	"${BASE_URL%/}/admin/login?redirect=%2Fadmin" \
 	"" \
 	"Accept: text/html"
-assert_status "${HTTP_STATUS}" "303" "GET /admin/auth/bootstrap should redirect to admin login"
-assert_header_contains "${HTTP_HEADERS}" "Location: /admin/login?redirect=%2Fadmin" "GET /admin/auth/bootstrap should redirect to admin login"
+assert_status "${HTTP_STATUS}" "200" "admin key login page should load"
 
 http_request \
 	"POST" \
-	"${BASE_URL%/}/admin/auth/bootstrap" \
-	'token=wrong-token' \
+	"${BASE_URL%/}/admin/auth/login" \
+	'admin_key=wrong-key&redirect=%2Fadmin' \
 	"Content-Type: application/x-www-form-urlencoded" \
 	"Accept: text/html"
-assert_status "${HTTP_STATUS}" "303" "invalid admin bootstrap should redirect with error"
-assert_header_contains "${HTTP_HEADERS}" "auth.admin_bootstrap_token_invalid" "invalid admin bootstrap should surface token error"
-assert_header_not_contains "${HTTP_HEADERS}" "npcink_admin_session_token=" "invalid admin bootstrap must not set ops session cookie"
+assert_status "${HTTP_STATUS}" "303" "invalid admin key should redirect with error"
+assert_header_contains "${HTTP_HEADERS}" "auth.admin_key_invalid" "invalid admin key should surface key error"
+assert_header_not_contains "${HTTP_HEADERS}" "npcink_admin_session_token=" "invalid admin key must not set ops session cookie"
 
 ok "Secret rotation validation checks passed."

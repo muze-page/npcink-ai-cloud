@@ -179,6 +179,142 @@ npcink_ai_cloud_release_state_dir() {
 	printf '%s/.release-state/%s' "$(dirname "${resolved_root}")" "${release_name}"
 }
 
+npcink_ai_cloud_managed_root_for_release() {
+	local release_root="$1"
+	local require_current="${2:-1}"
+	local resolved_root=""
+	local release_name=""
+	local managed_root=""
+	local current_link=""
+
+	resolved_root="$(cd "${release_root}" 2>/dev/null && pwd -P)" || {
+		echo "[fail] Managed release root could not be resolved." >&2
+		return 1
+	}
+	release_name="${resolved_root##*/}"
+	if [[ ! "${release_name}" =~ ^release-[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+		echo "[fail] Expected a direct managed release-* directory." >&2
+		return 1
+	fi
+	managed_root="$(cd "${resolved_root}/.." 2>/dev/null && pwd -P)" || return 1
+	if [ "${resolved_root}" != "${managed_root}/${release_name}" ]; then
+		echo "[fail] Managed release layout is not canonical." >&2
+		return 1
+	fi
+	case "${require_current}" in
+		0) ;;
+		1)
+			current_link="${managed_root}/current"
+			if [ ! -L "${current_link}" ] || \
+				[ "$(readlink -f "${current_link}" 2>/dev/null || true)" != "${resolved_root}" ]; then
+				echo "[fail] Helper must run from the active managed release." >&2
+				return 1
+			fi
+			;;
+		*)
+			echo "[fail] Managed release current-link policy is invalid." >&2
+			return 1
+			;;
+	esac
+	printf '%s' "${managed_root}"
+}
+
+npcink_ai_cloud_start_install_lock_broker() {
+	local release_root="$1"
+	local lock_path="$2"
+	local create_mode="${3:-0}"
+	local release_tool_python=""
+	local helper=""
+	local proof=""
+	local broker_dir=""
+	local old_umask=""
+	local -a create_arg=()
+	local -a initial_command=()
+	shift 3
+	initial_command=("$@")
+
+	if [ -n "${NPCINK_CLOUD_INSTALL_LOCK_BROKER_PID_VALUE:-}" ]; then
+		echo "[fail] Setup/deploy lock broker is already active." >&2
+		return 1
+	fi
+	release_tool_python="$(npcink_ai_cloud_release_tool_python)"
+	npcink_ai_cloud_require_host_release_tool_python "${release_tool_python}" || return 1
+	helper="${release_root}/deploy/install-lock.py"
+	[ -f "${helper}" ] && [ ! -L "${helper}" ] || {
+		echo "[fail] Setup/deploy lock helper is unavailable from the exact release." >&2
+		return 1
+	}
+	case "${create_mode}" in
+		0) ;;
+		1) create_arg=(--create) ;;
+		*)
+			echo "[fail] Setup/deploy lock creation policy is invalid." >&2
+			return 1
+			;;
+	esac
+
+	old_umask="$(umask)"
+	umask 077
+	broker_dir="$(mktemp -d "${TMPDIR:-/tmp}/npcink-install-lock.XXXXXX")" || {
+		umask "${old_umask}"
+		return 1
+	}
+	umask "${old_umask}"
+	if [ -L "${broker_dir}" ] || [ ! -d "${broker_dir}" ] || \
+		[ ! -O "${broker_dir}" ] || \
+		[ "$(npcink_ai_cloud_mode_of "${broker_dir}" 2>/dev/null || true)" != "700" ]; then
+		rm -rf -- "${broker_dir}" >/dev/null 2>&1 || true
+		echo "[fail] Setup/deploy lock broker control directory is unsafe." >&2
+		return 1
+	fi
+	mkfifo "${broker_dir}/control" "${broker_dir}/status" || {
+		rm -rf -- "${broker_dir}" >/dev/null 2>&1 || true
+		return 1
+	}
+	chmod 0600 "${broker_dir}/control" "${broker_dir}/status"
+	exec 6>&1
+	"${release_tool_python}" "${helper}" \
+		--path "${lock_path}" --uid 999 --gid 999 --mode 0600 \
+		"${create_arg[@]}" --command-output-fd 6 hold -- \
+		"${initial_command[@]}" \
+		<"${broker_dir}/control" >"${broker_dir}/status" &
+	NPCINK_CLOUD_INSTALL_LOCK_BROKER_PID_VALUE="$!"
+	NPCINK_CLOUD_INSTALL_LOCK_BROKER_DIR="${broker_dir}"
+	exec 6>&-
+	# FD 7 is the broker lifetime capability. Closing it is the only normal
+	# release path; the Python process owns the validated lock descriptor.
+	exec 7>"${broker_dir}/control"
+	if ! IFS= read -r proof <"${broker_dir}/status" || \
+		[ "${proof}" != "install_lock_acquired.v1" ]; then
+		exec 7>&- 2>/dev/null || true
+		wait "${NPCINK_CLOUD_INSTALL_LOCK_BROKER_PID_VALUE}" 2>/dev/null || true
+		rm -f -- "${broker_dir}/control" "${broker_dir}/status" >/dev/null 2>&1 || true
+		rmdir -- "${broker_dir}" >/dev/null 2>&1 || true
+		unset NPCINK_CLOUD_INSTALL_LOCK_BROKER_PID_VALUE \
+			NPCINK_CLOUD_INSTALL_LOCK_BROKER_DIR
+		echo "[fail] Setup/deploy lock could not be safely acquired." >&2
+		return 1
+	fi
+	rm -f -- "${broker_dir}/status"
+}
+
+npcink_ai_cloud_stop_install_lock_broker() {
+	local status=0
+	if [ -z "${NPCINK_CLOUD_INSTALL_LOCK_BROKER_PID_VALUE:-}" ]; then
+		return 0
+	fi
+	exec 7>&- 2>/dev/null || status=1
+	wait "${NPCINK_CLOUD_INSTALL_LOCK_BROKER_PID_VALUE}" 2>/dev/null || status=1
+	if [ -n "${NPCINK_CLOUD_INSTALL_LOCK_BROKER_DIR:-}" ]; then
+		rm -f -- "${NPCINK_CLOUD_INSTALL_LOCK_BROKER_DIR}/control" \
+			"${NPCINK_CLOUD_INSTALL_LOCK_BROKER_DIR}/status" >/dev/null 2>&1 || status=1
+		rmdir -- "${NPCINK_CLOUD_INSTALL_LOCK_BROKER_DIR}" >/dev/null 2>&1 || status=1
+	fi
+	unset NPCINK_CLOUD_INSTALL_LOCK_BROKER_PID_VALUE \
+		NPCINK_CLOUD_INSTALL_LOCK_BROKER_DIR
+	return "${status}"
+}
+
 npcink_ai_cloud_release_state_env_file() {
 	local state_dir=""
 	state_dir="$(npcink_ai_cloud_release_state_dir "$1")" || return 1
@@ -240,6 +376,33 @@ npcink_ai_cloud_require_internal_token() {
 		"NPCINK_CLOUD_INTERNAL_AUTH_TOKEN for internal-only perimeter checks"
 }
 
+npcink_ai_cloud_read_internal_token_projection() {
+	local root_dir="$1"
+	local config_dir="${NPCINK_CLOUD_CONFIG_DIR_HOST:-$(dirname "${root_dir}")/shared/config}"
+	local token_file="${config_dir}/frontend/internal-auth-token"
+	local release_tool_python=""
+	release_tool_python="$(npcink_ai_cloud_release_tool_python)"
+	npcink_ai_cloud_require_release_tool_python "${release_tool_python}" || return 1
+	"${release_tool_python}" - "${token_file}" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+metadata = os.lstat(path)
+if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+    raise SystemExit("[fail] Internal-token projection must be a regular non-symlink file.")
+if stat.S_IMODE(metadata.st_mode) != 0o640 or (metadata.st_uid, metadata.st_gid) != (999, 999):
+    raise SystemExit("[fail] Internal-token projection ownership or mode is unsafe.")
+descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+    value = stream.read().strip()
+if len(value.encode("utf-8")) < 32 or "\n" in value or "\r" in value:
+    raise SystemExit("[fail] Internal-token projection payload is invalid.")
+print(value)
+PY
+}
+
 npcink_ai_cloud_resolve_env_file() {
 	local root_dir="$1"
 	local env_file="${NPCINK_CLOUD_ENV_FILE:-}"
@@ -268,10 +431,11 @@ npcink_ai_cloud_env_key_is_runtime_config() {
 		NPCINK_CLOUD_DEPLOY_*|NPCINK_CLOUD_DEPLOY_LOCK_OWNER|\
 		NPCINK_CLOUD_RELEASE_TOOL_PYTHON|NPCINK_CLOUD_COMPOSE_FILE|\
 		NPCINK_CLOUD_ENV_FILE|NPCINK_CLOUD_BACKEND_ENV_FILE|\
+		NPCINK_CLOUD_ADMIN_KEY|NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN|\
 		NPCINK_CLOUD_LOAD_MODE|NPCINK_CLOUD_ROLLBACK_IMAGE_MAP|\
-		NPCINK_CLOUD_ROLLBACK_TAG_SUFFIX|NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT|\
+		NPCINK_CLOUD_ROLLBACK_TAG_SUFFIX|\
 		NPCINK_CLOUD_TARGET_DAEMON_MAP|NPCINK_CLOUD_REFRESH_PROVIDERS_ONE_OFF|\
-		NPCINK_CLOUD_SKIP_FRONTEND_IMAGE|NPCINK_CLOUD_SECRET|\
+		NPCINK_CLOUD_API_WORKERS|NPCINK_CLOUD_SKIP_FRONTEND_IMAGE|NPCINK_CLOUD_SECRET|\
 		NPCINK_CLOUD_*_RELEASE_IMAGE)
 			return 1
 			;;
@@ -289,7 +453,6 @@ npcink_ai_cloud_env_key_is_shell_importable() {
 	case "${key}" in
 		COMPOSE_PROJECT_NAME|\
 		NPCINK_CLOUD_ABILITY_NAME|\
-		NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN|\
 		NPCINK_CLOUD_ALPHA_KEY_ID|\
 		NPCINK_CLOUD_ALPHA_SITE_ID|\
 		NPCINK_CLOUD_ALPHA_SITE_SECRET|\
@@ -617,7 +780,7 @@ for directory, mode, label in (
     (state_dir, 0o700, "per-release state directory"),
 ):
     try:
-        metadata = directory.stat(follow_symlinks=False)
+        metadata = directory.lstat()
     except OSError as exc:
         fail(f"Runtime Compose {label} is missing: {exc}")
     if (
@@ -1375,12 +1538,24 @@ if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", host):
     print("[fail] Internal readiness Host is invalid.", file=sys.stderr)
     raise SystemExit(1)
 
+headers = {"Host": host}
+if endpoint_path != "/health/live":
+    token = os.getenv("NPCINK_CLOUD_INTERNAL_AUTH_TOKEN", "").strip()
+    if not token:
+        try:
+            from app.core.runtime_config import read_internal_auth_token
+
+            token = read_internal_auth_token().strip()
+        except (ImportError, OSError, RuntimeError, ValueError):
+            token = ""
+    if not token:
+        print("[fail] Internal readiness credential is unavailable.", file=sys.stderr)
+        raise SystemExit(1)
+    headers["X-Npcink-Internal-Token"] = token
+
 request = urllib.request.Request(
     f"http://127.0.0.1:8000{endpoint_path}",
-    headers={
-        "Host": host,
-        "X-Npcink-Internal-Token": os.environ["NPCINK_CLOUD_INTERNAL_AUTH_TOKEN"],
-    },
+    headers=headers,
 )
 last_error: Exception | None = None
 for _ in range(30):

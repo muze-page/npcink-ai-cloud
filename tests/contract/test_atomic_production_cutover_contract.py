@@ -20,7 +20,14 @@ def _remote_deploy_body() -> str:
     source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     marker = "<<'EOF'\n"
     assert source.count(marker) == 1
-    return source.split(marker, 1)[1].rsplit("\nEOF\n", 1)[0]
+    body = source.split(marker, 1)[1].rsplit("\nEOF\n", 1)[0]
+    # The real remote entry is root-only and requires uid/gid 999 projections.
+    # This portable subprocess fixture already replaces `id`/`stat`; replace
+    # the Python ownership tuple as well without weakening production code.
+    return body.replace(
+        "(metadata.st_uid, metadata.st_gid) != (\n        999,\n        999,\n    )",
+        "(metadata.st_uid, metadata.st_gid) != (os.geteuid(), os.getegid())",
+    )
 
 
 def _write(path: Path, text: str, *, executable: bool = False) -> None:
@@ -146,113 +153,49 @@ if [ "${FAIL_AT:-}" = "operational" ]; then
     exit 46
 fi
 """
+    runtime_preflight = r"""#!/usr/bin/env bash
+set -euo pipefail
+printf 'preflight:pg18-runtime-config\n' >>"${CUTOVER_LOG}"
+if [ "${FAIL_AT:-}" = "preflight" ]; then
+    : >"${CUTOVER_FAILURE_TRIGGERED}"
+    exit 48
+fi
+"""
 
     (source / "deploy").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "deploy/common.sh", source / "deploy/common.sh")
+    portable_common = (ROOT / "deploy/common.sh").read_text(encoding="utf-8").replace(
+        "--uid 999 --gid 999",
+        f"--uid {os.geteuid()} --gid {os.getegid()}",
+    )
+    _write(source / "deploy/common.sh", portable_common)
+    shutil.copy2(ROOT / "deploy/install-lock.py", source / "deploy/install-lock.py")
+    shutil.copy2(
+        ROOT / "deploy/prepare-installation-under-lock.sh",
+        source / "deploy/prepare-installation-under-lock.sh",
+    )
+    portable_validator = (
+        ROOT / "deploy/validate-installation-complete.py"
+    ).read_text(encoding="utf-8")
+    portable_validator = portable_validator.replace(
+        "uid=999,\n        gid=999,",
+        f"uid={os.geteuid()},\n        gid={os.getegid()},",
+    ).replace(
+        "uid=0,\n        gid=0,",
+        f"uid={os.geteuid()},\n        gid={os.getegid()},",
+    )
+    _write(
+        source / "deploy/validate-installation-complete.py",
+        portable_validator,
+    )
     _write(source / "deploy/verify-release-bundle.sh", verifier)
     _write(source / "deploy/remote-load-and-up.sh", loader)
     _write(source / "deploy/remote-migrate.sh", migrate)
     _write(source / "deploy/remote-refresh-providers.sh", refresh)
     _write(source / "deploy/remote-operational-ready.sh", operational)
     _write(source / "deploy/remote-baseline-status.sh", baseline)
+    _write(source / "deploy/remote-runtime-config-preflight.sh", runtime_preflight)
     _write(source / "docker-compose.prod.yml", "services: {}\n")
     _write(source / "docker-compose.runtime.yml", _runtime_compose_source())
-
-
-def _install_p1_e06_receipt(
-    remote_dir: Path,
-    active_release: Path,
-    *,
-    tamper_result_after_receipt: bool = False,
-    omit_restore_proof: bool = False,
-) -> None:
-    evidence_dir = (
-        remote_dir / ".release-state" / active_release.name / "p1-e06-runtime-data-cutover"
-    )
-    evidence_dir.mkdir(parents=True)
-    (remote_dir / ".release-state").chmod(0o700)
-    evidence_dir.parent.chmod(0o700)
-    evidence_dir.chmod(0o700)
-
-    activation_path = evidence_dir / "activation-commit.json"
-    result_path = evidence_dir / "cutover-result.json"
-    activation_path.write_text(
-        json.dumps(
-            {
-                "contract": "p1_e06_activation_commit.v1",
-                "status": "committed",
-                "active_release": str(active_release),
-                "database_revision": "20260717_0068",
-                "runtime_legacy_rows_migrated": 18,
-                "service_legacy_rows_migrated": 12,
-                "legacy_rows_migrated": 30,
-                "backup_sha256": "a" * 64,
-                "off_host_receipt_sha256": "b" * 64,
-            },
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    result_payload = {
-        "contract": "p1_e06_runtime_data_encryption_cutover.v1",
-        "status": "passed",
-        "source_revision": "20260710_0058",
-        "target_revision": "20260717_0068",
-        "runtime_legacy_rows_migrated": 18,
-        "service_legacy_rows_migrated": 12,
-        "legacy_rows_migrated": 30,
-        "backup_sha256": "a" * 64,
-        "previous_release": str(remote_dir / "release-before-cutover"),
-        "active_release": str(active_release),
-        "off_host_receipt": str(remote_dir / "off-host-receipt.json"),
-        "off_host_receipt_sha256": "b" * 64,
-        "off_host_receipt_evidence": str(evidence_dir / "off-host-receipt-verified.json"),
-        "off_host_copy_verified": True,
-        "independent_postgres16_restore_verified": True,
-        "exact_data_service_images_activated": True,
-        "activation_committed": True,
-        "old_code_automatically_restarted_after_failure": False,
-        "whole_database_restore_required_for_rollback": True,
-        "plaintext_included": False,
-        "ciphertext_included": False,
-        "root_secret_included": False,
-    }
-    if omit_restore_proof:
-        result_payload.pop("independent_postgres16_restore_verified")
-    result_path.write_text(
-        json.dumps(result_payload, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    activation_path.chmod(0o600)
-    result_path.chmod(0o600)
-    global_path = remote_dir / ".release-state" / "p1-e06-activation.json"
-    global_path.write_text(
-        json.dumps(
-            {
-                "contract": "p1_e06_global_activation.v1",
-                "status": "passed",
-                "source_revision": "20260710_0058",
-                "target_revision": "20260717_0068",
-                "runtime_legacy_rows_migrated": 18,
-                "service_legacy_rows_migrated": 12,
-                "legacy_rows_migrated": 30,
-                "active_release": str(active_release),
-                "activation_commit_sha256": hashlib.sha256(
-                    activation_path.read_bytes()
-                ).hexdigest(),
-                "cutover_result_sha256": hashlib.sha256(result_path.read_bytes()).hexdigest(),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    global_path.chmod(0o600)
-    if tamper_result_after_receipt:
-        result_path.write_text("{}\n", encoding="utf-8")
-        result_path.chmod(0o600)
 
 
 def _fake_docker(path: Path) -> None:
@@ -358,7 +301,7 @@ if [ "${1:-}" = "tag" ]; then
 fi
 if [ "${1:-}" = "compose" ] && [[ " $* " = *" up -d "* ]] && \
     [ -f "${CUTOVER_FAILURE_TRIGGERED}" ]; then
-    for service_name in postgres redis proxy frontend api worker callback-worker ops-worker; do
+    for service_name in redis proxy frontend api worker callback-worker ops-worker; do
         : >"${RECOVERY_RUNNING_STATE}/${service_name}"
     done
     if [ "${FAIL_OLD_COMPOSE_UP:-0}" = "1" ]; then
@@ -474,10 +417,11 @@ def _fake_linux_file_commands(fake_bin: Path) -> None:
     stat = r"""#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = "-c" ] && [ "${2:-}" = "%a" ]; then
-    if __REAL_STAT__ -c %a "$3" >/dev/null 2>&1; then
-        exec __REAL_STAT__ -c %a "$3"
+    target="${!#}"
+    if __REAL_STAT__ -c %a "${target}" >/dev/null 2>&1; then
+        exec __REAL_STAT__ -c %a "${target}"
     fi
-    exec __REAL_STAT__ -f %Lp "$3"
+    exec __REAL_STAT__ -f %Lp "${target}"
 fi
 if [ "${1:-}" = "-c" ] && [ "${2:-}" = "%u" ]; then
     printf '0\n'
@@ -515,10 +459,21 @@ for candidate in "$@"; do
 done
 exec /bin/rm "$@"
 """
+    flock = r"""#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+    -n|-u)
+        [ "${2:-}" -ge 0 ]
+        exit 0
+        ;;
+esac
+exit 2
+"""
     _write(fake_bin / "stat", stat, executable=True)
     _write(fake_bin / "id", identity, executable=True)
     _write(fake_bin / "mv", mv, executable=True)
     _write(fake_bin / "rm", rm, executable=True)
+    _write(fake_bin / "flock", flock, executable=True)
 
 
 def _run_remote_cutover(
@@ -546,12 +501,6 @@ def _run_remote_cutover(
     new_env_sentinel: str = "",
     block_successful_unlock: bool = False,
     database_revision: str = "20260717_0068",
-    require_p1_e06_receipt: bool = False,
-    install_p1_e06_receipt: bool = False,
-    tamper_p1_e06_result: bool = False,
-    receipt_active_release_name: str = "release-previous",
-    omit_p1_e06_restore_proof: bool = False,
-    descendant_revision: str = "",
     preexisting_one_off_lock: bool = False,
     previous_runtime_network_contract: bool = False,
     runtime_network_state_variant: str = "valid",
@@ -572,6 +521,48 @@ def _run_remote_cutover(
     previous.mkdir(parents=True)
     fake_bin.mkdir()
     recovery_running_state.mkdir()
+    shared_config = remote_dir / "shared" / "config"
+    shared_config.mkdir(parents=True)
+    runtime_config = b'{"fixture":"protected-runtime-config"}\n'
+    (shared_config / "runtime-config.json").write_bytes(runtime_config)
+    (shared_config / "install-state.json").write_text(
+        json.dumps(
+            {
+                "config_digest": hashlib.sha256(runtime_config).hexdigest(),
+                "database_contract": "pg18_empty_initialization.v1",
+                "installation_state": "complete",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (remote_dir / ".installation-complete").write_text(
+        json.dumps(
+            {
+                "accepted_at": "2026-07-20T00:00:00Z",
+                "config_digest": hashlib.sha256(runtime_config).hexdigest(),
+                "contract": "installation_complete.v1",
+                "release": str(previous),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (shared_config / "rds-ca.pem").write_text("fixture-ca\n", encoding="utf-8")
+    frontend_projection = shared_config / "frontend"
+    frontend_projection.mkdir()
+    (frontend_projection / "internal-auth-token").write_text(
+        "fixture-internal-token\n", encoding="utf-8"
+    )
+    shared_config.chmod(0o700)
+    (shared_config / "runtime-config.json").chmod(0o600)
+    (shared_config / "install-state.json").chmod(0o640)
+    (remote_dir / ".installation-complete").chmod(0o600)
+    (shared_config / "rds-ca.pem").chmod(0o600)
+    frontend_projection.chmod(0o750)
+    (frontend_projection / "internal-auth-token").chmod(0o640)
     (previous / ".env.deploy").write_text(
         f"NPCINK_CLOUD_COMPOSE_PROJECT_NAME={old_project_name}\n"
         f"NPCINK_CLOUD_TEST_RECOVERY_SENTINEL={old_env_sentinel}\n",
@@ -630,23 +621,11 @@ def _run_remote_cutover(
         current_target.mkdir()
     if current_kind != "absent":
         (remote_dir / "current").symlink_to(current_target)
-    if install_p1_e06_receipt:
-        _install_p1_e06_receipt(
-            remote_dir,
-            remote_dir / receipt_active_release_name,
-            tamper_result_after_receipt=tamper_p1_e06_result,
-            omit_restore_proof=omit_p1_e06_restore_proof,
-        )
     if preexisting_one_off_lock:
         one_off_lock = remote_dir / ".release-state" / ".release-one-off.lock"
         one_off_lock.mkdir(parents=True, mode=0o700)
         (remote_dir / ".release-state").chmod(0o700)
     _stub_bundle(bundle_source)
-    if descendant_revision:
-        _write(
-            bundle_source / "migrations" / "versions" / f"{descendant_revision}_fixture.py",
-            f'revision: str = "{descendant_revision}"\ndown_revision: str = "20260717_0068"\n',
-        )
     _fake_docker(fake_bin / "docker")
     _fake_linux_file_commands(fake_bin)
     _write(fake_bin / "curl", "#!/usr/bin/env bash\nexit 0\n", executable=True)
@@ -712,7 +691,6 @@ def _run_remote_cutover(
                     ),
                     "REFRESH_PROVIDERS": "1",
                     "WITH_OPERATIONAL_READY": "0",
-                    "REQUIRE_P1_E06_RECEIPT": ("1" if require_p1_e06_receipt else "0"),
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -807,7 +785,6 @@ def _run_remote_cutover(
 
 def _assert_recovery_generation_was_refenced(tmp_path: Path, log_path: Path) -> None:
     services = (
-        "postgres",
         "redis",
         "proxy",
         "frontend",
@@ -872,9 +849,16 @@ def test_atomic_cutover_command_order_and_one_off_modes() -> None:
     assert "NPCINK_CLOUD_REFRESH_PROVIDERS_ONE_OFF" not in refresh
     assert "NPCINK_CLOUD_REFRESH_PROVIDERS_ONE_OFF" not in deploy
 
-    gate = deploy.index("\nassert_p1_e06_ordinary_deploy_gate\n")
+    fresh_gate = deploy.index("\tassert_fresh_pg18_install_gate\n")
     first_image_mutation = deploy.index('CUTOVER_PHASE="prepare-release-images"')
-    assert gate < first_image_mutation
+    assert fresh_gate < first_image_mutation
+    candidate_preflight = deploy.index(
+        'CUTOVER_PHASE="candidate-runtime-config-and-pg18-preflight"'
+    )
+    stop_writers = deploy.index('CUTOVER_PHASE="stop-old-application-services"')
+    assert first_image_mutation < candidate_preflight < stop_writers
+    assert "assert_p1_e06_ordinary_deploy_gate" not in deploy
+    assert "NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT" not in deploy
     assert "APPLICATION_SERVICES=(caddy proxy)" in deploy
     assert 'if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then' in deploy
     assert "APPLICATION_SERVICES+=(frontend)" in deploy
@@ -899,40 +883,17 @@ def test_atomic_cutover_command_order_and_one_off_modes() -> None:
         assert field in readiness
 
 
-def test_formal_production_workflow_requires_p1_e06_receipt() -> None:
+def test_formal_production_workflow_retires_legacy_p1_e06_receipt_gate() -> None:
     workflow = (ROOT / ".github/workflows/deploy-production.yml").read_text(encoding="utf-8")
-    assert 'NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT: "1"' in workflow
     deploy = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     workspace_target = (ROOT / "deploy/workspace-target.env.sh").read_text(encoding="utf-8")
-    assert "NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT:-1" in deploy
-    assert '"REQUIRE_P1_E06_RECEIPT": "REQUIRE_P1_E06_RECEIPT"' in deploy
-    assert "Ordinary production deployment cannot migrate revision 0058" in deploy
-    assert "Full deployment cannot disable" in deploy
+    for source in (workflow, deploy, workspace_target):
+        assert "NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT" not in source
+    assert "assert_p1_e06_ordinary_deploy_gate" not in deploy
+    assert "Ordinary production deployment cannot migrate revision 0058" not in deploy
     assert 'chmod 0700 "${DEPLOY_LOCK_DIR}"' in deploy
     assert "stat -c '%u' \"${DEPLOY_LOCK_DIR}\"" in deploy
     assert "stat -c '%a' \"${DEPLOY_LOCK_DIR}\"" in deploy
-    assert 'NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT="1"' in workspace_target
-
-
-def test_full_deploy_cli_cannot_disable_p1_e06_receipt_gate() -> None:
-    env = os.environ.copy()
-    env.update(
-        {
-            "NPCINK_CLOUD_BASE_URL": "https://CLOUD.NPC.INK.",
-            "NPCINK_CLOUD_REQUIRE_P1_E06_RECEIPT": "0",
-        }
-    )
-    completed = subprocess.run(
-        ["bash", str(DEPLOY_SCRIPT)],
-        cwd=ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert completed.returncode != 0
-    assert "Full deployment cannot disable" in completed.stderr
 
 
 def test_stage_only_extracts_and_verifies_without_runtime_mutation(
@@ -1201,7 +1162,7 @@ urllib.request.urlopen = lambda *_args, **_kwargs: Response()
         {
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
             "PROBE_PYTHON": sys.executable,
-            "PYTHONPATH": str(tmp_path),
+            "PYTHONPATH": f"{tmp_path}{os.pathsep}{ROOT}",
             "ID_CALL_DIR": str(tmp_path),
             "CHANGE_CONTAINER_IDS": "1" if change_container_ids else "0",
             "HEARTBEAT_TIME": heartbeat_time,
@@ -1259,16 +1220,19 @@ def test_successful_cutover_uses_staged_commands_in_order(tmp_path: Path) -> Non
     assert not (remote_dir / ".deploy-lock").exists()
 
 
-def test_ordinary_deploy_blocks_0058_before_any_image_mutation(tmp_path: Path) -> None:
+def test_pg18_complete_deploy_no_longer_queries_legacy_pg16_revision(
+    tmp_path: Path,
+) -> None:
     completed, remote_dir, log_path = _run_remote_cutover(
         tmp_path,
         database_revision="20260710_0058",
     )
 
-    assert completed.returncode != 0
-    assert "cannot migrate revision 0058" in completed.stderr
-    assert "load:" not in log_path.read_text(encoding="utf-8")
-    assert (remote_dir / "current").resolve() == remote_dir / "release-previous"
+    assert completed.returncode == 0, f"{completed.stdout}\\n{completed.stderr}"
+    assert (remote_dir / "current").resolve() == remote_dir / "release-next"
+    assert "preflight:pg18-runtime-config" in log_path.read_text(encoding="utf-8")
+    assert "P1-E06" not in completed.stdout
+    assert "P1-E06" not in completed.stderr
 
 
 def test_ordinary_full_deploy_without_current_is_never_an_implicit_bootstrap(
@@ -1278,7 +1242,6 @@ def test_ordinary_full_deploy_without_current_is_never_an_implicit_bootstrap(
         tmp_path,
         current_kind="absent",
         new_project_name="npcink-ai-cloud",
-        database_revision="20260710_0058",
     )
 
     assert completed.returncode != 0
@@ -1287,105 +1250,16 @@ def test_ordinary_full_deploy_without_current_is_never_an_implicit_bootstrap(
     assert "load:" not in log
 
 
-def test_formal_production_deploy_requires_global_p1_e06_receipt(
-    tmp_path: Path,
-) -> None:
-    completed, _remote_dir, log_path = _run_remote_cutover(
-        tmp_path,
-        require_p1_e06_receipt=True,
-    )
+def test_candidate_pg18_preflight_fails_before_writer_stop(tmp_path: Path) -> None:
+    completed, remote_dir, log_path = _run_remote_cutover(tmp_path, fail_at="preflight")
 
     assert completed.returncode != 0
-    assert "Global P1-E06 receipt" in completed.stderr
-    assert "load:" not in log_path.read_text(encoding="utf-8")
-
-
-def test_formal_production_deploy_accepts_bound_p1_e06_receipt(
-    tmp_path: Path,
-) -> None:
-    completed, remote_dir, _log_path = _run_remote_cutover(
-        tmp_path,
-        require_p1_e06_receipt=True,
-        install_p1_e06_receipt=True,
-    )
-
-    assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}"
-    assert (remote_dir / "current").resolve() == remote_dir / "release-next"
-    assert "Governed P1-E06 activation evidence matches" in completed.stdout
-
-
-def test_formal_production_deploy_accepts_receipt_from_original_cutover_release(
-    tmp_path: Path,
-) -> None:
-    completed, remote_dir, _log_path = _run_remote_cutover(
-        tmp_path,
-        require_p1_e06_receipt=True,
-        install_p1_e06_receipt=True,
-        receipt_active_release_name="release-original-cutover",
-    )
-
-    assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}"
-    assert (remote_dir / "current").resolve() == remote_dir / "release-next"
-
-
-def test_formal_production_deploy_accepts_migration_graph_descendant_of_0068(
-    tmp_path: Path,
-) -> None:
-    completed, remote_dir, _log_path = _run_remote_cutover(
-        tmp_path,
-        database_revision="20260718_0069",
-        descendant_revision="20260718_0069",
-        require_p1_e06_receipt=True,
-        install_p1_e06_receipt=True,
-    )
-
-    assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}"
-    assert (remote_dir / "current").resolve() == remote_dir / "release-next"
-
-
-def test_formal_production_deploy_rejects_unproved_revision_descendant(
-    tmp_path: Path,
-) -> None:
-    completed, _remote_dir, log_path = _run_remote_cutover(
-        tmp_path,
-        database_revision="20260718_0069",
-        require_p1_e06_receipt=True,
-        install_p1_e06_receipt=True,
-    )
-
-    assert completed.returncode != 0
-    assert "not 0068 or a migration-graph descendant" in completed.stderr
-    assert "load:" not in log_path.read_text(encoding="utf-8")
-
-
-def test_formal_production_deploy_rejects_tampered_p1_e06_evidence(
-    tmp_path: Path,
-) -> None:
-    completed, _remote_dir, log_path = _run_remote_cutover(
-        tmp_path,
-        require_p1_e06_receipt=True,
-        install_p1_e06_receipt=True,
-        tamper_p1_e06_result=True,
-    )
-
-    assert completed.returncode != 0
-    assert "cutover result digest mismatch" in completed.stderr
-    assert "load:" not in log_path.read_text(encoding="utf-8")
-
-
-def test_formal_production_deploy_rejects_digest_bound_but_incomplete_evidence(
-    tmp_path: Path,
-) -> None:
-    completed, _remote_dir, log_path = _run_remote_cutover(
-        tmp_path,
-        require_p1_e06_receipt=True,
-        install_p1_e06_receipt=True,
-        omit_p1_e06_restore_proof=True,
-    )
-
-    assert completed.returncode != 0
-    assert "cutover result schema mismatch" in completed.stderr
-    assert "load:" not in log_path.read_text(encoding="utf-8")
+    log = log_path.read_text(encoding="utf-8")
+    assert "load:prepare-only" in log
+    assert "preflight:pg18-runtime-config" in log
+    assert "load:data-only" not in log
+    assert "migrate:" not in log
+    assert (remote_dir / "current").resolve() == remote_dir / "release-previous"
 
 
 def test_successful_activation_reports_unlock_failure_and_retains_lock(
@@ -1552,7 +1426,7 @@ def test_pre_migration_recovery_rejects_wrong_container_image(
     assert "does not use its snapshotted rollback image" in completed.stderr
     assert "Deployment lock retained for operator recovery" in completed.stderr
     log = log_path.read_text(encoding="utf-8")
-    assert "postgres redis proxy frontend api worker callback-worker ops-worker" in log
+    assert "redis proxy frontend api worker callback-worker ops-worker" in log
     _assert_recovery_generation_was_refenced(tmp_path, log_path)
 
 

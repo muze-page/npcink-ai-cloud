@@ -654,7 +654,6 @@ esac
 def test_runtime_compose_never_pulls_and_v227_run_commands_have_no_pull_flag() -> None:
     runtime_compose = (ROOT / "docker-compose.runtime.yml").read_text(encoding="utf-8")
     service_names = (
-        "postgres",
         "redis",
         "api",
         "frontend",
@@ -693,7 +692,7 @@ def test_runtime_compose_never_pulls_and_v227_run_commands_have_no_pull_flag() -
     assert 'docker start "${container_ids_to_start[@]}"' in loader
     assert 'LOAD_MODE="${NPCINK_CLOUD_LOAD_MODE:-}"' in loader
     assert "full|" not in loader
-    assert "npcink-ai-cloud-postgres:prod" in loader
+    assert "npcink-ai-cloud-postgres:prod" not in loader
     assert "npcink-ai-cloud-external-redis:prod" in loader
     assert "{{.Image}}" in loader
     assert "true false 0 healthy" in loader
@@ -925,7 +924,6 @@ def _run_remote_data_only_with_distinct_portable_and_daemon_ids(
     tmp_path: Path,
     *,
     identity_proof_failure_role: str = "",
-    postgres_container_image_id: str | None = None,
     redis_container_image_id: str | None = None,
     compose_file_env: str | None = None,
     run_cwd: Path | None = None,
@@ -935,9 +933,7 @@ def _run_remote_data_only_with_distinct_portable_and_daemon_ids(
     fake_bin = tmp_path / "bin"
     docker_log_path = tmp_path / "docker.log"
     identity_log_path = tmp_path / "identity.log"
-    portable_postgres_image_id = f"sha256:{'a' * 64}"
     portable_redis_image_id = f"sha256:{'b' * 64}"
-    target_postgres_image_id = f"sha256:{'c' * 64}"
     target_redis_image_id = f"sha256:{'d' * 64}"
 
     (release / "deploy").mkdir(parents=True)
@@ -965,11 +961,9 @@ if len(arguments) != 5 or arguments[1] != "--root" or arguments[3] != "--role":
 command = arguments[0]
 role = arguments[4]
 portable_ids = {
-    "postgres": os.environ["PORTABLE_POSTGRES_IMAGE_ID"],
     "external_redis": os.environ["PORTABLE_REDIS_IMAGE_ID"],
 }
 target_ids = {
-    "postgres": os.environ["TARGET_POSTGRES_IMAGE_ID"],
     "external_redis": os.environ["TARGET_REDIS_IMAGE_ID"],
 }
 if role not in target_ids:
@@ -997,7 +991,6 @@ with open(os.environ["DOCKER_LOG"], "a", encoding="utf-8") as handle:
 if arguments[:2] == ["image", "inspect"]:
     reference = arguments[-1]
     image_ids = {
-        "npcink-ai-cloud-postgres:prod": os.environ["TARGET_POSTGRES_IMAGE_ID"],
         "npcink-ai-cloud-external-redis:prod": os.environ["TARGET_REDIS_IMAGE_ID"],
     }
     if reference not in image_ids:
@@ -1008,14 +1001,8 @@ if arguments[:2] == ["image", "inspect"]:
 if arguments[:1] == ["compose"]:
     if "up" in arguments:
         raise SystemExit(0)
-    if arguments[-4:] == ["ps", "--all", "-q", "postgres"]:
-        print("postgres-container")
-        raise SystemExit(0)
     if arguments[-4:] == ["ps", "--all", "-q", "redis"]:
         print("redis-container")
-        raise SystemExit(0)
-    if arguments[-3:] == ["ps", "-q", "postgres"]:
-        print("postgres-container")
         raise SystemExit(0)
     if arguments[-3:] == ["ps", "-q", "redis"]:
         print("redis-container")
@@ -1034,7 +1021,6 @@ if arguments[:2] == ["inspect", "--format"] and len(arguments) == 4:
     container_id = arguments[3]
     if inspect_format == "{{.Image}}":
         container_ids = {
-            "postgres-container": os.environ["POSTGRES_CONTAINER_IMAGE_ID"],
             "redis-container": os.environ["REDIS_CONTAINER_IMAGE_ID"],
         }
         if container_id not in container_ids:
@@ -1081,14 +1067,9 @@ raise SystemExit(64)
             "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
             "DOCKER_LOG": str(docker_log_path),
             "IDENTITY_LOG": str(identity_log_path),
-            "PORTABLE_POSTGRES_IMAGE_ID": portable_postgres_image_id,
             "PORTABLE_REDIS_IMAGE_ID": portable_redis_image_id,
-            "TARGET_POSTGRES_IMAGE_ID": target_postgres_image_id,
             "TARGET_REDIS_IMAGE_ID": target_redis_image_id,
             "IDENTITY_PROOF_FAILURE_ROLE": identity_proof_failure_role,
-            "POSTGRES_CONTAINER_IMAGE_ID": (
-                postgres_container_image_id or target_postgres_image_id
-            ),
             "REDIS_CONTAINER_IMAGE_ID": (redis_container_image_id or target_redis_image_id),
             "STARTED_STATE": str(tmp_path / "started.state"),
             "NPCINK_CLOUD_LOAD_MODE": "data-only",
@@ -1125,26 +1106,25 @@ def test_remote_data_only_accepts_distinct_portable_and_target_daemon_ids(
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert identity_log.count("loaded-role-daemon-id") == 4
-    assert "--role postgres" in identity_log
+    assert identity_log.count("loaded-role-daemon-id") == 2
+    assert "--role postgres" not in identity_log
     assert "--role external_redis" in identity_log
     assert "role-image-id" not in identity_log
     assert (
         docker_log.count(
-            "up --no-start --pull never --no-build --no-deps --force-recreate postgres redis"
+            "up --no-start --pull never --no-build --no-deps --force-recreate redis"
         )
         == 1
     )
-    assert "ps -q postgres" in docker_log
+    assert "ps -q postgres" not in docker_log
     assert "ps -q redis" in docker_log
-    assert (
-        "[ok] Data service postgres uses the frozen exact image ID and is healthy."
-        in completed.stdout
-    )
     assert (
         "[ok] Data service redis uses the frozen exact image ID and is healthy." in completed.stdout
     )
-    assert "[ok] Data services are ready for one-off migration." in completed.stdout
+    assert (
+        "[ok] Redis is ready; PostgreSQL remains an external runtime dependency."
+        in completed.stdout
+    )
 
 
 def test_remote_data_only_requires_matching_deploy_owner_before_manifest_or_docker(
@@ -1192,11 +1172,11 @@ def test_remote_data_only_blocks_compose_when_second_identity_proof_fails(
     )
 
     assert completed.returncode != 0
-    assert identity_log.count("loaded-role-daemon-id") == 2
-    assert "--role postgres" in identity_log
+    assert identity_log.count("loaded-role-daemon-id") == 1
+    assert "--role postgres" not in identity_log
     assert "--role external_redis" in identity_log
     assert docker_log == ""
-    assert "Data services are ready for one-off migration." not in completed.stdout
+    assert "PostgreSQL remains an external runtime dependency." not in completed.stdout
 
 
 def test_remote_data_only_rejects_healthy_container_with_unproved_image_id(
@@ -1211,15 +1191,14 @@ def test_remote_data_only_rejects_healthy_container_with_unproved_image_id(
     )
 
     assert completed.returncode != 0
-    assert identity_log.count("loaded-role-daemon-id") == 2
+    assert identity_log.count("loaded-role-daemon-id") == 1
     assert "up --no-start --pull never --no-build" in docker_log
-    assert "start postgres-container redis-container" not in docker_log
+    assert "start redis-container" not in docker_log
     assert docker_log.count("inspect --format {{.Image}} redis-container") == 1
     assert ".State.Running" not in docker_log
-    assert "[ok] Data service postgres" not in completed.stdout
     assert "[ok] Data service redis" not in completed.stdout
     assert "does not use the proved target-daemon image ID" in completed.stderr
-    assert "Data services are ready for one-off migration." not in completed.stdout
+    assert "PostgreSQL remains an external runtime dependency." not in completed.stdout
 
 
 def _run_remote_service_phase(
@@ -1235,6 +1214,11 @@ def _run_remote_service_phase(
     release = tmp_path / "release-fixture"
     fake_bin = tmp_path / "bin"
     event_log_path = tmp_path / "events.log"
+    config_dir = tmp_path / "shared" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "install-state.json").write_text(
+        '{"installation_state":"pending"}\n', encoding="utf-8"
+    )
     role_ids = {
         "api": f"sha256:{'a' * 64}",
         "worker": f"sha256:{'b' * 64}",
@@ -1426,6 +1410,7 @@ exit 0
             "NPCINK_CLOUD_BASE_URL": "http://127.0.0.1:8110",
             "NPCINK_CLOUD_ENV_FILE": str(env_file),
             "NPCINK_CLOUD_COMPOSE_FILE": str(release / "docker-compose.prod.yml"),
+            "NPCINK_CLOUD_CONFIG_DIR_HOST": str(config_dir),
             "NPCINK_CLOUD_RELEASE_TOOL_PYTHON": sys.executable,
         }
     )
