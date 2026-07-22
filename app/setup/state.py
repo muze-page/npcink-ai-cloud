@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 import secrets
+import stat
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -304,19 +305,61 @@ class SetupConfigStore:
     def install_lock(self) -> Iterator[None]:
         self._validate_directory()
         lock_path = self.config_dir / INSTALL_LOCK_FILE
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+        descriptor = self._open_install_lock(lock_path)
+        locked = False
         try:
-            os.fchmod(descriptor, 0o600)
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise InstallationInProgressError("installation is already in progress") from error
+            except OSError as error:
+                raise SetupStateError("installation lock is unavailable") from error
+            locked = True
+            self._validate_install_lock_descriptor(descriptor, lock_path)
             yield
         finally:
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                if locked:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
             finally:
                 os.close(descriptor)
+
+    def _open_install_lock(self, lock_path: Path) -> int:
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            descriptor = os.open(lock_path, flags, 0o600)
+        except OSError as error:
+            raise SetupStateError("installation lock is unavailable") from error
+        try:
+            self._validate_install_lock_descriptor(descriptor, lock_path)
+        except Exception:
+            os.close(descriptor)
+            raise
+        return descriptor
+
+    @staticmethod
+    def _validate_install_lock_descriptor(descriptor: int, lock_path: Path) -> None:
+        try:
+            descriptor_metadata = os.fstat(descriptor)
+            path_metadata = lock_path.lstat()
+        except OSError as error:
+            raise SetupStateError("installation lock is unavailable") from error
+        if (
+            not stat.S_ISREG(descriptor_metadata.st_mode)
+            or stat.S_IMODE(descriptor_metadata.st_mode) != 0o600
+            or descriptor_metadata.st_uid != os.geteuid()
+            or descriptor_metadata.st_gid != os.getegid()
+            or not stat.S_ISREG(path_metadata.st_mode)
+            or path_metadata.st_dev != descriptor_metadata.st_dev
+            or path_metadata.st_ino != descriptor_metadata.st_ino
+        ):
+            raise SetupStateError("installation lock is invalid")
 
     def atomic_write_json(self, path: Path, payload: dict[str, Any], *, mode: int) -> None:
         self.atomic_write_bytes(path, canonical_json_bytes(payload), mode=mode)
