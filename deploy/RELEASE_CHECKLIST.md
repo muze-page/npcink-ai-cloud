@@ -228,18 +228,23 @@ the unchecked evidence above is not authoritative for current deployment.
 
 ### 3.4 Production Guardrails
 
-- [ ] the exact release canonical allowlist no longer contains any Python
-  `3.14.6` exception for `CVE-2026-11940`, `CVE-2026-11972`, or
-  `CVE-2026-15308`, and a fresh exact-image scan is green
-- [ ] while any of those entries remains, the machine-executable first-install
-  gate fails before remote mkdir, upload, deployment lock, image, container, or
-  database mutation; the old bundle-external
-  `npcink.controlled_production_cve_risk_acceptance.v1` operator acceptance
-  cannot bypass this current PostgreSQL 18 gate
-- [ ] the production SSH user is explicit and the manually dispatched
-  `Deploy Production` workflow accepted the exact operator confirmation,
-  GitHub `production` Environment approval, and a completed successful
-  `Cloud CI` run for the exact production commit; no push triggered deployment
+- [ ] the exact release canonical allowlist either no longer contains the three
+  governed Python `3.14.6` entries, or the temporary bundle-external
+  `npcink.controlled_production_cve_risk_acceptance.v1` receipt and its separate
+  SHA-256 file are operator-owned mode `0600`, fresh, unexpired, and bind the
+  exact Linux/AMD64 source, bundle, allowlist, passed scan, API receipt, and
+  exact finding set; in either case the fresh exact-image scan is green
+- [ ] while any governed entry remains, the machine-executable first-install
+  gate consumes and validates both external evidence files before remote mkdir,
+  upload, deployment lock, image, container, or database mutation; absence,
+  partial matches, changed threat intelligence, changed scan evidence, unsafe
+  protection, or any binding mismatch fails closed and there is no skip flag
+- [ ] the production SSH user is explicit, the exact production commit has a
+  completed successful `Cloud CI` run, and either the manually dispatched
+  `Deploy Production` workflow received its confirmation and Environment
+  approval or the documented temporary first-install trusted-workstation path
+  received the exact bundle-bound operator acceptance; no push triggered a
+  deployment
 - [ ] the deployment emitted exactly one explicit `installation_state` result;
   no HTTP failure or Setup-route response was interpreted as pending
 - [ ] a `pending` result skipped every post-install preflight/smoke step and

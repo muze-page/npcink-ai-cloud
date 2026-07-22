@@ -333,7 +333,8 @@ require_marker "docs/cloud-production-release-policy-v1.md" "production Compose 
 require_marker "docs/cloud-production-release-policy-v1.md" "A first install is a distinct release lifecycle."
 require_marker "docs/cloud-production-release-policy-v1.md" "publishes the permanent completion sentinel before idempotent cleanup"
 require_marker "docs/cloud-production-release-policy-v1.md" "candidate-image RDS PostgreSQL 18/TLS/Alembic preflight"
-require_marker "docs/cloud-production-release-policy-v1.md" "The Python image CVE exception must be closed"
+require_marker "docs/cloud-production-release-policy-v1.md" "The Python image CVE exception must either be"
+require_marker "docs/cloud-production-release-policy-v1.md" "trusted workstation instead of the GitHub deploy workflow"
 require_marker "docs/cloud-production-release-policy-v1.md" "Historical PG16 and P1-E06 Policy (non-normative)"
 require_marker "docs/cloud-production-release-policy-v1.md" "must not be used to reopen compatibility"
 require_marker "docs/cloud-production-release-policy-v1.md" "cloud-first-install-rds-pg18-runbook.md"
@@ -595,6 +596,12 @@ require_marker "deploy/prepare-first-install.sh" '.installation-complete'
 require_marker "deploy/deploy-to-ssh-host.sh" 'FIRST_INSTALL_PENDING_MARKER="${REMOTE_DIR}/.first-install-pending.json"'
 require_marker "deploy/deploy-to-ssh-host.sh" 'npcink_ai_cloud_start_install_lock_broker'
 require_marker "deploy/deploy-to-ssh-host.sh" 'check-first-install-cve-gate.py'
+require_marker "deploy/deploy-to-ssh-host.sh" '--controlled-cve-risk-acceptance'
+require_marker "deploy/deploy-to-ssh-host.sh" '--controlled-cve-risk-acceptance-checksum'
+require_marker "scripts/check-first-install-cve-gate.py" 'npcink.controlled_production_cve_risk_acceptance.v1'
+require_marker "scripts/check-first-install-cve-gate.py" 'MAX_EVIDENCE_AGE = timedelta(hours=24)'
+require_marker "scripts/check-first-install-cve-gate.py" 'mode-0600 regular file'
+require_marker "scripts/check-first-install-cve-gate.py" 'controlled_production_validation'
 require_marker "deploy/deploy-to-ssh-host.sh" 'Remote install-state.json protection is unsafe.'
 require_marker "deploy/deploy-to-ssh-host.sh" 'candidate-runtime-config-and-pg18-preflight'
 require_marker "deploy/deploy-to-ssh-host.sh" 'Production deployment rejects contract override'
@@ -633,7 +640,7 @@ require_marker "deploy/RELEASE_CHECKLIST.md" 'Historical P1-E06 Edge migration e
 require_marker "deploy/RELEASE_CHECKLIST.md" 'unchecked evidence above is not authoritative for current deployment'
 require_marker "deploy/OPS_PLAYBOOK.md" 'Current deployment authority is the fresh PostgreSQL 18 path'
 require_marker "deploy/OPS_PLAYBOOK.md" 'Historical P1-E06 Edge migration procedure (non-normative)'
-require_marker "deploy/OPS_PLAYBOOK.md" 'neither receipt is a current PostgreSQL 18 deployment gate'
+require_marker "deploy/OPS_PLAYBOOK.md" 'Only the CVE acceptance pair is a current, temporary PostgreSQL 18'
 reject_marker "deploy/OPS_PLAYBOOK.md" 'Both gates are required.'
 reject_marker "deploy/OPS_PLAYBOOK.md" 'P1-E06 has an independent production Edge hard gate.'
 reject_marker "docker-compose.pg18-proof.yml" 'NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN'

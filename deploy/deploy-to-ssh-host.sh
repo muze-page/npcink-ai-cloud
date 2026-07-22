@@ -13,6 +13,8 @@ SSH_CONNECT_TIMEOUT_SECONDS="${NPCINK_CLOUD_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-
 DEPLOY_HOST_PYTHON="${NPCINK_CLOUD_DEPLOY_HOST_PYTHON:-/usr/bin/python3.11}"
 REMOTE_DIR="${NPCINK_CLOUD_DEPLOY_REMOTE_DIR:-/opt/npcink-ai-cloud}"
 BUNDLE_PATH="${NPCINK_CLOUD_DEPLOY_BUNDLE_PATH:-${ROOT_DIR}/dist/deploy-bundle.tgz}"
+CONTROLLED_CVE_RISK_ACCEPTANCE="${NPCINK_CLOUD_CONTROLLED_CVE_RISK_ACCEPTANCE:-}"
+CONTROLLED_CVE_RISK_ACCEPTANCE_CHECKSUM="${NPCINK_CLOUD_CONTROLLED_CVE_RISK_ACCEPTANCE_CHECKSUM:-}"
 ENV_FILE="${NPCINK_CLOUD_ENV_FILE:-}"
 IMAGE_PLATFORM="${NPCINK_CLOUD_IMAGE_PLATFORM:-}"
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
@@ -74,6 +76,14 @@ while [ "$#" -gt 0 ]; do
 			BUNDLE_PATH="$2"
 			shift 2
 			;;
+		--controlled-cve-risk-acceptance)
+			CONTROLLED_CVE_RISK_ACCEPTANCE="$2"
+			shift 2
+			;;
+		--controlled-cve-risk-acceptance-checksum)
+			CONTROLLED_CVE_RISK_ACCEPTANCE_CHECKSUM="$2"
+			shift 2
+			;;
 		--env-file)
 			STAGE_ONLY_DISALLOWED_CLI+=("$1")
 			ENV_FILE="$2"
@@ -104,7 +114,7 @@ while [ "$#" -gt 0 ]; do
 			shift 2
 			;;
 		--secret)
-			echo "[fail] --secret is forbidden because process arguments are observable; --stage-only accepts only bundle/platform, SSH, managed-root, and host-Python options. Use NPCINK_CLOUD_SECRET from a protected process environment for a full deployment." >&2
+			echo "[fail] --secret is forbidden because process arguments are observable; --stage-only accepts only bundle/platform, controlled-CVE evidence, SSH, managed-root, and host-Python options. Use NPCINK_CLOUD_SECRET from a protected process environment for a full deployment." >&2
 			exit 1
 			;;
 		--scopes)
@@ -252,7 +262,7 @@ if [ "${STAGE_ONLY}" = "1" ] && [ -n "${ENV_FILE}" ]; then
 fi
 
 if [ "${STAGE_ONLY}" = "1" ] && [ "${#STAGE_ONLY_DISALLOWED_CLI[@]}" -ne 0 ]; then
-	echo "[fail] --stage-only accepts only bundle/platform, SSH, managed-root, and host-Python options; rejected: ${STAGE_ONLY_DISALLOWED_CLI[*]}" >&2
+	echo "[fail] --stage-only accepts only bundle/platform, controlled-CVE evidence, SSH, managed-root, and host-Python options; rejected: ${STAGE_ONLY_DISALLOWED_CLI[*]}" >&2
 	exit 1
 fi
 
@@ -265,6 +275,12 @@ fi
 
 if [ -n "${ENV_FILE}" ] && [ ! -f "${ENV_FILE}" ]; then
 	echo "[fail] Env file not found: ${ENV_FILE}" >&2
+	exit 1
+fi
+
+if { [ -n "${CONTROLLED_CVE_RISK_ACCEPTANCE}" ] && [ -z "${CONTROLLED_CVE_RISK_ACCEPTANCE_CHECKSUM}" ]; } || \
+	{ [ -z "${CONTROLLED_CVE_RISK_ACCEPTANCE}" ] && [ -n "${CONTROLLED_CVE_RISK_ACCEPTANCE_CHECKSUM}" ]; }; then
+	echo "[fail] Controlled CVE risk acceptance and its independent checksum must be supplied together." >&2
 	exit 1
 fi
 
@@ -390,6 +406,14 @@ if [ "${BUNDLE_PLATFORM}" != "${IMAGE_PLATFORM}" ]; then
 	exit 1
 fi
 
+FIRST_INSTALL_CVE_GATE_ARGS=(--bundle "${BUNDLE_PATH}")
+if [ -n "${CONTROLLED_CVE_RISK_ACCEPTANCE}" ]; then
+	FIRST_INSTALL_CVE_GATE_ARGS+=(
+		--controlled-risk-acceptance "${CONTROLLED_CVE_RISK_ACCEPTANCE}"
+		--controlled-risk-acceptance-checksum "${CONTROLLED_CVE_RISK_ACCEPTANCE_CHECKSUM}"
+	)
+fi
+
 if [ "${STAGE_ONLY}" != "1" ]; then
 	REMOTE_INSTALLATION_STATE="$(
 		ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" \
@@ -479,7 +503,7 @@ PY
 		missing|pending)
 			"${LOCAL_RELEASE_TOOL_PYTHON}" \
 				"${ROOT_DIR}/scripts/check-first-install-cve-gate.py" \
-				--bundle "${BUNDLE_PATH}" >/dev/null || {
+				"${FIRST_INSTALL_CVE_GATE_ARGS[@]}" >/dev/null || {
 				echo "[fail] First-install host mutation is forbidden while the exact release retains the Python 3.14.6 CVE exceptions." >&2
 				exit 1
 			}
@@ -490,6 +514,15 @@ PY
 			;;
 		complete) ;;
 	esac
+fi
+
+if [ "${STAGE_ONLY}" = "1" ]; then
+	"${LOCAL_RELEASE_TOOL_PYTHON}" \
+		"${ROOT_DIR}/scripts/check-first-install-cve-gate.py" \
+		"${FIRST_INSTALL_CVE_GATE_ARGS[@]}" >/dev/null || {
+		echo "[fail] Stage-only upload is forbidden while the exact release retains unaccepted Python 3.14.6 CVE exceptions." >&2
+		exit 1
+	}
 fi
 
 BUNDLE_CHECKSUM_LINE="$(cat "${BUNDLE_CHECKSUM_PATH}")"

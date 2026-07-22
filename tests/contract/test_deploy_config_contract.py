@@ -1419,7 +1419,8 @@ def test_runtime_data_encryption_deploy_boundary_is_backend_only() -> None:
         deploy_guide.index(marker) for marker in documented_release_order
     ]
     assert documented_positions == sorted(documented_positions)
-    assert "The Python image CVE exception must be closed" in release_policy
+    assert "The Python image CVE exception must either be" in release_policy
+    assert "trusted workstation instead of the GitHub deploy workflow" in release_policy
     for marker in (
         "pg18_empty_initialization.v1",
         "`verify-full`",
@@ -1825,7 +1826,7 @@ def test_current_release_docs_separate_pg18_gates_from_retired_p1_e06() -> None:
     assert "unchecked evidence above is not authoritative for current deployment" in checklist
     assert "Current deployment authority is the fresh PostgreSQL 18 path" in playbook
     assert "Historical P1-E06 Edge migration procedure (non-normative)" in playbook
-    assert "neither receipt is a current PostgreSQL 18 deployment gate" in playbook
+    assert "Only the CVE acceptance pair is a current, temporary PostgreSQL 18" in playbook
     assert "Both gates are required." not in playbook
     assert "P1-E06 has an independent production Edge hard gate." not in playbook
 
@@ -2734,7 +2735,7 @@ def test_release_policy_service_marker_checks_are_pipefail_safe(tmp_path: Path) 
     assert script_text.count('grep -Fq -- "${marker}" <<<"${service_block}"') == 2
 
 
-def test_controlled_production_cve_risk_acceptance_is_manual_and_bundle_bound() -> None:
+def test_controlled_production_cve_risk_acceptance_is_external_and_bundle_bound() -> None:
     cloud_root = _cloud_root()
     contract = "npcink.controlled_production_cve_risk_acceptance.v1"
     decision = (
@@ -2852,11 +2853,14 @@ def test_controlled_production_cve_risk_acceptance_is_manual_and_bundle_bound() 
         "cannot contain a self-digest",
     ):
         assert marker in decision
-    for non_consumer in (
-        cloud_root / "deploy" / "deploy-to-ssh-host.sh",
-        cloud_root / "scripts" / "production-image-supply.py",
-    ):
-        assert contract not in non_consumer.read_text()
+    verifier = (cloud_root / "scripts" / "check-first-install-cve-gate.py").read_text()
+    deploy = (cloud_root / "deploy" / "deploy-to-ssh-host.sh").read_text()
+    assert contract in verifier
+    assert "--controlled-cve-risk-acceptance" in deploy
+    assert "--controlled-cve-risk-acceptance-checksum" in deploy
+    assert contract not in (
+        cloud_root / "scripts" / "production-image-supply.py"
+    ).read_text()
 
 
 def test_exact_release_docs_freeze_map_trust_and_cutover_batch_order() -> None:

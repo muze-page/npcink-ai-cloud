@@ -489,8 +489,9 @@ def test_scan_policy_is_fail_closed_and_canonical_exceptions_are_exact_and_bound
         "rollout, or general production authorization. Controlled production validation "
         "additionally requires a bundle-external "
         "`npcink.controlled_production_cve_risk_acceptance.v1` receipt that binds the "
-        "exact commit, tree, bundle, and passed image scan; deployment, image-scan, and "
-        "P1-E06 tooling do not consume this operator acceptance. "
+        "exact commit, tree, bundle, and passed image scan; the first-install deploy gate "
+        "consumes this acceptance and its independent checksum only for exact PostgreSQL "
+        "18 controlled validation, while image-scan and P1-E06 tooling do not consume it. "
     )
     reachability_by_cve = {
         "CVE-2026-11940": (

@@ -68,9 +68,10 @@ Before any production-host image, database, Edge, or release mutation:
    unallowlisted blocking findings.
 4. Run the repository's single-command same-bundle double replay successfully.
 5. Recheck the three NVD records and this decision's expiry and stop conditions.
-6. Manually create the bundle-external operator acceptance below and compare it
-   to the bundle manifest, outer checksum, scan index, API scan receipt, and
-   embedded allowlist.
+6. Manually create the bundle-external operator acceptance below and its
+   separate SHA-256 checksum file. The first-install gate must compare both to
+   the bundle manifest, outer checksum, scan index, API scan receipt, and
+   embedded allowlist before any host mutation.
 
 The acceptance contract is
 `npcink.controlled_production_cve_risk_acceptance.v1`. It records a human risk
@@ -138,11 +139,26 @@ the new evidence rather than editing the acceptance to make it fit.
 
 The acceptance stays outside Git, the deploy bundle, and every release tree. It
 must be an owner-only mode-`0600` file in the trusted operator evidence store.
-After creation, record its SHA-256 separately.
+After creation, record its SHA-256 separately in a second owner-only mode-`0600`
+file that contains only the 64-character lowercase digest.
 The receipt cannot contain a self-digest because that would create a circular
-value. The release operator
-manually compares all bound values before continuing.
-The deployment, image-scan, and P1-E06 tooling do not consume this acceptance.
+value. The release operator manually compares all bound values before
+continuing. `scripts/check-first-install-cve-gate.py` then consumes the two
+external files only for the first-install deploy path. It rejects stale or
+rebound evidence, unexpected fields, unsafe ownership/mode, partial CVE sets,
+and any mismatch with the exact Linux/AMD64 bundle. Image-scan and P1-E06
+tooling do not consume this acceptance.
+
+The accepted invocation is deliberately explicit:
+
+```bash
+bash deploy/deploy-to-ssh-host.sh \
+  --controlled-cve-risk-acceptance /trusted/evidence/controlled-risk-acceptance.json \
+  --controlled-cve-risk-acceptance-checksum /trusted/evidence/controlled-risk-acceptance.sha256
+```
+
+There is no generic skip flag. Omitting either file restores the default hard
+failure while any governed Python 3.14.6 entry remains.
 
 This contract is distinct from `p1_e06_off_host_backup_receipt.v1`. The latter
 is machine-consumed proof of an independently copied database backup; neither
@@ -170,5 +186,6 @@ decision, or upgrade, repin, rebuild, rescan, and replay before continuing.
 
 This decision changes no Cloud product ownership. Cloud remains the hosted
 runtime and evidence layer; WordPress remains the local control, approval, and
-write owner. No new registry, workflow truth, scheduler, public API, deployment
-input, or production-host code path is introduced.
+write owner. The only new input is a bundle-external operator deployment
+preflight; it creates no registry, workflow truth, scheduler, public API, or
+runtime configuration path.
