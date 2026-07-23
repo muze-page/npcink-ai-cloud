@@ -28,6 +28,7 @@ Usage:
   scripts/m4-preview.sh status
   scripts/m4-preview.sh logs [--follow] [--tail N] <service> [...]
   scripts/m4-preview.sh test
+  scripts/m4-preview.sh recover
   scripts/m4-preview.sh restart <service> [...]
   scripts/m4-preview.sh stop
 
@@ -1052,18 +1053,18 @@ echo '[m4-preview] compose services'
 
 echo '[m4-preview] container runtime'
 for service in postgres redis api frontend proxy worker callback-worker ops-worker; do
-	container_id="$("${compose[@]}" ps -q "${service}")"
+	container_id="$("${compose[@]}" ps -a -q "${service}")"
 	if [ -z "${container_id}" ]; then
 		printf '%s|missing\n' "${service}"
 		continue
 	fi
 	docker inspect "${container_id}" \
-		--format "${service}|status={{.State.Status}}|health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|restart={{.HostConfig.RestartPolicy.Name}}|started={{.State.StartedAt}}"
+		--format "${service}|status={{.State.Status}}|health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|restart={{.HostConfig.RestartPolicy.Name}}|started={{.State.StartedAt}}|finished={{.State.FinishedAt}}"
 done
 
 echo '[m4-preview] published ports'
 for service in proxy postgres redis; do
-	container_id="$("${compose[@]}" ps -q "${service}")"
+	container_id="$("${compose[@]}" ps -a -q "${service}")"
 	if [ -n "${container_id}" ]; then
 		docker port "${container_id}"
 	fi
@@ -1075,8 +1076,9 @@ for endpoint in / /health/live /docs /health/ready /internal/health; do
 	printf '%s=%s\n' "${endpoint}" "${code}"
 done
 
-api_id="$("${compose[@]}" ps -q api)"
-if [ -n "${api_id}" ]; then
+api_id="$("${compose[@]}" ps -a -q api)"
+if [ -n "${api_id}" ] &&
+	[ "$(docker inspect -f '{{.State.Status}}' "${api_id}")" = "running" ]; then
 	echo '[m4-preview] Alembic'
 	"${compose[@]}" exec --interactive=false -T api alembic current
 fi
@@ -1201,6 +1203,68 @@ raise SystemExit(pytest.main(sys.argv[1:]))
 		"${compose[@]}" run --interactive=false -T --rm --no-deps \
 			api python -c "${test_runner}" tests/domain
 		;;
+	recover)
+		all_services=(postgres redis api frontend proxy worker callback-worker ops-worker)
+		for service in "${all_services[@]}"; do
+			container_id="$("${compose[@]}" ps -a -q "${service}")"
+			[ -n "${container_id}" ] || {
+				echo "[m4-preview] recovery requires existing container: ${service}; run m4:preview:deploy" >&2
+				exit 66
+			}
+		done
+
+		"${compose[@]}" start postgres redis
+		for service in postgres redis; do
+			attempt=0
+			while [ "${attempt}" -lt 60 ]; do
+				container_id="$("${compose[@]}" ps -a -q "${service}")"
+				state="$(docker inspect -f '{{.State.Status}}' "${container_id}")"
+				health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container_id}")"
+				if [ "${state}" = "running" ] && [ "${health}" = "healthy" ]; then
+					break
+				fi
+				attempt=$((attempt + 1))
+				sleep 2
+			done
+			[ "${attempt}" -lt 60 ] || {
+				echo "[m4-preview] recovery timed out waiting for ${service}" >&2
+				exit 1
+			}
+		done
+
+		"${compose[@]}" start api frontend proxy worker callback-worker ops-worker
+		for endpoint in /health/live /; do
+			attempt=0
+			while [ "${attempt}" -lt 60 ]; do
+				code="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${preview_port}${endpoint}" || true)"
+				if [ "${code}" = "200" ]; then
+					break
+				fi
+				attempt=$((attempt + 1))
+				sleep 2
+			done
+			[ "${attempt}" -lt 60 ] || {
+				echo "[m4-preview] recovery timed out waiting for ${endpoint}" >&2
+				exit 1
+			}
+		done
+
+		for service in "${all_services[@]}"; do
+			container_id="$("${compose[@]}" ps -a -q "${service}")"
+			state="$(docker inspect -f '{{.State.Status}}' "${container_id}")"
+			restart_policy="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "${container_id}")"
+			[ "${state}" = "running" ] || {
+				echo "[m4-preview] recovery left ${service} in ${state}" >&2
+				exit 1
+			}
+			[ "${restart_policy}" = "unless-stopped" ] || {
+				echo "[m4-preview] recovery found invalid restart policy for ${service}: ${restart_policy}" >&2
+				exit 1
+			}
+		done
+		echo '[m4-preview] recovery complete'
+		"${compose[@]}" ps
+		;;
 	restart)
 		[ "$#" -gt 0 ] || {
 			echo '[m4-preview] restart requires at least one service' >&2
@@ -1272,6 +1336,10 @@ main() {
 		test)
 			[ "$#" -eq 0 ] || fail "test does not accept arguments"
 			remote_locked_operation test
+			;;
+		recover)
+			[ "$#" -eq 0 ] || fail "recover does not accept arguments"
+			remote_locked_operation recover
 			;;
 		restart)
 			if [ "${1:-}" = "--" ]; then

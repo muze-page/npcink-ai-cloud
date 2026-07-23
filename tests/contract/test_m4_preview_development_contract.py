@@ -26,6 +26,7 @@ def test_m4_preview_commands_are_explicit() -> None:
         "m4:preview:status": "bash scripts/m4-preview.sh status",
         "m4:preview:logs": "bash scripts/m4-preview.sh logs",
         "m4:preview:test": "bash scripts/m4-preview.sh test",
+        "m4:preview:recover": "bash scripts/m4-preview.sh recover",
         "m4:preview:restart": "bash scripts/m4-preview.sh restart",
         "m4:preview:stop": "bash scripts/m4-preview.sh stop",
     }
@@ -80,6 +81,11 @@ def test_m4_preview_shell_contract_is_syntax_valid_and_fail_closed() -> None:
     assert "com.docker.compose.project" in source
     assert "prepare complete: images and Compose config are ready" in source
     assert "equivalent_gate=pnpm run check:fast" in source
+    assert 'ps -a -q "${service}"' in source
+    assert "recovery requires existing container" in source
+    assert '"${compose[@]}" start postgres redis' in source
+    assert '"${compose[@]}" start api frontend proxy worker callback-worker ops-worker' in source
+    assert "recovery complete" in source
     assert 'key.startswith("NPCINK_CLOUD_")' in source
     assert "pytest.main(sys.argv[1:])" in source
     assert "tests/contract" in source
@@ -253,5 +259,7 @@ def test_m4_runbook_preserves_source_cloudflare_and_recovery_boundaries() -> Non
     assert "127.0.0.1:15433" in runbook
     assert "127.0.0.1:16380" in runbook
     assert "docker system prune" in runbook
+    assert "m4:preview:recover" in runbook
+    assert "Docker Desktop 4.83.0" in runbook
     assert "m4:preview:stop" in runbook
     assert "last known-good Git revision" in runbook

@@ -93,6 +93,9 @@ pnpm run m4:preview:logs -- --follow --tail 100 frontend
 # Exact backend suites represented by check:fast
 pnpm run m4:preview:test
 
+# Start the existing project after a Docker Desktop or M4 restart
+pnpm run m4:preview:recover
+
 # Targeted lifecycle operations
 pnpm run m4:preview:restart -- api
 pnpm run m4:preview:stop
@@ -230,20 +233,37 @@ secret-shaped fields before bytes leave M4.
 
 ## Restart Recovery
 
-Every service uses `restart: unless-stopped`. After Docker Desktop or M4
-restarts, verify recovery with:
+Every service uses `restart: unless-stopped`. The 2026-07-23 M4 acceptance
+reboot on Docker Desktop 4.83.0 preserved all containers, images, and volumes,
+but left the containers in an exited state. This matches
+[Docker's documented `unless-stopped` behavior](https://docs.docker.com/engine/containers/start-containers-automatically/)
+when a container is already stopped during a graceful host shutdown.
+
+After Docker Desktop or M4 restarts, inspect the actual running and exited
+containers with:
 
 ```bash
 pnpm run m4:preview:status
 ```
 
+If all eight existing containers are exited, recover them without rebuilding
+images or synchronizing source:
+
+```bash
+pnpm run m4:preview:recover
+```
+
+`recover` refuses to continue if any expected container is missing. Use
+`m4:preview:deploy` in that case so source, migrations, images, ports, and
+health are validated together.
+
 For a non-disruptive policy check, inspect all eight services through status.
 For a deliberate recovery drill, restart Docker Desktop or the M4 only during a
-maintenance window, wait for Docker to become ready, then run status and repeat
-both HTTP checks.
+maintenance window, wait for Docker to become ready, then run status, recover,
+and repeat both HTTP checks.
 
 An intentional `m4:preview:stop` suppresses automatic restart until the next
-`m4:preview:deploy`.
+`m4:preview:recover` or `m4:preview:deploy`.
 
 ## Failure and Rollback
 
