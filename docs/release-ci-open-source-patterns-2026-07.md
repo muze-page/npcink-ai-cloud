@@ -38,6 +38,29 @@ current Cloud CI keeps that pattern:
 
 This keeps PR feedback faster without weakening release branches.
 
+### Local iteration is narrower than CI
+
+The path-aware PR workflow is an asynchronous repository gate. It does not
+define the minimum command set for every local edit.
+
+Use three local verification tiers:
+
+| Tier | Typical scope | Local evidence |
+|---|---|---|
+| Feature-local | docs, copy, i18n, bounded UI, isolated module fix | focused regression tests, changed-file static checks, and one focused E2E only when interaction changed |
+| Shared or high risk | public API/error contract, auth, database/migration, shared models/config, workers, dependencies, CI, containers, deploy, security | focused tests plus the relevant anti-drift, perimeter, or seam gate; full local suite only when needed for diagnosis |
+| Integration/release | integration closeout, release candidate, `master`/`production`, cross-repository milestone | all applicable repository, release-policy, deploy, and cross-repository gates |
+
+`pnpm run check:fast` currently means the complete contract and domain suites.
+It is an integration gate despite its historical name, not the default local
+gate for a small fix.
+
+The targeted PR backend job currently still runs all of `tests/contract` before
+running changed test files. That is broader than feature-local development and
+must not be copied into every agent session. CI may retain this asynchronous
+ratchet while its timing remains acceptable; local development stops after the
+required risk tier passes.
+
 ### Timing as an artifact
 
 Large CI systems treat timing data as release evidence instead of relying on
@@ -80,13 +103,16 @@ and branch protection.
 
 ## Follow-Up Order
 
-1. Refresh `ci/pytest-backend-durations.json` from several successful
+1. Track the targeted PR contract-suite duration separately; split or select
+   contract files only if its observed latency becomes the PR feedback
+   bottleneck.
+2. Refresh `ci/pytest-backend-durations.json` from several successful
    `pytest-backend-timing-shard-*` artifacts after the new split has run.
-2. Compare actual wall time for `backend-static` and the three pytest shards
+3. Compare actual wall time for `backend-static` and the three pytest shards
    against the previous 7-8 minute monolithic backend gate.
-3. Rebalance shard count only if one shard remains the long pole for several
+4. Rebalance shard count only if one shard remains the long pole for several
    releases.
-4. Keep `production` deployment dependent on stable aggregate gates, not on
+5. Keep `production` deployment dependent on stable aggregate gates, not on
    individual shard names.
 
 ## References

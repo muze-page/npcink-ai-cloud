@@ -339,24 +339,41 @@ bespoke second-truth systems:
   `account_entitlement_snapshots`, `usage_meter_events`, and `billing_snapshots`
   rather than a wallet, prepaid credit ledger, or second billing engine
 
-## Focused Commands
+## Verification Tiers
 
-Use the smallest Cloud lane that still covers the touched seam:
+Local iteration is risk-based. A small, feature-local change should use the
+focused tests and static checks that directly cover the changed behavior.
+`check:fast` is an integration lane, not the default command for every code
+change.
 
 ```bash
-# all Cloud tests
-pnpm run test
+# feature-local Python examples
+.venv/bin/python -m pytest <focused-test-path-or-node> -q
+make lint-changed
 
-# focused local suites
-pnpm run test:contract
-pnpm run test:domain
-pnpm run test:api
+# feature-local frontend examples
+pnpm run frontend:type-check
+cd frontend && pnpm exec eslint <changed-files> --max-warnings=0
 
-# recommended narrow lanes
+# integration and shared-seam lanes
 pnpm run check:fast
 pnpm run check:seam
 pnpm run check:perimeter
+pnpm run check:anti-drift
 ```
+
+- Feature-local documentation, copy, i18n, UI, or isolated module fixes:
+  focused regression tests, changed-file static checks, and one relevant E2E
+  only when interaction changed.
+- Public API/error contracts, auth, database/migrations, shared
+  config/models/workers, dependencies, CI, Docker, deployment, or security:
+  focused tests plus the relevant boundary gate; path-aware GitHub CI decides
+  whether the full backend lane is required.
+- Integration closeout, release candidates, `master`/`production`, and
+  cross-repository milestones: full applicable gates and release evidence.
+- Do not run a complete suite merely because a command is named `fast`.
+
+Available integration suites:
 
 - `test:contract`
   - contract truth for response shape and seam drift in `tests/contract/**`
@@ -365,7 +382,8 @@ pnpm run check:perimeter
 - `test:api`
   - route/auth/api behavior in `tests/api/**`
 - `check:fast`
-  - default small Cloud lane: `contract + domain`
+  - integration lane: complete `contract + domain`; not a feature-local
+    default
 - `check:seam`
   - API seam lane: `api + perimeter`
 - `check:perimeter`

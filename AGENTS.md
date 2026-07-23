@@ -72,20 +72,55 @@ prompt/router/preset local truth, or WordPress write owner.
 
 ## Verification Gates
 
-Default fast gate:
+Choose verification by change risk. The default for ordinary development is
+the smallest gate that directly covers the changed behavior, not
+`pnpm run check:fast`.
+
+### Tier 1: Feature-local iteration
+
+Use this tier for documentation, copy, i18n, bounded UI behavior, and isolated
+module fixes that do not change a shared contract or infrastructure seam.
+
+- Run the focused unit, pytest, or contract cases that exercise the changed
+  behavior.
+- For changed Python, run `make lint-changed`.
+- For changed frontend code, run TypeScript plus ESLint only on the changed
+  files.
+- Run one focused E2E only when the user interaction changed.
+- For documentation-only changes, use `git diff --check` plus any directly
+  relevant documentation or policy contract.
+- Do not run `check:fast`, `check:seam`, or the complete test suite by default.
+
+### Tier 2: Shared or high-risk seam
+
+Escalate when the change touches a public API or error contract, authentication,
+database schema or migrations, shared models/config/database access, workers,
+dependencies, Docker/Compose, CI, deployment, or security boundaries.
+
+- Run focused regression tests first.
+- Add the relevant boundary gate such as `check:anti-drift`,
+  `check:perimeter`, or `check:seam`.
+- Let the path-aware GitHub PR workflow run the full backend lane when its
+  classifier marks the change high risk.
+- Run a complete local lane only when it is needed to diagnose a failure,
+  GitHub CI is unavailable, or the user explicitly requests it.
+
+### Tier 3: Integration and release
+
+Use full gates for integration closeout, `master`/`production` promotion,
+release candidates, cross-repository milestones, and production deployment.
+Select the applicable commands from:
 
 ```bash
 pnpm run check:fast
-```
-
-Additional gates by scope:
-
-```bash
 pnpm run check:seam
 pnpm run check:perimeter
 pnpm run check:anti-drift
+pnpm run check:release-policy
 pnpm run lint
 ```
 
-Before finishing a code session, run the narrowest useful gate and report
-exactly what passed or failed.
+Do not escalate merely because a command is named `fast`, because many tests
+exist, or because any code changed. Stop after the required tier has passed.
+Report exactly what passed, failed, was skipped, or was intentionally stopped;
+never describe a targeted or partial run as full-suite evidence.
