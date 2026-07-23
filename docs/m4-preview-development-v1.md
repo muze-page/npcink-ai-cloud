@@ -39,12 +39,26 @@ outside this workflow.
 
 All published ports bind to `127.0.0.1`. They are intentionally unreachable
 through the M4 LAN or Tailscale address. Use the Cloudflare Access protected
-domain for normal preview, or an explicit SSH tunnel for local-only diagnosis:
+domain for remote browser preview, or the checked-in SSH tunnel command for
+local browser and WordPress-to-Cloud integration:
 
 ```bash
-ssh -N -L 18010:127.0.0.1:8010 muze@100.102.170.79
+pnpm run m4:preview:tunnel
 open http://127.0.0.1:18010
 ```
+
+The tunnel binds only the authoring Mac's `127.0.0.1:18010`, stays in the
+foreground, and closes with `Ctrl+C`. It does not update source, acquire the
+remote deployment lock, or change containers. Use `-- --local-port <port>` or
+`NPCINK_CLOUD_M4_TUNNEL_LOCAL_PORT` only when `18010` is already occupied.
+
+`https://cloud.mqzjmax.top` remains the protected browser-preview entry. Do not
+configure an automated local WordPress connector against that hostname:
+Cloudflare Access returns a browser login redirect, while the connector requires
+a non-redirecting JSON API response. For a disposable local WordPress
+integration fixture, keep the tunnel open and use
+`http://127.0.0.1:18010` as the self-hosted Cloud Base URL. Do not overwrite an
+existing verified Cloud connection merely to exercise M4 Preview.
 
 ## One-Time Environment Bootstrap
 
@@ -74,11 +88,45 @@ ssh muze@100.102.170.79 \
   'HOMEBREW_NO_AUTO_UPDATE=1 brew install crane'
 ```
 
+## Simplified Operating Model
+
+M4 Preview is an integration runtime, not a mandatory inner loop.
+
+1. **Ordinary local work:** edit and manage Git on the authoring Mac. Keep the
+   local WordPress fixture local. Documentation, PHP-only, and other
+   WordPress-only changes do not require an M4 sync.
+2. **Cloud integration work:** sync only when the change needs the Cloud API,
+   frontend, workers, PostgreSQL, or Redis. Open one foreground tunnel and use
+   `http://127.0.0.1:18010` for both the browser and a disposable local
+   WordPress fixture.
+3. **Remote preview:** use `https://cloud.mqzjmax.top` only when the
+   Cloudflare Access protected, off-machine browser path is the behavior being
+   checked.
+
+Do not add a second preview hostname, Cloudflare service-token storage in the
+WordPress addon, a tunnel daemon, or another control plane to make this
+single-operator development path more automatic.
+
+Keep this model for five working days and record only:
+
+- typical edit-to-preview time;
+- minutes lost to network, tunnel, or synchronization failures each day;
+- defects caught by the full M4 runtime that local WordPress work did not
+  reveal.
+
+Keep M4 as the default Cloud integration runtime when edit-to-preview normally
+stays under two minutes and environment friction stays under ten minutes per
+day. If those limits are repeatedly exceeded, use local Docker selectively for
+the affected Cloud task and retain M4 as the integration/preview gate.
+
 ## Daily Commands
 
 Run commands from the local repository worktree:
 
 ```bash
+# Open one local-only browser and WordPress integration path
+pnpm run m4:preview:tunnel
+
 # First deployment or dependency/Dockerfile/lock-file change
 pnpm run m4:preview:deploy
 

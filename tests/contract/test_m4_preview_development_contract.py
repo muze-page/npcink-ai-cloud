@@ -23,6 +23,7 @@ def test_m4_preview_commands_are_explicit() -> None:
         "m4:preview:prepare": "bash scripts/m4-preview.sh prepare",
         "m4:preview:deploy": "bash scripts/m4-preview.sh deploy",
         "m4:preview:sync": "bash scripts/m4-preview.sh sync",
+        "m4:preview:tunnel": "bash scripts/m4-preview.sh tunnel",
         "m4:preview:status": "bash scripts/m4-preview.sh status",
         "m4:preview:logs": "bash scripts/m4-preview.sh logs",
         "m4:preview:test": "bash scripts/m4-preview.sh test",
@@ -90,6 +91,10 @@ def test_m4_preview_shell_contract_is_syntax_valid_and_fail_closed() -> None:
     assert "pytest.main(sys.argv[1:])" in source
     assert "tests/contract" in source
     assert "tests/domain" in source
+    assert "NPCINK_CLOUD_M4_TUNNEL_LOCAL_PORT" in source
+    assert 'forward="127.0.0.1:${local_port}:127.0.0.1:${M4_PORT}"' in source
+    assert "ExitOnForwardFailure=yes" in source
+    assert "ServerAliveCountMax=3" in source
 
     prepare_block = source.rsplit('if [ "${mode}" = "prepare" ]; then', 1)[1].split(
         'elif [ "${mode}" = "deploy" ]; then',
@@ -98,6 +103,24 @@ def test_m4_preview_shell_contract_is_syntax_valid_and_fail_closed() -> None:
     assert "deployed_image_marker" not in prepare_block
     assert "deployed_config_marker" not in prepare_block
     assert source.index("wait_for_http") < source.index('> "${deployed_image_marker}"')
+
+
+def test_m4_tunnel_dry_run_is_local_only_and_non_mutating() -> None:
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "tunnel", "--dry-run"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "local_url=http://127.0.0.1:18010" in completed.stdout
+    assert "127.0.0.1:18010:127.0.0.1:8010" in completed.stdout
+    assert "ExitOnForwardFailure=yes" in completed.stdout
+    assert "ServerAliveInterval=15" in completed.stdout
+    assert "ServerAliveCountMax=3" in completed.stdout
+    assert "docker" not in completed.stdout
+    assert "rsync" not in completed.stdout
 
 
 def test_m4_overlay_is_loopback_only_and_starts_the_complete_runtime() -> None:
@@ -260,6 +283,8 @@ def test_m4_runbook_preserves_source_cloudflare_and_recovery_boundaries() -> Non
     assert "127.0.0.1:16380" in runbook
     assert "docker system prune" in runbook
     assert "m4:preview:recover" in runbook
+    assert "m4:preview:tunnel" in runbook
+    assert "five working days" in runbook
     assert "Docker Desktop 4.83.0" in runbook
     assert "m4:preview:stop" in runbook
     assert "last known-good Git revision" in runbook

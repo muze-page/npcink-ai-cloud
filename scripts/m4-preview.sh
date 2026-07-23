@@ -9,6 +9,7 @@ M4_PROJECT_NAME="${NPCINK_CLOUD_M4_PROJECT_NAME:-npcink-ai-cloud-m4-dev}"
 M4_PORT="${NPCINK_CLOUD_M4_PORT:-8010}"
 M4_POSTGRES_PORT="${NPCINK_CLOUD_M4_POSTGRES_PORT:-15433}"
 M4_REDIS_PORT="${NPCINK_CLOUD_M4_REDIS_PORT:-16380}"
+M4_TUNNEL_LOCAL_PORT="${NPCINK_CLOUD_M4_TUNNEL_LOCAL_PORT:-18010}"
 
 DRY_RUN=0
 TMP_DIR=""
@@ -25,6 +26,7 @@ Usage:
   scripts/m4-preview.sh prepare [--dry-run]
   scripts/m4-preview.sh deploy [--dry-run]
   scripts/m4-preview.sh sync [--dry-run]
+  scripts/m4-preview.sh tunnel [--dry-run] [--local-port N]
   scripts/m4-preview.sh status
   scripts/m4-preview.sh logs [--follow] [--tail N] <service> [...]
   scripts/m4-preview.sh test
@@ -42,6 +44,7 @@ Environment overrides:
   NPCINK_CLOUD_M4_PORT
   NPCINK_CLOUD_M4_POSTGRES_PORT
   NPCINK_CLOUD_M4_REDIS_PORT
+  NPCINK_CLOUD_M4_TUNNEL_LOCAL_PORT
 EOF
 }
 
@@ -62,6 +65,13 @@ validate_number() {
 	case "$2" in
 		''|*[!0-9]*) fail "$1 must be numeric" ;;
 	esac
+}
+
+validate_port() {
+	validate_number "$1" "$2"
+	if [ "$2" -lt 1 ] || [ "$2" -gt 65535 ]; then
+		fail "$1 must be between 1 and 65535"
+	fi
 }
 
 validate_target() {
@@ -92,9 +102,9 @@ validate_target() {
 			;;
 	esac
 
-	validate_number "M4 port" "${M4_PORT}"
-	validate_number "M4 PostgreSQL port" "${M4_POSTGRES_PORT}"
-	validate_number "M4 Redis port" "${M4_REDIS_PORT}"
+	validate_port "M4 port" "${M4_PORT}"
+	validate_port "M4 PostgreSQL port" "${M4_POSTGRES_PORT}"
+	validate_port "M4 Redis port" "${M4_REDIS_PORT}"
 }
 
 cleanup() {
@@ -145,6 +155,63 @@ parse_dry_run() {
 				;;
 		esac
 	done
+}
+
+open_tunnel() {
+	local local_port="${M4_TUNNEL_LOCAL_PORT}"
+	local tunnel_dry_run=0
+	local forward=""
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--dry-run)
+				tunnel_dry_run=1
+				shift
+				;;
+			--local-port)
+				[ "$#" -ge 2 ] || fail "--local-port requires a value"
+				local_port="$2"
+				shift 2
+				;;
+			--)
+				shift
+				;;
+			*)
+				fail "unknown argument: $1"
+				;;
+		esac
+	done
+
+	validate_port "local tunnel port" "${local_port}"
+	forward="127.0.0.1:${local_port}:127.0.0.1:${M4_PORT}"
+
+	log "local_url=http://127.0.0.1:${local_port}"
+	log "remote_preview=https://cloud.mqzjmax.top"
+	log "the tunnel stays in the foreground; press Ctrl+C to close it"
+
+	if [ "${tunnel_dry_run}" = "1" ]; then
+		printf '[m4-preview] dry-run: ssh'
+		printf ' %q' \
+			"${SSH_ARGS[@]}" \
+			-o ExitOnForwardFailure=yes \
+			-o ServerAliveInterval=15 \
+			-o ServerAliveCountMax=3 \
+			-N \
+			-L "${forward}" \
+			"${M4_SSH_HOST}"
+		printf '\n'
+		return 0
+	fi
+
+	require_cmd ssh
+	exec ssh \
+		"${SSH_ARGS[@]}" \
+		-o ExitOnForwardFailure=yes \
+		-o ServerAliveInterval=15 \
+		-o ServerAliveCountMax=3 \
+		-N \
+		-L "${forward}" \
+		"${M4_SSH_HOST}"
 }
 
 dependency_fingerprint() {
@@ -1301,6 +1368,9 @@ main() {
 		prepare|deploy|sync)
 			parse_dry_run "$@"
 			upload_and_apply "${command}"
+			;;
+		tunnel)
+			open_tunnel "$@"
 			;;
 		status)
 			[ "$#" -eq 0 ] || fail "status does not accept arguments"
