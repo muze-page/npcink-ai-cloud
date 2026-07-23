@@ -696,6 +696,7 @@ def test_openai_adapter_executes_embeddings_over_http() -> None:
 def test_openai_adapter_executes_image_generation_over_http() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/images/generations")
+        assert request.headers["accept-encoding"] == "identity"
         payload = json.loads(request.content.decode("utf-8"))
         assert payload["model"] == GROK_IMAGINE_IMAGE_MODEL_ID
         assert payload["prompt"] == "A clean product photo of a red running shoe"

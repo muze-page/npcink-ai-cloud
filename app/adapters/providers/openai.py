@@ -471,7 +471,12 @@ class OpenAIProviderAdapter:
         if endpoint_path != "/images/generations":
             return client.post(endpoint_path, json=payload)
 
-        with client.stream("POST", endpoint_path, json=payload) as streamed_response:
+        with client.stream(
+            "POST",
+            endpoint_path,
+            json=payload,
+            headers={"Accept-Encoding": "identity"},
+        ) as streamed_response:
             content_length = streamed_response.headers.get("content-length")
             if content_length is not None:
                 try:
