@@ -59,6 +59,7 @@ and other CMS adapters are post-P5 validation work.
 Evidence records (not target-contract completion proof):
 
 - [docs/refactor-baseline-2026-07-14.md](docs/refactor-baseline-2026-07-14.md)
+- [docs/post-refactor-first-install-and-development-retrospective-2026-07-23.md](docs/post-refactor-first-install-and-development-retrospective-2026-07-23.md)
 - [docs/p5-hardening-release-audit-2026-07-17.md](docs/p5-hardening-release-audit-2026-07-17.md)
 - [docs/p5-b1-hosted-profile-contract-cutover-2026-07-17.md](docs/p5-b1-hosted-profile-contract-cutover-2026-07-17.md)
 - [docs/p5-b2-security-hardening-2026-07-17.md](docs/p5-b2-security-hardening-2026-07-17.md)
