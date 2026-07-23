@@ -138,6 +138,11 @@ def test_m4_overlay_is_loopback_only_and_starts_the_complete_runtime() -> None:
     assert "npcink-ai-cloud-runtime:m4-dev" in overlay
     assert "npcink-ai-cloud-frontend:m4-dev" in overlay
     assert "NEXT_PUBLIC_ENV: development" in overlay
+    assert (
+        "NEXT_PUBLIC_MINI_DEV_HOST_ALLOWLIST: "
+        "${NPCINK_CLOUD_M4_MINI_DEV_HOST_ALLOWLIST:-cloud.mqzjmax.top,127.0.0.1,localhost}"
+        in overlay
+    )
     assert "NPCINK_CLOUD_SETUP_STATE_OVERRIDE: complete" in overlay
     assert '"node"' in overlay
     assert '"node_modules/next/dist/bin/next"' in overlay
@@ -288,3 +293,6 @@ def test_m4_runbook_preserves_source_cloudflare_and_recovery_boundaries() -> Non
     assert "Docker Desktop 4.83.0" in runbook
     assert "m4:preview:stop" in runbook
     assert "last known-good Git revision" in runbook
+    assert "portal-demo@example.com" in runbook
+    assert "https://cloud.mqzjmax.top/portal/dev-entry" in runbook
+    assert "shared development identity" in runbook

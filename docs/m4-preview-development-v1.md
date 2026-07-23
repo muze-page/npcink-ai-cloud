@@ -60,6 +60,32 @@ integration fixture, keep the tunnel open and use
 `http://127.0.0.1:18010` as the self-hosted Cloud Base URL. Do not overwrite an
 existing verified Cloud connection merely to exercise M4 Preview.
 
+### Portal Test Account
+
+After completing the Cloudflare Access challenge, open:
+
+```text
+https://cloud.mqzjmax.top/portal/dev-entry
+```
+
+The development-only entry creates a Portal session for
+`portal-demo@example.com` and redirects to `/portal`. It does not require SMTP
+or a Portal password. This is a shared development identity: every operator
+allowed through the Cloudflare Access policy receives the same disposable
+Portal account, so it must not contain personal, production, or otherwise
+sensitive test data.
+
+The entry remains gated twice: Cloudflare Access protects the public hostname,
+and the frontend accepts the route only while `NEXT_PUBLIC_ENV=development` and
+the request host is present in `NEXT_PUBLIC_MINI_DEV_HOST_ALLOWLIST`. It is not
+a general user login path and must not be copied into a production Compose
+environment.
+
+To close domain auto-login without changing Cloudflare, remove
+`cloud.mqzjmax.top` from `NPCINK_CLOUD_M4_MINI_DEV_HOST_ALLOWLIST` on M4 and
+redeploy the preview. Removing the checked-in M4 override and redeploying is the
+Git rollback.
+
 ## One-Time Environment Bootstrap
 
 The source bundle never contains `.env`, `.env.local`, or `.env.deploy`.
