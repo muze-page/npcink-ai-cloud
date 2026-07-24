@@ -91,6 +91,19 @@ and branch protection.
 4. Keep `production` deployment dependent on stable aggregate gates, not on
    individual shard names.
 
+## Validation Record
+
+PR #232 validated the fail-closed classifier and complete high-risk lane. All
+required checks passed. Its backend pytest jobs completed in 9m09s, 13m38s,
+and 6m37s, so file-level duration weights alone did not remove the long tail.
+Keep the full coverage and use per-test timing evidence before changing the
+oversized recovery-contract shard.
+
+The documentation-only lane is validated separately by a Markdown-only pull
+request. It must preserve the stable `backend` and `frontend` check names while
+skipping Python dependency installation, frontend installation, production
+image smoke, and the full pytest shards.
+
 ## References
 
 - FastAPI GitHub Actions test workflow:
