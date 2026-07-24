@@ -199,6 +199,7 @@ require_file "Makefile"
 require_file "README.md"
 require_file "AGENTS.md"
 require_file ".github/pull_request_template.md"
+require_file "scripts/publish-pr.sh"
 require_file ".github/dependabot.yml"
 require_file ".github/workflows/ci.yml"
 require_file ".github/workflows/deploy-production.yml"
@@ -360,6 +361,13 @@ require_marker ".github/pull_request_template.md" "Focused module:"
 require_marker ".github/pull_request_template.md" "Cloud boundary impact:"
 require_marker ".github/pull_request_template.md" "Approved for production validation by operator."
 require_marker ".github/pull_request_template.md" "does not commit production secrets"
+require_marker "package.json" '"pr:publish": "bash scripts/publish-pr.sh"'
+require_marker "scripts/publish-pr.sh" 'git status --porcelain'
+require_marker "scripts/publish-pr.sh" 'git merge-base --is-ancestor "origin/${base_branch}" HEAD'
+require_marker "scripts/publish-pr.sh" '--body-file "${body_path}"'
+require_marker "scripts/publish-pr.sh" '--auto --squash --match-head-commit "${head_sha}"'
+require_marker "scripts/publish-pr.sh" 'Approved for production validation by operator.'
+reject_marker "scripts/publish-pr.sh" '--delete-branch'
 
 require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" "docs/cloud-production-release-policy-v1.md"
 require_marker "deploy/PRODUCTION_GITHUB_DEPLOY.md" "pnpm run check:release-policy"

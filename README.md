@@ -354,6 +354,20 @@ contract/domain gate is reserved for high-risk or M4-specific runtime evidence;
 it is not repeated before and after the same green PR by default. Post-merge
 M4 acceptance normally uses source promotion, status, and the relevant smoke.
 
+Complete a copy of `.github/pull_request_template.md`, then publish a clean
+topic branch with:
+
+```bash
+pnpm run pr:publish -- \
+  --title "fix: describe the focused change" \
+  --body-file /absolute/path/to/completed-pr-body.md
+```
+
+The publisher validates `Scope`, `Boundary`, `Verification`, and `Risk`,
+requires the latest target-branch revision, and requests protected squash
+auto-merge without deleting branches. A PR targeting `production` must also
+contain `Approved for production validation by operator.`.
+
 ## Borrowed Foundations
 
 Cloud should keep borrowing mature infrastructure patterns instead of growing

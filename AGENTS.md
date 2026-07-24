@@ -45,6 +45,20 @@ prompt/router/preset local truth, or WordPress write owner.
   into Cloud:
   `composer quality:matrix` for status and `composer quality:matrix:run` before
   cross-repo closeout.
+- Publish a completed clean topic branch with
+  `pnpm run pr:publish -- --title "<title>" --body-file <path>`. Start the body
+  from `.github/pull_request_template.md`; do not replace it with ad hoc
+  `gh pr create --body` text that omits `Scope`, `Boundary`, `Verification`, or
+  `Risk`.
+- The publisher checks the current base-branch revision, creates the PR, and
+  requests protected squash auto-merge. It never bypasses required checks and
+  never deletes local or remote branches, because this repository commonly
+  uses multiple worktrees.
+- A PR targeting `production` must also contain
+  `Approved for production validation by operator.`; the publisher rejects a
+  production body without it.
+- The cross-repository contract is
+  `/Users/muze/gitee/npcink-workflow-toolbox/docs/platform/pr-publishing-standard-v1.md`.
 
 ## AI Production Operation Rules
 

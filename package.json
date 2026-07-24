@@ -19,6 +19,7 @@
     "check:python-dependency-audit": "bash scripts/check-python-dependency-audit.sh",
     "check:release-policy": "bash scripts/check-release-policy.sh",
     "check:pr-backend": "bash scripts/check-pr-backend-gate.sh",
+    "pr:publish": "bash scripts/publish-pr.sh",
     "check:seam": "pnpm run test:api && pnpm run check:perimeter",
     "check:perimeter": "make perimeter",
     "check:anti-drift": "node scripts/check-cloud-anti-drift.js && node scripts/check-provider-env-retirement.js",
