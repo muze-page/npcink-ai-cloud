@@ -13,6 +13,9 @@ The documents have separate responsibilities:
 
 - [ADR-023](decisions/023-m4-preview-candidate-acceptance-promotion.md)
   records why one runtime has candidate and accepted states.
+- [ADR-024](decisions/024-risk-tiered-development-validation-authority.md)
+  records why focused feedback, GitHub integration gates, and M4 runtime
+  acceptance have separate responsibilities.
 - [M4 Preview Development Workflow](m4-preview-development-v1.md) is the
   operational runbook for hosts, ports, commands, recovery, and implementation
   details.
@@ -92,9 +95,10 @@ Risk and command choice are related but not identical:
 - an agent MUST NOT choose `deploy` merely as a substitute for understanding
   the changed files.
 
-Use the full M4 gate at integration closeout or for high-risk behavior. Do not
-run the approximately nine-minute full gate after every small edit when a
-focused test can provide the next useful signal.
+Use the full M4 gate only when the change is high risk, M4-specific, or GitHub
+CI cannot represent the required runtime evidence. Do not run the
+approximately nine-minute full gate after every small edit, before and after
+the same PR, or merely to duplicate a green GitHub gate for the same revision.
 
 ## 5. Candidate Development Loop
 
@@ -104,12 +108,16 @@ For Cloud changes that need the M4 runtime, use this loop:
 2. edit only in the authoring worktree;
 3. run the narrowest useful local test or static gate;
 4. run `m4:preview:sync`, or `m4:preview:deploy` for build/runtime inputs;
-5. inspect `m4:preview:status`, focused logs, and the relevant HTTP or
+5. when the test needs the container runtime, run one or more exact targets
+   through `m4:preview:test -- --focused ...`;
+6. inspect `m4:preview:status`, focused logs, and the relevant HTTP or
    WordPress behavior;
-6. repeat from the authoring worktree until the behavior is correct;
-7. review the diff, commit, push, and open a pull request;
-8. merge only after required review and CI;
-9. promote the merged revision from the stable clean operations worktree.
+7. repeat from the authoring worktree until the behavior is correct;
+8. review the diff, commit, push, and open a pull request;
+9. let the required GitHub checks provide the merge gate while any manual
+   browser or WordPress acceptance proceeds in parallel;
+10. merge only after required review and CI;
+11. promote the merged revision from the stable clean operations worktree.
 
 Direct sync and deploy operations create a candidate:
 
@@ -143,8 +151,19 @@ pnpm run m4:preview:deploy
 pnpm run m4:preview:status
 pnpm run m4:preview:logs -- <service>
 
-# Full contract + domain integration gate
+# Inner-loop container test: one or more exact pytest paths/node ids
+pnpm run m4:preview:test -- --focused tests/domain/test_example.py::test_case
+
+# Explicit partial integration suites
+pnpm run m4:preview:test -- --contract
+pnpm run m4:preview:test -- --domain
+
+# Full contract + domain integration gate; unchanged no-argument form is equal
+pnpm run m4:preview:test -- --full
 pnpm run m4:preview:test
+
+# Validate test selection without SSH or Docker mutation
+pnpm run m4:preview:test -- --dry-run --focused tests/domain/test_example.py
 
 # Existing-container recovery after M4 or Docker restart
 pnpm run m4:preview:recover
@@ -206,8 +225,10 @@ At minimum:
 - run `m4:preview:sync`;
 - verify the relevant API, frontend, worker, or WordPress behavior;
 - inspect `m4:preview:status`;
-- run `m4:preview:test` at closeout when the change affects shared runtime or
-  when focused evidence is insufficient.
+- rely on the required GitHub checks as the repository merge gate;
+- run `m4:preview:test -- --full` only when the change is high risk,
+  M4-specific, or focused and GitHub evidence cannot cover the claimed
+  behavior.
 
 ### 8.3 High-risk integration
 
@@ -226,6 +247,29 @@ exposure, or recovery behavior, also verify the applicable items:
 
 Production validation, Cloudflare configuration, and external WordPress
 acceptance require separate explicit authorization.
+
+### 8.4 Validation authority and duplicate-work stop rule
+
+Each layer owns a different question:
+
+| Layer | Question answered | Normal evidence |
+| --- | --- | --- |
+| Focused source test | Did the changed seam behave as intended? | exact pytest node/file, frontend contract, lint, or type gate |
+| M4 candidate runtime | Does that source work in the real development containers and WordPress/browser path? | sync, focused M4 test when needed, status, HTTP or human behavior |
+| GitHub required checks | Is the revision eligible to merge? | required PR checks, including targeted or full repository gates selected by CI |
+| Accepted M4 runtime | Is clean merged `master` now the visible development runtime? | promote, status, and relevant smoke |
+
+Do not run the same full contract/domain gate more than once for the same
+revision without recording a distinct reason, such as M4-only architecture,
+database, worker, networking, persistence, or recovery evidence. A green
+GitHub gate does not replace M4 runtime behavior, and M4 runtime behavior does
+not replace GitHub merge checks; neither distinction requires duplicating the
+same full pytest suite.
+
+CI-only contracts that require Git metadata may skip in the M4 source bundle
+because `.git` is intentionally excluded. They MUST still run in GitHub CI and
+in a normal Git worktree. Such a skip is not a waiver for product, domain,
+API, migration, or runtime behavior.
 
 ## 9. Git Review and Accepted Promotion
 
@@ -268,6 +312,12 @@ reports changed build/runtime fingerprints:
 ```bash
 pnpm run m4:preview:promote -- --pr <merged-pr-number> --deploy
 ```
+
+Do not rerun the full M4 test suite after promotion when the same merged
+revision already passed the required GitHub checks and candidate runtime
+behavior. Post-merge acceptance normally needs only promotion, status, and the
+relevant HTTP, browser, worker, migration, or WordPress smoke. Record a reason
+when high-risk runtime behavior requires another M4 integration gate.
 
 The M4 work is accepted only when status shows:
 
@@ -332,6 +382,13 @@ Current measured reference values from 2026-07-24 are:
 These are observations, not service-level guarantees. Keep M4 as the normal
 Cloud integration runtime while:
 
+- ordinary source sync normally completes within 60 seconds and MUST be
+  investigated when it exceeds two minutes;
+- a focused bug-fix feedback loop normally completes within five minutes;
+- required PR checks and accepted promotion normally complete within
+  15 minutes, but run asynchronously from unrelated authoring work;
+- cold image rebuilds are exceptional and may take 20-40 minutes; they are
+  justified only by a changed dependency/runtime fingerprint;
 - ordinary edit-to-preview remains under two minutes;
 - network, tunnel, and synchronization friction remains under ten minutes per
   working day;
@@ -382,10 +439,12 @@ Never collapse these into a single unqualified "done".
 [ ] Change classified as local-only, Cloud source, or build/runtime
 [ ] Narrowest local gate passed
 [ ] M4 sync/deploy used only when the selected lane requires it
+[ ] Focused M4 test used instead of full gate during the inner loop
+[ ] Full gate was not duplicated for the same revision without a recorded reason
 [ ] Candidate behavior and status verified
 [ ] Diff reviewed; only task files staged
 [ ] Focused commit pushed; PR reviewed and CI green
-[ ] Merged master promoted when M4 acceptance is required
+[ ] Merged master promoted with status/relevant smoke when M4 acceptance is required
 [ ] Accepted status matches clean current origin/master
 [ ] Production, Cloudflare, unrelated M4 workloads, and secrets untouched
 [ ] Final report separates each evidence state

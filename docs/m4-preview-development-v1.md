@@ -182,8 +182,16 @@ pnpm run m4:preview:status
 pnpm run m4:preview:logs -- api
 pnpm run m4:preview:logs -- --follow --tail 100 frontend
 
-# Exact backend suites represented by check:fast
-pnpm run m4:preview:test
+# Normal inner-loop test: exact paths or pytest node ids only
+pnpm run m4:preview:test -- --focused tests/domain/test_example.py::test_case
+
+# Partial and full integration suites
+pnpm run m4:preview:test -- --contract
+pnpm run m4:preview:test -- --domain
+pnpm run m4:preview:test -- --full
+
+# Selection check without SSH or Docker mutation
+pnpm run m4:preview:test -- --dry-run --focused tests/domain/test_example.py
 
 # Start the existing project after a Docker Desktop or M4 restart
 pnpm run m4:preview:recover
@@ -251,9 +259,23 @@ mode handles ordinary frontend changes. Runtime, callback, and ops workers are
 restarted after every successful sync because they do not have file watchers.
 
 The M4 currently has no host Node or pnpm runtime. `m4:preview:test` therefore
-runs `pytest tests/contract` followed by `pytest tests/domain` in the M4 API
-image. These are the two exact suites behind `pnpm run check:fast`; the command
-prints that equivalence before it runs them.
+runs pytest inside the M4 API image. Use `--focused` with exact `tests/` paths
+or pytest node ids during the edit loop; path validation rejects targets
+outside `tests/`. `--contract` and `--domain` run one partial suite. `--full`,
+and the retained no-argument form, run `tests/contract` followed by
+`tests/domain`; only that full scope is equivalent to `pnpm run check:fast`.
+
+The source bundle intentionally omits `.git`. CI-only contracts that inspect a
+Git diff may therefore skip on M4 while still running in normal Git worktrees
+and GitHub CI. Product, domain, API, migration, and runtime tests do not receive
+that exception.
+
+For ordinary fixes, the required evidence is focused test, source sync,
+relevant runtime/browser or WordPress behavior, and status. GitHub required
+checks are the merge authority. Do not run full contract/domain suites again
+after a green CI result for the same revision unless the task needs distinct
+M4-only architecture, database, worker, networking, persistence, or recovery
+evidence.
 
 ## Candidate and Accepted States
 
@@ -394,7 +416,7 @@ Start the replacement with:
 
 ```bash
 pnpm run m4:preview:deploy
-pnpm run m4:preview:test
+pnpm run m4:preview:test -- --full
 pnpm run m4:preview:status
 ```
 

@@ -33,7 +33,8 @@ Usage:
   scripts/m4-preview.sh tunnel [--dry-run] [--local-port N]
   scripts/m4-preview.sh status
   scripts/m4-preview.sh logs [--follow] [--tail N] <service> [...]
-  scripts/m4-preview.sh test
+  scripts/m4-preview.sh test [--dry-run] [--full|--contract|--domain]
+  scripts/m4-preview.sh test [--dry-run] --focused <tests/path.py[::test]> [...]
   scripts/m4-preview.sh recover
   scripts/m4-preview.sh ollama-install [--dry-run]
   scripts/m4-preview.sh ollama-configure
@@ -149,6 +150,22 @@ validate_services() {
 	for service in "$@"; do
 		is_allowed_service "${service}" || fail "unsupported service: ${service}"
 	done
+}
+
+validate_test_target() {
+	local target="$1"
+	case "${target}" in
+		tests/*)
+			;;
+		*)
+			fail "focused test target must stay under tests/: ${target}"
+			;;
+	esac
+	case "${target}" in
+		*..*|*$'\n'*|*$'\r'*)
+			fail "focused test target contains unsupported traversal or control characters: ${target}"
+			;;
+	esac
 }
 
 parse_dry_run() {
@@ -1700,7 +1717,10 @@ service_container_id() {
 
 case "${operation}" in
 	test)
-		echo '[m4-preview] equivalent_gate=pnpm run check:fast'
+		test_scope="${1:-full}"
+		if [ "$#" -gt 0 ]; then
+			shift
+		fi
 		test_runner='
 import os
 import sys
@@ -1713,10 +1733,51 @@ for key in tuple(os.environ):
 
 raise SystemExit(pytest.main(sys.argv[1:]))
 '
-		"${compose[@]}" run --interactive=false -T --rm --no-deps \
-			api python -c "${test_runner}" tests/contract
-		"${compose[@]}" run --interactive=false -T --rm --no-deps \
-			api python -c "${test_runner}" tests/domain
+		case "${test_scope}" in
+			focused)
+				[ "$#" -gt 0 ] || {
+					echo '[m4-preview] focused test scope requires at least one target' >&2
+					exit 64
+				}
+				echo '[m4-preview] test_scope=focused'
+				"${compose[@]}" run --interactive=false -T --rm --no-deps \
+					api python -c "${test_runner}" "$@"
+				;;
+			contract)
+				[ "$#" -eq 0 ] || {
+					echo '[m4-preview] contract test scope does not accept targets' >&2
+					exit 64
+				}
+				echo '[m4-preview] test_scope=contract'
+				"${compose[@]}" run --interactive=false -T --rm --no-deps \
+					api python -c "${test_runner}" tests/contract
+				;;
+			domain)
+				[ "$#" -eq 0 ] || {
+					echo '[m4-preview] domain test scope does not accept targets' >&2
+					exit 64
+				}
+				echo '[m4-preview] test_scope=domain'
+				"${compose[@]}" run --interactive=false -T --rm --no-deps \
+					api python -c "${test_runner}" tests/domain
+				;;
+			full)
+				[ "$#" -eq 0 ] || {
+					echo '[m4-preview] full test scope does not accept targets' >&2
+					exit 64
+				}
+				echo '[m4-preview] test_scope=full'
+				echo '[m4-preview] equivalent_gate=pnpm run check:fast'
+				"${compose[@]}" run --interactive=false -T --rm --no-deps \
+					api python -c "${test_runner}" tests/contract
+				"${compose[@]}" run --interactive=false -T --rm --no-deps \
+					api python -c "${test_runner}" tests/domain
+				;;
+			*)
+				echo "[m4-preview] unsupported test scope: ${test_scope}" >&2
+				exit 64
+				;;
+		esac
 		;;
 	ollama-configure)
 		"${compose[@]}" exec --interactive=false -T api \
@@ -1867,8 +1928,55 @@ main() {
 			remote_logs "${follow}" "${tail_lines}" "${services[@]}"
 			;;
 		test)
-			[ "$#" -eq 0 ] || fail "test does not accept arguments"
-			remote_locked_operation test
+			if [ "${1:-}" = "--" ]; then
+				shift
+			fi
+			local test_scope="full"
+			local test_scope_set=0
+			local test_targets=()
+			while [ "$#" -gt 0 ]; do
+				case "$1" in
+					--dry-run)
+						DRY_RUN=1
+						shift
+						;;
+					--full|--contract|--domain)
+						[ "${test_scope_set}" = "0" ] ||
+							fail "test accepts exactly one scope"
+						test_scope="${1#--}"
+						test_scope_set=1
+						shift
+						;;
+					--focused)
+						[ "${test_scope_set}" = "0" ] ||
+							fail "test accepts exactly one scope"
+						test_scope="focused"
+						test_scope_set=1
+						shift
+						;;
+					--*)
+						fail "unknown test argument: $1"
+						;;
+					*)
+						[ "${test_scope}" = "focused" ] ||
+							fail "test targets require --focused"
+						validate_test_target "$1"
+						test_targets+=("$1")
+						shift
+						;;
+				esac
+			done
+			if [ "${test_scope}" = "focused" ] && [ "${#test_targets[@]}" -eq 0 ]; then
+				fail "--focused requires at least one tests/ target"
+			fi
+			if [ "${DRY_RUN}" = "1" ]; then
+				log "dry-run: test_scope=${test_scope}"
+				if [ "${#test_targets[@]}" -gt 0 ]; then
+					printf '[m4-preview] dry-run: test_target=%s\n' "${test_targets[@]}"
+				fi
+			else
+				remote_locked_operation test "${test_scope}" "${test_targets[@]}"
+			fi
 			;;
 		recover)
 			[ "$#" -eq 0 ] || fail "recover does not accept arguments"

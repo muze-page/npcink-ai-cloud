@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 CLASSIFIER = ROOT / "scripts" / "classify-ci-changes.sh"
 DOCS_GATE = ROOT / "scripts" / "check-docs-only.sh"
@@ -92,6 +94,10 @@ def test_docs_only_scripts_and_workflow_are_fail_closed() -> None:
     assert "python dependency audit should be skipped for docs-only changes" in workflow
 
 
+@pytest.mark.skipif(
+    not (ROOT / ".git").exists(),
+    reason="CI-only Git diff contract requires repository metadata omitted from M4 bundles",
+)
 def test_docs_only_gate_runs_fail_closed_with_system_bash() -> None:
     environment = os.environ.copy()
     environment["NPCINK_CLOUD_CI_BASE_SHA"] = "origin/master"
