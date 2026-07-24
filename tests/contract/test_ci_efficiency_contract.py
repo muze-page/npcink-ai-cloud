@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -7,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CLASSIFIER = ROOT / "scripts" / "classify-ci-changes.sh"
 DOCS_GATE = ROOT / "scripts" / "check-docs-only.sh"
 BACKEND_GATE = ROOT / "scripts" / "check-pr-backend-gate.sh"
+WEIGHT_REFRESH = ROOT / "scripts" / "refresh-pytest-duration-weights.sh"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
@@ -74,6 +76,8 @@ def test_docs_only_scripts_and_workflow_are_fail_closed() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
     assert "git -C" in docs_gate
+    assert "mapfile" not in docs_gate
+    assert "changed_files+=(\"${changed_file}\")" in docs_gate
     assert "--diff-filter=ACMRD" in docs_gate
     assert "diff --check" in docs_gate
     assert "check-release-policy.sh" in docs_gate
@@ -86,6 +90,28 @@ def test_docs_only_scripts_and_workflow_are_fail_closed() -> None:
     assert "bash scripts/check-docs-only.sh" in workflow
     assert "Docs-only frontend acknowledgement" in workflow
     assert "python dependency audit should be skipped for docs-only changes" in workflow
+
+
+def test_docs_only_gate_runs_fail_closed_with_system_bash() -> None:
+    environment = os.environ.copy()
+    environment["NPCINK_CLOUD_CI_BASE_SHA"] = "origin/master"
+    environment["NPCINK_CLOUD_CI_HEAD_SHA"] = "HEAD"
+
+    completed = subprocess.run(
+        ["/bin/bash", str(DOCS_GATE)],
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert (
+        "docs-only gate received no changed files" in completed.stderr
+        or "docs-only gate received a non-documentation change" in completed.stderr
+    )
+    assert "command not found" not in completed.stderr
 
 
 def test_targeted_backend_gate_times_contracts_without_rerunning_changed_contracts() -> None:
@@ -101,3 +127,25 @@ def test_targeted_backend_gate_times_contracts_without_rerunning_changed_contrac
     assert "pytest tests/contract -q --durations=25" in source
     assert "tests/contract/test_*.py" not in changed_test_selection
     assert "contract files are already covered" in source
+
+
+def test_pytest_weight_refresh_is_reproducible_and_fail_closed() -> None:
+    subprocess.run(["bash", "-n", str(WEIGHT_REFRESH)], cwd=ROOT, check=True)
+    help_result = subprocess.run(
+        ["bash", str(WEIGHT_REFRESH), "--", "--help"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    source = WEIGHT_REFRESH.read_text(encoding="utf-8")
+    package = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert "ci:pytest:weights:refresh" in help_result.stdout
+    assert "EXPECTED_SHARDS=3" in source
+    assert "gh run download" in source
+    assert "pytest-backend-timing-shard-*" in source
+    assert "write-pytest-duration-weights.py" in source
+    assert "expected ${EXPECTED_SHARDS} pytest shard reports" in source
+    assert 'mv "${OUTPUT_TEMP}" "${ROOT_DIR}/ci/pytest-backend-durations.json"' in source
+    assert '"ci:pytest:weights:refresh"' in package

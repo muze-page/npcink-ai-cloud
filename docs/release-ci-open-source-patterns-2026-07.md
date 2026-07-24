@@ -83,7 +83,12 @@ and branch protection.
 1. Refresh `ci/pytest-backend-durations.json` from all successful
    `pytest-backend-timing-shard-*` artifacts in the same full run; passing all
    shard XML files to `scripts/write-pytest-duration-weights.py` merges their
-   per-file timing evidence without dropping files from the other shards.
+   per-file timing evidence without dropping files from the other shards. Use
+   the repeatable entry point:
+
+   ```bash
+   pnpm run ci:pytest:weights:refresh -- <successful-cloud-ci-run-id>
+   ```
 2. Compare actual wall time for `backend-static` and the three pytest shards
    against the previous 7-8 minute monolithic backend gate.
 3. Rebalance shard count only if one shard remains the long pole for several
@@ -103,6 +108,11 @@ The documentation-only lane is validated separately by a Markdown-only pull
 request. It must preserve the stable `backend` and `frontend` check names while
 skipping Python dependency installation, frontend installation, production
 image smoke, and the full pytest shards.
+
+Do not add node-level sharding from a single slow run. Observe at least two
+additional full runs after refreshing the weights. Escalate only if the longest
+shard remains above 10 minutes and the fastest-to-slowest spread remains above
+2x; keep all existing tests and recovery-contract semantics intact.
 
 ## References
 
