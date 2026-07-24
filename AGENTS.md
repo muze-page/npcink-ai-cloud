@@ -92,6 +92,10 @@ exactly what passed or failed.
 
 ## M4 Preview Completion Protocol
 
+- Before M4-related development or operations, read
+  `docs/m4-preview-ai-development-standard-v1.md`. Classify the change as
+  local-only, Cloud source, or build/runtime, then use the smallest valid
+  verification lane defined there.
 - Direct `m4:preview:sync` and `m4:preview:deploy` operations are candidate
   previews. They prove behavior but do not prove that the source reached
   `master`.

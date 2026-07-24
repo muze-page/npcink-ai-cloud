@@ -1,5 +1,12 @@
 # M4 Preview Development Workflow v1
 
+This runbook owns host, command, recovery, and implementation mechanics.
+AI agents must also follow the normative
+[M4 Preview AI Development Standard v1](m4-preview-ai-development-standard-v1.md)
+for task classification, evidence states, Git completion, and final reporting.
+The rationale for candidate and accepted states is recorded in
+[ADR-023](decisions/023-m4-preview-candidate-acceptance-promotion.md).
+
 ## Decision
 
 The authoring Mac remains the source and Git truth. The M4 is a disposable

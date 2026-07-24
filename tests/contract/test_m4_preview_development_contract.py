@@ -14,6 +14,7 @@ REDACTOR = ROOT / "scripts" / "redact-m4-preview-logs.py"
 PACKAGE_PROXY = ROOT / "scripts" / "m4-package-proxy.py"
 OVERLAY = ROOT / "docker-compose.m4-preview.yml"
 RUNBOOK = ROOT / "docs" / "m4-preview-development-v1.md"
+AI_STANDARD = ROOT / "docs" / "m4-preview-ai-development-standard-v1.md"
 OLLAMA_LAUNCH_AGENT = ROOT / "deploy" / "top.mqzj.npcink-ollama-preview.plist"
 
 
@@ -352,3 +353,36 @@ def test_m4_runbook_preserves_source_cloudflare_and_recovery_boundaries() -> Non
     assert "pnpm run m4:preview:promote -- --pr" in runbook
     assert "acceptance_state=accepted" in runbook
     assert "receives no M4 SSH credential" in runbook
+
+
+def test_m4_ai_development_standard_is_actionable_and_linked() -> None:
+    standard = AI_STANDARD.read_text(encoding="utf-8")
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+    standard_path = "docs/m4-preview-ai-development-standard-v1.md"
+
+    assert standard_path in agents
+    assert standard_path in readme
+    assert "m4-preview-ai-development-standard-v1.md" in runbook
+
+    for required_text in (
+        "Local-only",
+        "Cloud source",
+        "Build/runtime",
+        "M4 MUST NOT become source or Git truth",
+        "WordPress remains the local control plane",
+        "pnpm run m4:preview:sync",
+        "pnpm run m4:preview:deploy",
+        "pnpm run m4:preview:promote -- --pr",
+        "pnpm run m4:preview:test",
+        "http://127.0.0.1:18010",
+        "https://cloud.mqzjmax.top",
+        "acceptance_state=accepted",
+        "source_branch=master",
+        "source_dirty=false",
+        "under two minutes",
+        "under ten minutes per",
+        "report candidate validation as accepted completion",
+    ):
+        assert required_text in standard

@@ -68,6 +68,7 @@ Operational references:
 
 - [deploy/OPS_PLAYBOOK.md](deploy/OPS_PLAYBOOK.md)
 - [deploy/RELEASE_CHECKLIST.md](deploy/RELEASE_CHECKLIST.md)
+- [docs/m4-preview-ai-development-standard-v1.md](docs/m4-preview-ai-development-standard-v1.md)
 - [docs/m4-preview-development-v1.md](docs/m4-preview-development-v1.md)
 - [docs/portal-commerce-production-development-history-2026-07-11.md](docs/portal-commerce-production-development-history-2026-07-11.md)
 - [deploy/PROJECTION_DRILL_EVIDENCE_2026-04-15.md](deploy/PROJECTION_DRILL_EVIDENCE_2026-04-15.md)
@@ -333,7 +334,10 @@ pnpm run m4:preview:promote -- --pr <merged-pr-number>
 ```
 
 See the [M4 Preview development workflow](docs/m4-preview-development-v1.md)
-for the candidate/accepted contract and the explicit `--deploy` fallback.
+for host and command mechanics. AI agents must use the
+[M4 Preview AI development standard](docs/m4-preview-ai-development-standard-v1.md)
+to select the local-only, Cloud source, or build/runtime lane and to keep
+candidate, Git, and accepted evidence distinct.
 
 ## Borrowed Foundations
 
