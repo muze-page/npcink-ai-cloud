@@ -15,6 +15,12 @@ artifacts and bounded processing evidence. WordPress writes, attachment
 metadata changes, replacement decisions, proposal approval, preflight, audit,
 and rollback authority stay in the local WordPress/Core path.
 
+Infrastructure scaling, object-storage moderation, and a possible future FC
+executor remain deferred behind measured triggers. The dated evidence and
+reopening gates are recorded in
+[Image Processing FC/OSS Readiness - 2026-07-20](image-processing-fc-oss-readiness-2026-07-20.md).
+That record is implementation preparation, not production migration approval.
+
 ## Runtime Flow
 
 1. A local host/addon streams one `media_upload_request.v1` multipart request
