@@ -262,6 +262,77 @@ def test_authorize_runtime_request_adds_active_paid_grants_to_package_headroom(
     dispose_engine(database_url)
 
 
+def test_authorize_runtime_request_adds_operator_grants_to_package_headroom(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_operator_credit_grant",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        budgets={"max_ai_credits_per_period": 300},
+    )
+    with get_session(database_url) as session:
+        repository = CommercialRepository(session)
+        subscription = session.scalar(select(AccountSubscription))
+        assert subscription is not None
+        period_start = subscription.current_period_start_at or datetime.now(UTC)
+        if period_start.tzinfo is None:
+            period_start = period_start.replace(tzinfo=UTC)
+        service_now = period_start + timedelta(hours=1)
+        repository.record_credit_ledger_entry(
+            account_id=subscription.account_id,
+            site_id=None,
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id=None,
+            provider_call_id=None,
+            event_type="grant",
+            source_type="operator_credit_adjustment",
+            source_id="operator-credit-grant-headroom",
+            credit_delta=1000,
+            quantity=1000,
+            unit="credit",
+            rate=1,
+            rate_unit=None,
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="operator-credit-grant-headroom",
+            created_at=service_now,
+        )
+        session.commit()
+
+    service = CommercialService(database_url, now_factory=lambda: service_now)
+    with get_session(database_url) as session:
+        decision = service.authorize_runtime_request(
+            session=session,
+            site_id="site_operator_credit_grant",
+            ability_family="workflow",
+            channel="openapi",
+            execution_kind="text",
+            execution_tier="cloud",
+            data_classification="internal",
+            trace_id="trace-commercial-operator-credit-grant-001",
+            idempotency_key="idem-commercial-operator-credit-grant-001",
+            request_kind="execute",
+            estimated_ai_credits=500,
+        )
+        session.commit()
+
+    assert decision["decision_code"] == "commercial.allowed"
+    assert decision["ai_credit_budget"] == {
+        "used": 0.0,
+        "estimated_request": 500.0,
+        "limit": 1300.0,
+        "package_limit": 300.0,
+        "package_remaining": 1300.0,
+        "paid_remaining": 0.0,
+        "paid_grant_count": 0,
+        "remaining_before_request": 1300.0,
+    }
+    dispose_engine(database_url)
+
+
 def test_authorize_runtime_request_keeps_zero_credit_limit_unlimited_after_usage(
     tmp_path: Path,
 ) -> None:

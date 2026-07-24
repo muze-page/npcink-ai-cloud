@@ -6240,6 +6240,46 @@ def test_admin_account_credit_adjustment_updates_ledger_and_quota_summary(
     dispose_engine(database_url)
 
 
+def test_admin_account_credit_grant_expands_current_period_available_balance(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_credit_grant_headroom",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+        budgets={"max_ai_credits_per_period": 300},
+    )
+
+    response = client.post(
+        "/internal/service/admin/accounts/acct_site_credit_grant_headroom/credit-ledger/adjustments",
+        headers=build_internal_headers(idempotency_key="svc-credit-grant-headroom-001"),
+        json={
+            "event_type": "grant",
+            "credit_delta": 1000,
+            "reason": "operator_test_grant",
+            "note": "expand current-period available balance",
+        },
+    )
+    quota_response = client.get(
+        "/internal/service/admin/accounts/acct_site_credit_grant_headroom/quota-summary",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200
+    assert quota_response.status_code == 200
+    credit = quota_response.json()["data"]["credit"]
+    assert credit["used"] == 0.0
+    assert credit["limit"] == 1300.0
+    assert credit["remaining"] == 1300.0
+    assert credit["package_limit"] == 300.0
+    assert credit["package_remaining"] == 1300.0
+    assert credit["paid_remaining"] == 0.0
+    assert credit["total_remaining"] == 1300.0
+
+    dispose_engine(database_url)
+
+
 def test_credit_ledger_consume_credit_delta_must_be_integer(
     tmp_path: Path,
 ) -> None:

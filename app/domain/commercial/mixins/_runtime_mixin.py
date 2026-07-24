@@ -32,7 +32,8 @@ from app.core.security import build_secret_hash
 from app.domain.commercial.credits import (
     SITE_KNOWLEDGE_INDEX_METERING_CLASS,
     package_credit_net_delta,
-    package_credit_used,
+    package_credit_remaining_from_net_delta,
+    package_credit_used_from_net_delta,
     record_credit_ledger_component,
     usage_meter_credit_component,
 )
@@ -482,7 +483,8 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             until=period_end_at,
             limit=None,
         )
-        used_ai_credits = package_credit_used(credit_entries)
+        package_net_delta = package_credit_net_delta(credit_entries)
+        used_ai_credits = package_credit_used_from_net_delta(package_net_delta)
         paid_credit = service._paid_credit_balance_in_session(
             repository,
             account_id=subscription.account_id,
@@ -491,14 +493,21 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         package_credit_limit = self._coerce_float(
             budgets.get("max_ai_credits_per_period")
         )
-        package_credit_remaining = max(0.0, package_credit_limit - used_ai_credits)
+        package_remaining = (
+            package_credit_remaining_from_net_delta(
+                package_credit_limit,
+                package_net_delta,
+            )
+            if package_credit_limit > 0
+            else 0.0
+        )
         paid_credit_remaining = self._coerce_float(paid_credit.get("remaining"))
         # Zero is the unlimited sentinel; prior usage must not turn it into a finite limit.
         effective_ai_credit_limit = (
             0.0
             if package_credit_limit <= 0
             else round(
-                used_ai_credits + package_credit_remaining + paid_credit_remaining,
+                used_ai_credits + package_remaining + paid_credit_remaining,
                 6,
             )
         )
@@ -600,11 +609,11 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 "estimated_request": projected_ai_credits,
                 "limit": effective_ai_credit_limit,
                 "package_limit": package_credit_limit,
-                "package_remaining": round(package_credit_remaining, 6),
+                "package_remaining": round(package_remaining, 6),
                 "paid_remaining": round(paid_credit_remaining, 6),
                 "paid_grant_count": int(paid_credit.get("grant_count") or 0),
                 "remaining_before_request": round(
-                    package_credit_remaining + paid_credit_remaining,
+                    package_remaining + paid_credit_remaining,
                     6,
                 ),
             },
@@ -642,7 +651,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                     "used": used_ai_credits,
                     "estimated_request": projected_ai_credits,
                     "limit": effective_ai_credit_limit,
-                    "package_remaining": round(package_credit_remaining, 6),
+                    "package_remaining": round(package_remaining, 6),
                     "paid_remaining": round(paid_credit_remaining, 6),
                 },
                 "concurrency": concurrency,
@@ -868,8 +877,11 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             limit=None,
         )
         package_net_after = package_credit_net_delta(period_entries)
-        package_used_before = max(0.0, -(package_net_after + current_credits))
-        package_remaining_before = max(0.0, package_limit - package_used_before)
+        package_net_before = package_net_after + current_credits
+        package_remaining_before = package_credit_remaining_from_net_delta(
+            package_limit,
+            package_net_before,
+        )
         paid_credits = max(0.0, current_credits - package_remaining_before)
         if paid_credits <= 0:
             return

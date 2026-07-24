@@ -32,11 +32,18 @@ budget using a currency label that made it look like the customer price.
 5. The Alipay return page resolves and polls the exact internal order. Query
    parameters from the browser are only navigation hints and never proof of a
    successful payment.
+6. Audited operator grants and signed adjustments apply to the active package
+   period. Package remaining is the package limit plus the period's non-payment
+   ledger net delta, floored at zero. Positive operator grants therefore expand
+   current-period headroom; they do not create `paid_credit_grants` rows or
+   pretend to be payment-backed balance.
 
 ## Consequences
 
 - Portal quota shows package remaining, paid-credit remaining, and total
   available separately.
+- Package remaining and runtime authorization use the same operator-adjusted
+  ledger projection, so an accepted grant cannot exist only in audit history.
 - Paid-credit grants remain part of Cloud commercial service-plane truth; no
   WordPress write/control-plane responsibility moves into Cloud.
 - Refund handling can reduce only unspent paid-credit balance. Accounting and

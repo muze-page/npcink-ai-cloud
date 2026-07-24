@@ -53,10 +53,20 @@ def package_credit_net_delta(entries: Iterable[object]) -> float:
     return round(total, 6)
 
 
-def package_credit_used(entries: Iterable[object]) -> float:
-    """Return package allowance used after ordinary grants and adjustments."""
+def package_credit_used_from_net_delta(net_delta: float) -> float:
+    """Return package allowance used for a period net delta."""
 
-    return round(max(0.0, -package_credit_net_delta(entries)), 6)
+    return round(max(0.0, -float(net_delta)), 6)
+
+
+def package_credit_remaining_from_net_delta(
+    package_credit_limit: float,
+    net_delta: float,
+) -> float:
+    """Return spendable package credits, including operator grants and adjustments."""
+
+    return round(max(0.0, float(package_credit_limit) + float(net_delta)), 6)
+
 
 AI_CREDIT_BREAKDOWN_ORDER = (
     "runs",

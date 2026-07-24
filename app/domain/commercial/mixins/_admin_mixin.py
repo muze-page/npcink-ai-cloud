@@ -39,7 +39,9 @@ from app.domain.commercial.credits import (
     AI_CREDIT_RATE_VERSION,
     build_credit_breakdown_from_ledger,
     is_site_knowledge_index_meter_event,
-    package_credit_used,
+    package_credit_net_delta,
+    package_credit_remaining_from_net_delta,
+    package_credit_used_from_net_delta,
     rounded_token_credits,
 )
 from app.domain.commercial.errors import (
@@ -1847,17 +1849,26 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             sum(service._coerce_float(item.get("credits")) for item in credit_breakdown),
             6,
         )
+        package_net_delta = 0.0
         if ledger_source:
-            credit_used = package_credit_used(credit_ledger_entries)
+            package_net_delta = package_credit_net_delta(credit_ledger_entries)
+            credit_used = package_credit_used_from_net_delta(package_net_delta)
         package_credit_limit = service._coerce_float(
             budgets.get("max_ai_credits_per_period")
         )
         if package_credit_limit <= 0:
             package_credit_limit = service._coerce_float(budgets.get("max_runs_per_period"))
         paid_credit_remaining = service._coerce_float(paid_credit.get("remaining"))
-        package_credit_remaining = max(0.0, package_credit_limit - credit_used)
+        package_remaining = (
+            package_credit_remaining_from_net_delta(
+                package_credit_limit,
+                package_net_delta,
+            )
+            if ledger_source and package_credit_limit > 0
+            else max(0.0, package_credit_limit - credit_used)
+        )
         credit_limit = round(
-            credit_used + package_credit_remaining + paid_credit_remaining,
+            credit_used + package_remaining + paid_credit_remaining,
             6,
         )
         credit_status = self._quota_status(used=credit_used, limit=credit_limit)
@@ -1979,12 +1990,12 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                         else "max_runs_per_period"
                     ),
                     "package_limit": round(package_credit_limit, 6),
-                    "package_remaining": round(package_credit_remaining, 6),
+                    "package_remaining": round(package_remaining, 6),
                     "paid_remaining": round(paid_credit_remaining, 6),
                     "paid_grant_count": int(paid_credit.get("grant_count") or 0),
                     "paid_next_expires_at": paid_credit.get("next_expires_at") or "",
                     "total_remaining": round(
-                        package_credit_remaining + paid_credit_remaining,
+                        package_remaining + paid_credit_remaining,
                         6,
                     ),
                 },
