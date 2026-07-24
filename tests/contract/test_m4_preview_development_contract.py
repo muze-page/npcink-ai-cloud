@@ -180,6 +180,13 @@ def test_m4_overlay_is_loopback_only_and_starts_the_complete_runtime() -> None:
         in overlay
     )
     assert "NPCINK_CLOUD_SETUP_STATE_OVERRIDE: complete" in overlay
+    assert (
+        overlay.count(
+            "NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: "
+            "${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-m4-preview-service-v1}"
+        )
+        == 4
+    )
     assert '"node"' in overlay
     assert '"node_modules/next/dist/bin/next"' in overlay
     for service in (

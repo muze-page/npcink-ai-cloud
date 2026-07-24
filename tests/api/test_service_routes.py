@@ -1637,6 +1637,45 @@ def test_admin_provider_connections_store_encrypted_credentials_and_project_to_a
     assert "provider-connection-test-secret" not in json.dumps(projection)
 
 
+def test_admin_provider_connection_save_returns_json_when_secret_storage_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={"service_settings_encryption_key_id": None},
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(
+            idempotency_key="provider-connection-secret-storage-unavailable"
+        ),
+        json={
+            "connection_id": "unavailable_secret_storage",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "Unavailable secret storage",
+            "enabled": False,
+            "base_url": "https://api.openai.test/v1",
+            "credential": "provider-connection-test-secret",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.headers["content-type"].startswith("application/json")
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error_code"] == (
+        "provider_connection.credential_storage_unavailable"
+    )
+    assert payload["message"] == "provider credential storage is unavailable"
+    assert "provider-connection-test-secret" not in response.text
+
+    with get_session(database_url) as session:
+        assert session.get(ProviderConnection, "unavailable_secret_storage") is None
+
+
 def test_admin_provider_connection_catalog_preview_fetches_models_without_persisting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

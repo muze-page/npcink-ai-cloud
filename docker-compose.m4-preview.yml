@@ -27,6 +27,7 @@ services:
     environment:
       NPCINK_CLOUD_BASE_URL: ${NPCINK_CLOUD_M4_PUBLIC_BASE_URL:-https://cloud.mqzjmax.top}
       NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST: ${NPCINK_CLOUD_M4_BROWSER_ORIGIN_ALLOWLIST:-https://cloud.mqzjmax.top,http://127.0.0.1:18010,http://localhost:18010}
+      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-m4-preview-service-v1}
       NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${NPCINK_CLOUD_M4_TRUSTED_HOST_ALLOWLIST:-cloud.mqzjmax.top,127.0.0.1,127.0.0.1:8010,127.0.0.1:18010,localhost,localhost:8010,localhost:18010,api,api:8000,proxy,proxy:8080}
     healthcheck:
       test:
@@ -42,12 +43,18 @@ services:
 
   worker:
     image: npcink-ai-cloud-runtime:m4-dev
+    environment:
+      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-m4-preview-service-v1}
 
   callback-worker:
     image: npcink-ai-cloud-runtime:m4-dev
+    environment:
+      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-m4-preview-service-v1}
 
   ops-worker:
     image: npcink-ai-cloud-runtime:m4-dev
+    environment:
+      NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID: ${NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID:-m4-preview-service-v1}
 
   frontend:
     image: npcink-ai-cloud-frontend:m4-dev

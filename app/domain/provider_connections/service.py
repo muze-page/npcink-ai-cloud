@@ -153,11 +153,18 @@ class ProviderConnectionAdminService:
 
             credential = normalized["credential"]
             if credential is not None:
-                row.secret_ciphertext = (
-                    encrypt_provider_connection_secret(credential, settings=self.settings)
-                    if credential
-                    else None
-                )
+                try:
+                    row.secret_ciphertext = (
+                        encrypt_provider_connection_secret(credential, settings=self.settings)
+                        if credential
+                        else None
+                    )
+                except RuntimeError as error:
+                    raise ProviderConnectionAdminError(
+                        "provider_connection.credential_storage_unavailable",
+                        "provider credential storage is unavailable",
+                        status_code=503,
+                    ) from error
 
             configured, credential_error = _credential_readiness(
                 self.settings,

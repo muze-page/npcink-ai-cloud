@@ -107,6 +107,14 @@ Review those files on M4 when configuration changes are required. Do not copy
 them back to the authoring Mac, add them to Git, or pass secret values on a
 command line.
 
+The M4 overlay supplies the non-secret, stable development key id
+`m4-preview-service-v1` for provider and service-setting encryption unless
+`NPCINK_CLOUD_SERVICE_SETTINGS_ENCRYPTION_KEY_ID` is explicitly configured.
+The corresponding `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` remains protected in
+the M4 environment files and has no checked-in default. Missing or invalid
+secret storage must return a redacted JSON error and must never persist the
+submitted provider credential.
+
 The M4 base-image prefetcher also requires `crane`:
 
 ```bash
