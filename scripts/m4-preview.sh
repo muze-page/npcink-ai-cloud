@@ -10,6 +10,9 @@ M4_PORT="${NPCINK_CLOUD_M4_PORT:-8010}"
 M4_POSTGRES_PORT="${NPCINK_CLOUD_M4_POSTGRES_PORT:-15433}"
 M4_REDIS_PORT="${NPCINK_CLOUD_M4_REDIS_PORT:-16380}"
 M4_TUNNEL_LOCAL_PORT="${NPCINK_CLOUD_M4_TUNNEL_LOCAL_PORT:-18010}"
+M4_OLLAMA_PORT="${NPCINK_CLOUD_M4_OLLAMA_PORT:-11434}"
+M4_OLLAMA_LABEL="top.mqzj.npcink-ollama-preview"
+M4_OLLAMA_PLIST="${ROOT_DIR}/deploy/${M4_OLLAMA_LABEL}.plist"
 
 DRY_RUN=0
 TMP_DIR=""
@@ -31,6 +34,10 @@ Usage:
   scripts/m4-preview.sh logs [--follow] [--tail N] <service> [...]
   scripts/m4-preview.sh test
   scripts/m4-preview.sh recover
+  scripts/m4-preview.sh ollama-install [--dry-run]
+  scripts/m4-preview.sh ollama-configure
+  scripts/m4-preview.sh ollama-status
+  scripts/m4-preview.sh ollama-restart
   scripts/m4-preview.sh restart <service> [...]
   scripts/m4-preview.sh stop
 
@@ -45,6 +52,7 @@ Environment overrides:
   NPCINK_CLOUD_M4_POSTGRES_PORT
   NPCINK_CLOUD_M4_REDIS_PORT
   NPCINK_CLOUD_M4_TUNNEL_LOCAL_PORT
+  NPCINK_CLOUD_M4_OLLAMA_PORT
 EOF
 }
 
@@ -105,6 +113,7 @@ validate_target() {
 	validate_port "M4 port" "${M4_PORT}"
 	validate_port "M4 PostgreSQL port" "${M4_POSTGRES_PORT}"
 	validate_port "M4 Redis port" "${M4_REDIS_PORT}"
+	validate_port "M4 Ollama port" "${M4_OLLAMA_PORT}"
 }
 
 cleanup() {
@@ -212,6 +221,291 @@ open_tunnel() {
 		-N \
 		-L "${forward}" \
 		"${M4_SSH_HOST}"
+}
+
+remote_ollama_status() {
+	require_cmd ssh
+	ssh "${SSH_ARGS[@]}" "${M4_SSH_HOST}" bash -s -- \
+		"${M4_OLLAMA_LABEL}" \
+		"${M4_OLLAMA_PORT}" <<'REMOTE_OLLAMA_STATUS'
+set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+label="$1"
+port="$2"
+uid="$(id -u)"
+job="gui/${uid}/${label}"
+plist="${HOME}/Library/LaunchAgents/${label}.plist"
+
+echo '[m4-preview] Ollama'
+if [ -f "${plist}" ]; then
+	echo "managed_plist=${plist}"
+else
+	echo 'managed_plist=missing'
+fi
+
+managed_pid=""
+if launchctl print "${job}" >/dev/null 2>&1; then
+	state="$(
+		launchctl print "${job}" |
+			awk -F ' = ' '/^[[:space:]]*state = / { print $2; exit }'
+	)"
+	managed_pid="$(
+		launchctl print "${job}" |
+			awk -F ' = ' '/^[[:space:]]*pid = / { print $2; exit }'
+	)"
+	echo "launchd_state=${state:-unknown}"
+	echo "launchd_pid=${managed_pid:-none}"
+else
+	echo 'launchd_state=not_loaded'
+	echo 'launchd_pid=none'
+fi
+
+listener="$(
+	lsof -nP -iTCP:"${port}" -sTCP:LISTEN -Fpctn 2>/dev/null |
+		tr '\n' ' ' |
+		sed 's/[[:space:]]*$//' || true
+)"
+echo "listener=${listener:-missing}"
+listener_pid="$(printf '%s\n' "${listener}" | sed -n 's/^p\([0-9][0-9]*\) .*/\1/p')"
+if [ -n "${managed_pid}" ] && [ "${listener_pid}" = "${managed_pid}" ]; then
+	echo 'listener_owner=managed'
+elif [ -n "${listener_pid}" ]; then
+	echo 'listener_owner=unmanaged'
+else
+	echo 'listener_owner=missing'
+fi
+
+version="$(
+	curl --fail --silent --show-error --max-time 3 \
+		"http://127.0.0.1:${port}/api/version" 2>/dev/null |
+		python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("version") or "unknown"))' \
+		2>/dev/null || true
+)"
+echo "api_version=${version:-unavailable}"
+
+if [ -x /usr/local/bin/ollama ] && [ -n "${version}" ]; then
+	/usr/local/bin/ollama list |
+		awk 'NR == 1 { print "models:"; next } NR <= 9 { print "  " $1 " " $3 " " $4 }'
+fi
+REMOTE_OLLAMA_STATUS
+}
+
+remote_ollama_install() {
+	local install_dry_run=0
+	local remote_plist="/tmp/${M4_OLLAMA_LABEL}.${RUN_ID}.plist"
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--dry-run)
+				install_dry_run=1
+				shift
+				;;
+			--)
+				shift
+				;;
+			*)
+				fail "unknown argument: $1"
+				;;
+		esac
+	done
+
+	test -f "${M4_OLLAMA_PLIST}" || fail "missing Ollama LaunchAgent: ${M4_OLLAMA_PLIST}"
+	python3 -c \
+		'import plistlib,sys; plistlib.load(open(sys.argv[1], "rb"))' \
+		"${M4_OLLAMA_PLIST}"
+
+	if [ "${install_dry_run}" = "1" ]; then
+		log "dry-run: install ${M4_OLLAMA_LABEL} on ${M4_SSH_HOST}"
+		log "Ollama will remain bound to 127.0.0.1:${M4_OLLAMA_PORT}"
+		return 0
+	fi
+
+	require_cmd scp
+	require_cmd ssh
+	scp "${SCP_ARGS[@]}" "${M4_OLLAMA_PLIST}" "${M4_SSH_HOST}:${remote_plist}"
+	ssh "${SSH_ARGS[@]}" "${M4_SSH_HOST}" bash -s -- \
+		"${M4_OLLAMA_LABEL}" \
+		"${M4_OLLAMA_PORT}" \
+		"${remote_plist}" <<'REMOTE_OLLAMA_INSTALL'
+set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+label="$1"
+port="$2"
+incoming_plist="$3"
+uid="$(id -u)"
+job="gui/${uid}/${label}"
+plist="${HOME}/Library/LaunchAgents/${label}.plist"
+log_dir="${HOME}/Library/Logs/npcink-ai-cloud"
+
+cleanup() {
+	rm -f "${incoming_plist}"
+}
+trap cleanup EXIT INT TERM
+
+test -x /usr/local/bin/ollama || {
+	echo '[m4-preview] /usr/local/bin/ollama is required on M4' >&2
+	exit 66
+}
+/usr/bin/plutil -lint "${incoming_plist}" >/dev/null
+configured_host="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:OLLAMA_HOST' "${incoming_plist}")"
+[ "${configured_host}" = "127.0.0.1:${port}" ] || {
+	echo '[m4-preview] Ollama LaunchAgent must stay loopback-only' >&2
+	exit 65
+}
+
+mkdir -p "${HOME}/Library/LaunchAgents" "${log_dir}"
+
+listener_pid="$(
+	lsof -nP -iTCP:"${port}" -sTCP:LISTEN -Fp 2>/dev/null |
+		sed -n 's/^p//p' |
+		head -n 1 || true
+)"
+managed_pid="$(
+	launchctl print "${job}" 2>/dev/null |
+		awk -F ' = ' '/^[[:space:]]*pid = / { print $2; exit }' || true
+)"
+if [ -n "${listener_pid}" ] && [ "${listener_pid}" != "${managed_pid:-}" ]; then
+	listener_command="$(ps -p "${listener_pid}" -o command=)"
+	case "${listener_command}" in
+		*/ollama\ serve)
+			/usr/bin/osascript -e 'tell application id "com.electron.ollama" to quit' \
+				>/dev/null 2>&1 || true
+			listener_parent="$(ps -p "${listener_pid}" -o ppid= | tr -d ' ')"
+			parent_command="$(
+				if [ -n "${listener_parent}" ]; then
+					ps -p "${listener_parent}" -o command=
+				fi
+			)"
+			case "${parent_command}" in
+				/Applications/Ollama.app/Contents/MacOS/Ollama)
+					kill -TERM "${listener_parent}"
+					;;
+				'') ;;
+				*)
+					echo '[m4-preview] Ollama listener has an unexpected parent process' >&2
+					exit 65
+					;;
+			esac
+			for _ in $(seq 1 20); do
+				if ! kill -0 "${listener_pid}" 2>/dev/null; then
+					break
+				fi
+				sleep 0.5
+			done
+			if kill -0 "${listener_pid}" 2>/dev/null; then
+				kill -TERM "${listener_pid}"
+			fi
+			;;
+		*)
+			echo "[m4-preview] port ${port} is owned by an unexpected process" >&2
+			exit 65
+			;;
+	esac
+fi
+
+launchctl bootout "${job}" >/dev/null 2>&1 || true
+install -m 600 "${incoming_plist}" "${plist}"
+launchctl bootstrap "gui/${uid}" "${plist}"
+launchctl enable "${job}"
+launchctl kickstart -k "${job}"
+
+for _ in $(seq 1 60); do
+	if curl --fail --silent --show-error --max-time 2 \
+		"http://127.0.0.1:${port}/api/version" >/dev/null 2>&1; then
+		break
+	fi
+	sleep 1
+done
+curl --fail --silent --show-error --max-time 3 \
+	"http://127.0.0.1:${port}/api/version" >/dev/null
+
+binding="$(
+	lsof -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null |
+		awk 'NR == 2 { print $9 }'
+)"
+case "${binding}" in
+	127.0.0.1:"${port}") ;;
+	*)
+		echo "[m4-preview] invalid Ollama binding: ${binding:-missing}" >&2
+		exit 65
+		;;
+esac
+managed_pid="$(
+	launchctl print "${job}" |
+		awk -F ' = ' '/^[[:space:]]*pid = / { print $2; exit }'
+)"
+listener_pid="$(
+	lsof -nP -iTCP:"${port}" -sTCP:LISTEN -Fp |
+		sed -n 's/^p//p' |
+		head -n 1
+)"
+[ -n "${managed_pid}" ] && [ "${listener_pid}" = "${managed_pid}" ] || {
+	echo '[m4-preview] Ollama listener is not owned by the managed LaunchAgent' >&2
+	exit 65
+}
+echo "[m4-preview] installed ${label}; binding=${binding}"
+REMOTE_OLLAMA_INSTALL
+	remote_ollama_status
+}
+
+remote_ollama_restart() {
+	local if_installed="${1:-0}"
+	require_cmd ssh
+	ssh "${SSH_ARGS[@]}" "${M4_SSH_HOST}" bash -s -- \
+		"${M4_OLLAMA_LABEL}" \
+		"${M4_OLLAMA_PORT}" \
+		"${if_installed}" <<'REMOTE_OLLAMA_RESTART'
+set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+label="$1"
+port="$2"
+if_installed="$3"
+uid="$(id -u)"
+job="gui/${uid}/${label}"
+plist="${HOME}/Library/LaunchAgents/${label}.plist"
+
+if [ ! -f "${plist}" ]; then
+	if [ "${if_installed}" = "1" ]; then
+		echo '[m4-preview] managed Ollama is not installed; skipping preview recovery'
+		exit 0
+	fi
+	echo "[m4-preview] managed Ollama is not installed; run m4:preview:ollama:install" >&2
+	exit 66
+fi
+
+if ! launchctl print "${job}" >/dev/null 2>&1; then
+	launchctl bootstrap "gui/${uid}" "${plist}"
+fi
+launchctl enable "${job}"
+launchctl kickstart -k "${job}"
+
+for _ in $(seq 1 60); do
+	if curl --fail --silent --show-error --max-time 2 \
+		"http://127.0.0.1:${port}/api/version" >/dev/null 2>&1; then
+		break
+	fi
+	sleep 1
+done
+curl --fail --silent --show-error --max-time 3 \
+	"http://127.0.0.1:${port}/api/version" >/dev/null
+managed_pid="$(
+	launchctl print "${job}" |
+		awk -F ' = ' '/^[[:space:]]*pid = / { print $2; exit }'
+)"
+listener_pid="$(
+	lsof -nP -iTCP:"${port}" -sTCP:LISTEN -Fp |
+		sed -n 's/^p//p' |
+		head -n 1
+)"
+[ -n "${managed_pid}" ] && [ "${listener_pid}" = "${managed_pid}" ] || {
+	echo '[m4-preview] Ollama listener is not owned by the managed LaunchAgent' >&2
+	exit 65
+}
+echo '[m4-preview] managed Ollama restarted'
+REMOTE_OLLAMA_RESTART
 }
 
 dependency_fingerprint() {
@@ -1270,6 +1564,10 @@ raise SystemExit(pytest.main(sys.argv[1:]))
 		"${compose[@]}" run --interactive=false -T --rm --no-deps \
 			api python -c "${test_runner}" tests/domain
 		;;
+	ollama-configure)
+		"${compose[@]}" exec --interactive=false -T api \
+			env PYTHONPATH=/app python scripts/configure_m4_ollama_preview.py
+		;;
 	recover)
 		all_services=(postgres redis api frontend proxy worker callback-worker ops-worker)
 		for service in "${all_services[@]}"; do
@@ -1365,9 +1663,16 @@ main() {
 		--help|-h|help)
 			usage
 			;;
-		prepare|deploy|sync)
+		prepare|sync)
 			parse_dry_run "$@"
 			upload_and_apply "${command}"
+			;;
+		deploy)
+			parse_dry_run "$@"
+			upload_and_apply "${command}"
+			if [ "${DRY_RUN}" = "0" ]; then
+				remote_ollama_restart 1
+			fi
 			;;
 		tunnel)
 			open_tunnel "$@"
@@ -1375,6 +1680,7 @@ main() {
 		status)
 			[ "$#" -eq 0 ] || fail "status does not accept arguments"
 			remote_status
+			remote_ollama_status
 			;;
 		logs)
 			local follow=0
@@ -1409,7 +1715,24 @@ main() {
 			;;
 		recover)
 			[ "$#" -eq 0 ] || fail "recover does not accept arguments"
+			remote_ollama_restart 1
 			remote_locked_operation recover
+			;;
+		ollama-install)
+			remote_ollama_install "$@"
+			;;
+		ollama-configure)
+			[ "$#" -eq 0 ] || fail "ollama-configure does not accept arguments"
+			remote_locked_operation ollama-configure
+			;;
+		ollama-status)
+			[ "$#" -eq 0 ] || fail "ollama-status does not accept arguments"
+			remote_ollama_status
+			;;
+		ollama-restart)
+			[ "$#" -eq 0 ] || fail "ollama-restart does not accept arguments"
+			remote_ollama_restart
+			remote_ollama_status
 			;;
 		restart)
 			if [ "${1:-}" = "--" ]; then

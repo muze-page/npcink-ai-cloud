@@ -265,6 +265,10 @@ def _instantiate_connection_adapter(
                 provider_label=display_name,
                 image_output_hosts=image_output_hosts,
                 image_response_format=image_response_format or None,
+                default_reasoning_effort=_coerce_string(
+                    config.get("default_reasoning_effort")
+                )
+                or None,
             ),
             provider_id=provider_id,
             display_name=display_name,

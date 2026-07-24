@@ -170,6 +170,14 @@ pnpm run m4:preview:test
 # Start the existing project after a Docker Desktop or M4 restart
 pnpm run m4:preview:recover
 
+# One-time native Ollama service handoff and preview provider setup
+pnpm run m4:preview:ollama:install
+pnpm run m4:preview:ollama:configure
+
+# Read or restart only the managed M4 Ollama service
+pnpm run m4:preview:ollama:status
+pnpm run m4:preview:ollama:restart
+
 # Targeted lifecycle operations
 pnpm run m4:preview:restart -- api
 pnpm run m4:preview:stop
@@ -228,6 +236,50 @@ The M4 currently has no host Node or pnpm runtime. `m4:preview:test` therefore
 runs `pytest tests/contract` followed by `pytest tests/domain` in the M4 API
 image. These are the two exact suites behind `pnpm run check:fast`; the command
 prints that equivalence before it runs them.
+
+## Native M4 Ollama
+
+Ollama stays native on M4 rather than becoming another Docker service. The
+checked-in LaunchAgent runs `/usr/local/bin/ollama serve` with `RunAtLoad` and
+`KeepAlive`, and fixes `OLLAMA_HOST` to `127.0.0.1:11434`. It does not publish
+Ollama to LAN, Tailscale, Cloudflare, or a container port.
+
+Install the managed service once:
+
+```bash
+pnpm run m4:preview:ollama:install
+```
+
+The installer validates the checked-in plist, refuses to replace an unexpected
+listener on port `11434`, gracefully hands off an existing Ollama.app server,
+and verifies the final loopback binding. It owns only
+`~/Library/LaunchAgents/top.mqzj.npcink-ollama-preview.plist` and the
+corresponding launchd job.
+
+After the Cloud source containing the provider request contract is deployed,
+configure the disposable M4 database:
+
+```bash
+pnpm run m4:preview:ollama:configure
+```
+
+This development-only command creates or updates the secretless `ollama-m4`
+provider at `http://host.docker.internal:11434/v1`, allows
+`qwen3.5:9b`, sets provider-default `reasoning_effort=none`, refreshes its
+catalog, and points the three WordPress text profiles at the resulting 9B
+instance. The setting is explicit per provider connection; it does not change
+production providers or the generic WordPress operation contract.
+
+Ollama's OpenAI-compatible endpoint maps `reasoning_effort=none` to disabled
+thinking. This is required for `qwen3.5:9b` in the preview because an unbounded
+reasoning response may exhaust the output budget before returning visible
+content.
+
+`m4:preview:status` includes the managed job, listener, API version, and bounded
+model inventory. `m4:preview:recover` restarts Ollama when the managed
+LaunchAgent is installed, then recovers the existing Docker containers. If the
+LaunchAgent has not been installed, Docker-only preview recovery remains
+available and reports that Ollama recovery was skipped.
 
 ## Source Synchronization Contract
 
@@ -331,6 +383,12 @@ pnpm run m4:preview:recover
 `m4:preview:deploy` in that case so source, migrations, images, ports, and
 health are validated together.
 
+Also confirm the native provider when WordPress text generation is in scope:
+
+```bash
+pnpm run m4:preview:ollama:status
+```
+
 For a non-disruptive policy check, inspect all eight services through status.
 For a deliberate recovery drill, restart Docker Desktop or the M4 only during a
 maintenance window, wait for Docker to become ready, then run status, recover,
@@ -354,6 +412,11 @@ pnpm run m4:preview:stop
 To roll source back, use a clean local worktree at the
 last known-good Git revision. Run `pnpm run m4:preview:deploy` from that
 worktree.
+
+To roll back only the managed Ollama service, first stop the exact
+`top.mqzj.npcink-ollama-preview` launchd job and remove only its checked-in
+LaunchAgent copy. The Ollama models under the user's Ollama data directory are
+not deleted by install, restart, recovery, or rollback.
 To destroy the disposable replacement, first resolve its exact Compose labels
 and directory, then run `docker compose down --volumes --remove-orphans` with
 the exact `npcink-ai-cloud-m4-dev` project name. This destructive step is an

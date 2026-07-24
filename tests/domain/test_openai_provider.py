@@ -240,6 +240,84 @@ def test_openai_adapter_executes_chat_with_hosted_params_tools_and_thinking() ->
     assert result.output["output_text"] == "ok"
 
 
+def test_openai_adapter_applies_provider_default_reasoning_effort() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["reasoning_effort"] == "none"
+        return httpx.Response(
+            200,
+            json={
+                "model": "qwen3.5:9b",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "正文"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 2},
+            },
+        )
+
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        default_reasoning_effort="none",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = adapter.execute(
+        _build_request(
+            execution_kind="text",
+            endpoint_variant="chat_completions",
+            model_id="qwen3.5:9b",
+            input_payload={"messages": [{"role": "user", "content": "给出正文"}]},
+        )
+    )
+
+    assert result.output["output_text"] == "正文"
+
+
+def test_openai_adapter_request_extra_overrides_provider_default_reasoning_effort() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["reasoning_effort"] == "high"
+        return httpx.Response(
+            200,
+            json={
+                "model": "reasoning-model",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "ok"},
+                    }
+                ],
+                "usage": {},
+            },
+        )
+
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        default_reasoning_effort="none",
+        transport=httpx.MockTransport(handler),
+    )
+
+    adapter.execute(
+        _build_request(
+            execution_kind="text",
+            endpoint_variant="chat_completions",
+            model_id="reasoning-model",
+            input_payload={
+                "messages": [{"role": "user", "content": "think"}],
+                "params": {"extra": {"reasoning_effort": "high"}},
+            },
+        )
+    )
+
+
+def test_openai_adapter_rejects_unknown_default_reasoning_effort() -> None:
+    with pytest.raises(ValueError, match="default_reasoning_effort"):
+        OpenAIProviderAdapter(default_reasoning_effort="disabled")
+
+
 def _build_request(
     *,
     execution_kind: str,

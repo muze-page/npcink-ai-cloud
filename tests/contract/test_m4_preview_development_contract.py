@@ -14,6 +14,7 @@ REDACTOR = ROOT / "scripts" / "redact-m4-preview-logs.py"
 PACKAGE_PROXY = ROOT / "scripts" / "m4-package-proxy.py"
 OVERLAY = ROOT / "docker-compose.m4-preview.yml"
 RUNBOOK = ROOT / "docs" / "m4-preview-development-v1.md"
+OLLAMA_LAUNCH_AGENT = ROOT / "deploy" / "top.mqzj.npcink-ollama-preview.plist"
 
 
 def test_m4_preview_commands_are_explicit() -> None:
@@ -28,6 +29,10 @@ def test_m4_preview_commands_are_explicit() -> None:
         "m4:preview:logs": "bash scripts/m4-preview.sh logs",
         "m4:preview:test": "bash scripts/m4-preview.sh test",
         "m4:preview:recover": "bash scripts/m4-preview.sh recover",
+        "m4:preview:ollama:install": "bash scripts/m4-preview.sh ollama-install",
+        "m4:preview:ollama:configure": "bash scripts/m4-preview.sh ollama-configure",
+        "m4:preview:ollama:status": "bash scripts/m4-preview.sh ollama-status",
+        "m4:preview:ollama:restart": "bash scripts/m4-preview.sh ollama-restart",
         "m4:preview:restart": "bash scripts/m4-preview.sh restart",
         "m4:preview:stop": "bash scripts/m4-preview.sh stop",
     }
@@ -95,6 +100,12 @@ def test_m4_preview_shell_contract_is_syntax_valid_and_fail_closed() -> None:
     assert 'forward="127.0.0.1:${local_port}:127.0.0.1:${M4_PORT}"' in source
     assert "ExitOnForwardFailure=yes" in source
     assert "ServerAliveCountMax=3" in source
+    assert "top.mqzj.npcink-ollama-preview" in source
+    assert "m4:preview:ollama:install" in source
+    assert "scripts/configure_m4_ollama_preview.py" in source
+    assert "env PYTHONPATH=/app python scripts/configure_m4_ollama_preview.py" in source
+    assert "managed Ollama is not installed; skipping preview recovery" in source
+    assert "127.0.0.1:${M4_OLLAMA_PORT}" in source
 
     prepare_block = source.rsplit('if [ "${mode}" = "prepare" ]; then', 1)[1].split(
         'elif [ "${mode}" = "deploy" ]; then',
@@ -119,6 +130,31 @@ def test_m4_tunnel_dry_run_is_local_only_and_non_mutating() -> None:
     assert "ExitOnForwardFailure=yes" in completed.stdout
     assert "ServerAliveInterval=15" in completed.stdout
     assert "ServerAliveCountMax=3" in completed.stdout
+    assert "docker" not in completed.stdout
+    assert "rsync" not in completed.stdout
+
+
+def test_m4_ollama_launch_agent_is_loopback_only_and_dry_run_is_non_mutating() -> None:
+    source = OLLAMA_LAUNCH_AGENT.read_text(encoding="utf-8")
+
+    assert "<string>top.mqzj.npcink-ollama-preview</string>" in source
+    assert "<string>/usr/local/bin/ollama</string>" in source
+    assert "<string>serve</string>" in source
+    assert "<string>127.0.0.1:11434</string>" in source
+    assert "0.0.0.0" not in source
+    assert "<key>RunAtLoad</key>" in source
+    assert "<key>KeepAlive</key>" in source
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "ollama-install", "--dry-run"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "dry-run: install top.mqzj.npcink-ollama-preview" in completed.stdout
+    assert "127.0.0.1:11434" in completed.stdout
     assert "docker" not in completed.stdout
     assert "rsync" not in completed.stdout
 

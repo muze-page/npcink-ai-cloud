@@ -59,6 +59,7 @@ MAX_PROVIDER_IMAGE_RESPONSE_BYTES = (((MAX_PROVIDER_IMAGE_TOTAL_BYTES + 2) // 3)
     1024 * 1024
 )
 ALLOWED_PROVIDER_IMAGE_RESPONSE_FORMATS = frozenset({"url", "b64_json"})
+ALLOWED_REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "max"})
 ALLOWED_PROVIDER_IMAGE_USAGE_FIELDS = frozenset(
     {
         "cost",
@@ -105,6 +106,7 @@ class OpenAIProviderAdapter:
         provider_label: str = "",
         image_output_hosts: Iterable[str] = (),
         image_response_format: str | None = None,
+        default_reasoning_effort: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -131,6 +133,15 @@ class OpenAIProviderAdapter:
         ):
             raise ValueError("image_response_format must be url or b64_json")
         self.image_response_format = normalized_image_response_format or None
+        normalized_reasoning_effort = str(default_reasoning_effort or "").strip().lower()
+        if (
+            normalized_reasoning_effort
+            and normalized_reasoning_effort not in ALLOWED_REASONING_EFFORTS
+        ):
+            raise ValueError(
+                "default_reasoning_effort must be none, low, medium, high, or max"
+            )
+        self.default_reasoning_effort = normalized_reasoning_effort or None
         if self.provider_label:
             self.display_name = self.provider_label
         self.transport = transport
@@ -1097,6 +1108,8 @@ class OpenAIProviderAdapter:
             for key, value in options["extra"].items():
                 if isinstance(key, str) and key not in payload:
                     payload[key] = value
+        if self.default_reasoning_effort and "reasoning_effort" not in payload:
+            payload["reasoning_effort"] = self.default_reasoning_effort
         if "parallel_tool_calls" in options:
             payload["parallel_tool_calls"] = bool(options.get("parallel_tool_calls"))
         if isinstance(options.get("max_completion_tokens"), int):

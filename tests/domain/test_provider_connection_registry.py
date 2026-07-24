@@ -200,6 +200,7 @@ def test_provider_registry_uses_enabled_provider_connections_instead_of_env_fall
             "config": {
                 "image_output_hosts": ["cdn.openai.example", "assets.openai.example"],
                 "image_response_format": "b64_json",
+                "default_reasoning_effort": "none",
             },
             "credential": "db-openai-key",
         }
@@ -217,6 +218,7 @@ def test_provider_registry_uses_enabled_provider_connections_instead_of_env_fall
         "assets.openai.example",
     )
     assert openai.image_response_format == "b64_json"
+    assert openai.default_reasoning_effort == "none"
 
     env_only_providers = build_provider_adapters(settings, include_enabled_connections=False)
     assert "openai" not in env_only_providers
