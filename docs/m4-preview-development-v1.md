@@ -167,6 +167,9 @@ pnpm run m4:preview:deploy
 # Ordinary Python, frontend, migration, test, or documentation change
 pnpm run m4:preview:sync
 
+# After the reviewed PR is merged into master
+pnpm run m4:preview:promote -- --pr <merged-pr-number>
+
 # Read-only runtime evidence
 pnpm run m4:preview:status
 pnpm run m4:preview:logs -- api
@@ -244,6 +247,56 @@ The M4 currently has no host Node or pnpm runtime. `m4:preview:test` therefore
 runs `pytest tests/contract` followed by `pytest tests/domain` in the M4 API
 image. These are the two exact suites behind `pnpm run check:fast`; the command
 prints that equivalence before it runs them.
+
+## Candidate and Accepted States
+
+M4 Preview separates fast behavioral feedback from repository completion:
+
+- `m4:preview:sync` and `m4:preview:deploy` always record
+  `acceptance_state=candidate`;
+- a candidate may come from a feature branch or a dirty worktree and proves
+  only that the packaged source behaved correctly on M4;
+- a change is not accepted until its PR is merged into `master` and
+  `m4:preview:promote` succeeds from a clean worktree whose `HEAD` equals the
+  freshly fetched `origin/master`.
+
+Use the stable operations worktree for acceptance:
+
+```bash
+cd /Users/muze/gitee/npcink-ai-cloud-m4-ops
+git status --short --branch
+git pull --ff-only origin master
+pnpm run m4:preview:promote -- --pr <merged-pr-number>
+pnpm run m4:preview:status
+```
+
+Promotion verifies the PR is merged into `master` through GitHub, then uses
+`sync` by default. If dependency, Dockerfile, lock-file, Compose, proxy, or M4
+deployment-script inputs changed, it fails closed with the explicit fallback:
+
+```bash
+pnpm run m4:preview:promote -- --pr <merged-pr-number> --deploy
+```
+
+The accepted completion evidence is:
+
+```text
+acceptance_state=accepted
+promotion_pr=<merged-pr-number>
+source_branch=master
+source_dirty=false
+source_revision=<current-origin-master-revision>
+```
+
+GitHub rebase merge may replace the feature commit SHA. The evidence chain is
+the merged PR, current `origin/master`, and the deployed source revision; the
+pre-merge feature SHA does not need to remain an ancestor.
+
+This command does not merge a PR or deploy production. GitHub-hosted CI
+receives no M4 SSH credential. There is no automatic callback, second preview
+stack, or second deployment control plane. A later candidate sync intentionally
+replaces the accepted status and must be promoted again before completion is
+reported.
 
 ## Native M4 Ollama
 

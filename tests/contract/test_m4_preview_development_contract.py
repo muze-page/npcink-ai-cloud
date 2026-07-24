@@ -24,6 +24,7 @@ def test_m4_preview_commands_are_explicit() -> None:
         "m4:preview:prepare": "bash scripts/m4-preview.sh prepare",
         "m4:preview:deploy": "bash scripts/m4-preview.sh deploy",
         "m4:preview:sync": "bash scripts/m4-preview.sh sync",
+        "m4:preview:promote": "bash scripts/m4-preview.sh promote",
         "m4:preview:tunnel": "bash scripts/m4-preview.sh tunnel",
         "m4:preview:status": "bash scripts/m4-preview.sh status",
         "m4:preview:logs": "bash scripts/m4-preview.sh logs",
@@ -61,6 +62,8 @@ def test_m4_preview_shell_contract_is_syntax_valid_and_fail_closed() -> None:
     assert "com.docker.compose.service" in source
     assert "source_bundle_sha256" in source
     assert "source_dirty_paths" in source
+    assert "acceptance_state" in source
+    assert "promotion_pr" in source
     assert "deployed_at_utc" in source
     assert "git ls-files -z --cached --others --exclude-standard" in source
     assert "--exclude '.env'" in source
@@ -87,7 +90,7 @@ def test_m4_preview_shell_contract_is_syntax_valid_and_fail_closed() -> None:
     assert "com.docker.compose.project" in source
     assert "prepare complete: images and Compose config are ready" in source
     assert "equivalent_gate=pnpm run check:fast" in source
-    assert 'ps -a -q "${service}"' in source
+    assert 'label=com.docker.compose.oneoff=False' in source
     assert "recovery requires existing container" in source
     assert '"${compose[@]}" start postgres redis' in source
     assert '"${compose[@]}" start api frontend proxy worker callback-worker ops-worker' in source
@@ -106,6 +109,12 @@ def test_m4_preview_shell_contract_is_syntax_valid_and_fail_closed() -> None:
     assert "env PYTHONPATH=/app python scripts/configure_m4_ollama_preview.py" in source
     assert "managed Ollama is not installed; skipping preview recovery" in source
     assert "127.0.0.1:${M4_OLLAMA_PORT}" in source
+    assert 'source_branch}" = "master"' in source
+    assert "promotion requires a clean master worktree" in source
+    assert "refs/remotes/origin/master" in source
+    assert "PR #${pr_number} is not merged" in source
+    assert "PR #${pr_number} targets ${pr_base}, not master" in source
+    assert "m4:preview:promote -- --pr ${promotion_pr} --deploy" in source
 
     prepare_block = source.rsplit('if [ "${mode}" = "prepare" ]; then', 1)[1].split(
         'elif [ "${mode}" = "deploy" ]; then',
@@ -339,3 +348,7 @@ def test_m4_runbook_preserves_source_cloudflare_and_recovery_boundaries() -> Non
     assert "portal-demo@example.com" in runbook
     assert "https://cloud.mqzjmax.top/portal/dev-entry" in runbook
     assert "shared development identity" in runbook
+    assert "Candidate and Accepted States" in runbook
+    assert "pnpm run m4:preview:promote -- --pr" in runbook
+    assert "acceptance_state=accepted" in runbook
+    assert "receives no M4 SSH credential" in runbook

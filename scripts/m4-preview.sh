@@ -29,6 +29,7 @@ Usage:
   scripts/m4-preview.sh prepare [--dry-run]
   scripts/m4-preview.sh deploy [--dry-run]
   scripts/m4-preview.sh sync [--dry-run]
+  scripts/m4-preview.sh promote --pr N [--deploy] [--dry-run]
   scripts/m4-preview.sh tunnel [--dry-run] [--local-port N]
   scripts/m4-preview.sh status
   scripts/m4-preview.sh logs [--follow] [--tail N] <service> [...]
@@ -164,6 +165,91 @@ parse_dry_run() {
 				;;
 		esac
 	done
+}
+
+verify_promotion_preconditions() {
+	local pr_number="$1"
+	local source_branch=""
+	local source_dirty=""
+	local local_revision=""
+	local remote_revision=""
+	local pr_state=""
+	local pr_base=""
+	local pr_merged_at=""
+	local pr_url=""
+	local pr_data=""
+
+	require_cmd git
+	require_cmd gh
+	validate_number "PR number" "${pr_number}"
+
+	source_branch="$(git -C "${ROOT_DIR}" symbolic-ref --quiet --short HEAD || true)"
+	[ "${source_branch}" = "master" ] ||
+		fail "promotion requires the master branch; current branch is ${source_branch:-detached}"
+
+	source_dirty="$(source_dirty_state)"
+	[ "${source_dirty}" = "false" ] ||
+		fail "promotion requires a clean master worktree"
+
+	log "fetching origin/master before promotion"
+	git -C "${ROOT_DIR}" fetch origin master
+	local_revision="$(git -C "${ROOT_DIR}" rev-parse HEAD)"
+	remote_revision="$(git -C "${ROOT_DIR}" rev-parse refs/remotes/origin/master)"
+	[ "${local_revision}" = "${remote_revision}" ] ||
+		fail "promotion requires HEAD to equal origin/master (${local_revision} != ${remote_revision})"
+
+	pr_data="$(
+		cd "${ROOT_DIR}"
+		gh pr view "${pr_number}" --json state,baseRefName,mergedAt,url \
+			--jq '[.state, .baseRefName, (.mergedAt // ""), .url] | join("|")'
+	)"
+	IFS='|' read -r pr_state pr_base pr_merged_at pr_url <<<"${pr_data}"
+
+	[ "${pr_state}" = "MERGED" ] ||
+		fail "PR #${pr_number} is not merged"
+	[ "${pr_base}" = "master" ] ||
+		fail "PR #${pr_number} targets ${pr_base}, not master"
+	[ -n "${pr_merged_at}" ] ||
+		fail "PR #${pr_number} has no merged timestamp"
+
+	log "promotion PR: ${pr_url}"
+	log "accepted source: master ${local_revision}"
+}
+
+promote_accepted_master() {
+	local pr_number=""
+	local mode="sync"
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--)
+				shift
+				;;
+			--pr)
+				[ "$#" -ge 2 ] || fail "--pr requires a value"
+				pr_number="$2"
+				shift 2
+				;;
+			--deploy)
+				mode="deploy"
+				shift
+				;;
+			--dry-run)
+				DRY_RUN=1
+				shift
+				;;
+			*)
+				fail "unknown argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "${pr_number}" ] || fail "promote requires --pr N"
+	verify_promotion_preconditions "${pr_number}"
+	upload_and_apply "${mode}" accepted "${pr_number}"
+	if [ "${mode}" = "deploy" ] && [ "${DRY_RUN}" = "0" ]; then
+		remote_ollama_restart 1
+	fi
 }
 
 open_tunnel() {
@@ -656,6 +742,8 @@ source_dirty_count() {
 
 upload_and_apply() {
 	local mode="$1"
+	local acceptance_state="${2:-candidate}"
+	local promotion_pr="${3:-none}"
 	local source_bundle=""
 	local source_sha=""
 	local source_revision=""
@@ -678,6 +766,8 @@ upload_and_apply() {
 	log "source revision: ${source_revision}"
 	log "source branch: ${source_branch}"
 	log "source dirty: ${source_dirty} (${dirty_count} paths)"
+	log "acceptance state: ${acceptance_state}"
+	log "promotion PR: ${promotion_pr}"
 	log "source bundle SHA256: ${source_sha}"
 	log "image input SHA256: ${image_input_sha}"
 	log "config input SHA256: ${config_input_sha}"
@@ -709,7 +799,9 @@ upload_and_apply() {
 		"${RUN_ID}" \
 		"${M4_PORT}" \
 		"${M4_POSTGRES_PORT}" \
-		"${M4_REDIS_PORT}" <<'REMOTE_APPLY'
+		"${M4_REDIS_PORT}" \
+		"${acceptance_state}" \
+		"${promotion_pr}" <<'REMOTE_APPLY'
 set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -729,6 +821,34 @@ run_id="${12}"
 preview_port="${13}"
 postgres_port="${14}"
 redis_port="${15}"
+acceptance_state="${16}"
+promotion_pr="${17}"
+
+case "${acceptance_state}" in
+	candidate)
+		[ "${promotion_pr}" = "none" ] || {
+			echo '[m4-preview] candidate deployment cannot record a promotion PR' >&2
+			exit 64
+		}
+		;;
+	accepted)
+		[ "${source_branch}" = "master" ] &&
+			[ "${source_dirty}" = "false" ] || {
+			echo '[m4-preview] accepted deployment requires clean master source' >&2
+			exit 64
+		}
+		case "${promotion_pr}" in
+			''|*[!0-9]*)
+				echo '[m4-preview] accepted deployment requires a numeric promotion PR' >&2
+				exit 64
+				;;
+		esac
+		;;
+	*)
+		echo '[m4-preview] invalid acceptance state' >&2
+		exit 64
+		;;
+esac
 
 case "${project_name}" in
 	npcink-ai-cloud-m4-preview)
@@ -1201,17 +1321,29 @@ fi
 
 if [ "${mode}" = "sync" ]; then
 	if [ "${needs_build}" = "1" ]; then
-		echo '[m4-preview] dependency inputs changed; run m4:preview:deploy' >&2
+		if [ "${acceptance_state}" = "accepted" ]; then
+			echo "[m4-preview] dependency inputs changed; rerun m4:preview:promote -- --pr ${promotion_pr} --deploy" >&2
+		else
+			echo '[m4-preview] dependency inputs changed; run m4:preview:deploy' >&2
+		fi
 		exit 42
 	fi
 	if [ ! -f "${deployed_image_marker}" ] ||
 		[ "$(cat "${deployed_image_marker}")" != "${image_input_sha}" ]; then
-		echo '[m4-preview] prepared image inputs are not deployed; run m4:preview:deploy' >&2
+		if [ "${acceptance_state}" = "accepted" ]; then
+			echo "[m4-preview] prepared image inputs are not deployed; rerun m4:preview:promote -- --pr ${promotion_pr} --deploy" >&2
+		else
+			echo '[m4-preview] prepared image inputs are not deployed; run m4:preview:deploy' >&2
+		fi
 		exit 42
 	fi
 	if [ ! -f "${deployed_config_marker}" ] ||
 		[ "$(cat "${deployed_config_marker}")" != "${config_input_sha}" ]; then
-		echo '[m4-preview] Compose or proxy inputs changed; run m4:preview:deploy' >&2
+		if [ "${acceptance_state}" = "accepted" ]; then
+			echo "[m4-preview] Compose or proxy inputs changed; rerun m4:preview:promote -- --pr ${promotion_pr} --deploy" >&2
+		else
+			echo '[m4-preview] Compose or proxy inputs changed; run m4:preview:deploy' >&2
+		fi
 		exit 43
 	fi
 else
@@ -1341,6 +1473,8 @@ printf '%s\n' "${image_input_sha}" > "${deployed_image_marker}"
 printf '%s\n' "${config_input_sha}" > "${deployed_config_marker}"
 
 {
+	printf 'acceptance_state=%s\n' "${acceptance_state}"
+	printf 'promotion_pr=%s\n' "${promotion_pr}"
 	printf 'source_revision=%s\n' "${source_revision}"
 	printf 'source_branch=%s\n' "${source_branch}"
 	printf 'source_dirty=%s\n' "${source_dirty}"
@@ -1402,6 +1536,16 @@ compose=(
 	-f docker-compose.m4-preview.yml
 )
 
+service_container_id() {
+	local service="$1"
+	docker ps -a \
+		--filter "label=com.docker.compose.project=${project_name}" \
+		--filter "label=com.docker.compose.service=${service}" \
+		--filter "label=com.docker.compose.oneoff=False" \
+		--format '{{.ID}}' |
+		head -n 1
+}
+
 echo '[m4-preview] deployment state'
 if [ -f "${state_file}" ]; then
 	cat "${state_file}"
@@ -1414,7 +1558,7 @@ echo '[m4-preview] compose services'
 
 echo '[m4-preview] container runtime'
 for service in postgres redis api frontend proxy worker callback-worker ops-worker; do
-	container_id="$("${compose[@]}" ps -a -q "${service}")"
+	container_id="$(service_container_id "${service}")"
 	if [ -z "${container_id}" ]; then
 		printf '%s|missing\n' "${service}"
 		continue
@@ -1425,7 +1569,7 @@ done
 
 echo '[m4-preview] published ports'
 for service in proxy postgres redis; do
-	container_id="$("${compose[@]}" ps -a -q "${service}")"
+	container_id="$(service_container_id "${service}")"
 	if [ -n "${container_id}" ]; then
 		docker port "${container_id}"
 	fi
@@ -1437,7 +1581,7 @@ for endpoint in / /health/live /docs /health/ready /internal/health; do
 	printf '%s=%s\n' "${endpoint}" "${code}"
 done
 
-api_id="$("${compose[@]}" ps -a -q api)"
+api_id="$(service_container_id api)"
 if [ -n "${api_id}" ] &&
 	[ "$(docker inspect -f '{{.State.Status}}' "${api_id}")" = "running" ]; then
 	echo '[m4-preview] Alembic'
@@ -1544,6 +1688,16 @@ compose=(
 	-f docker-compose.m4-preview.yml
 )
 
+service_container_id() {
+	local service="$1"
+	docker ps -a \
+		--filter "label=com.docker.compose.project=${project_name}" \
+		--filter "label=com.docker.compose.service=${service}" \
+		--filter "label=com.docker.compose.oneoff=False" \
+		--format '{{.ID}}' |
+		head -n 1
+}
+
 case "${operation}" in
 	test)
 		echo '[m4-preview] equivalent_gate=pnpm run check:fast'
@@ -1571,7 +1725,7 @@ raise SystemExit(pytest.main(sys.argv[1:]))
 	recover)
 		all_services=(postgres redis api frontend proxy worker callback-worker ops-worker)
 		for service in "${all_services[@]}"; do
-			container_id="$("${compose[@]}" ps -a -q "${service}")"
+			container_id="$(service_container_id "${service}")"
 			[ -n "${container_id}" ] || {
 				echo "[m4-preview] recovery requires existing container: ${service}; run m4:preview:deploy" >&2
 				exit 66
@@ -1582,7 +1736,7 @@ raise SystemExit(pytest.main(sys.argv[1:]))
 		for service in postgres redis; do
 			attempt=0
 			while [ "${attempt}" -lt 60 ]; do
-				container_id="$("${compose[@]}" ps -a -q "${service}")"
+				container_id="$(service_container_id "${service}")"
 				state="$(docker inspect -f '{{.State.Status}}' "${container_id}")"
 				health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container_id}")"
 				if [ "${state}" = "running" ] && [ "${health}" = "healthy" ]; then
@@ -1615,7 +1769,7 @@ raise SystemExit(pytest.main(sys.argv[1:]))
 		done
 
 		for service in "${all_services[@]}"; do
-			container_id="$("${compose[@]}" ps -a -q "${service}")"
+			container_id="$(service_container_id "${service}")"
 			state="$(docker inspect -f '{{.State.Status}}' "${container_id}")"
 			restart_policy="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "${container_id}")"
 			[ "${state}" = "running" ] || {
@@ -1665,14 +1819,17 @@ main() {
 			;;
 		prepare|sync)
 			parse_dry_run "$@"
-			upload_and_apply "${command}"
+			upload_and_apply "${command}" candidate none
 			;;
 		deploy)
 			parse_dry_run "$@"
-			upload_and_apply "${command}"
+			upload_and_apply "${command}" candidate none
 			if [ "${DRY_RUN}" = "0" ]; then
 				remote_ollama_restart 1
 			fi
+			;;
+		promote)
+			promote_accepted_master "$@"
 			;;
 		tunnel)
 			open_tunnel "$@"

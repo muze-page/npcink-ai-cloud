@@ -324,6 +324,17 @@ release-verification surfaces. If a problem appears only on a remote runtime,
 treat it as deploy/config/state drift to be fixed back in the repo; do not edit
 or commit source on that host.
 
+Direct M4 syncs and deploys are candidate previews. After the reviewed pull
+request is merged, use a clean, current `master` worktree to record the accepted
+state without rebuilding by default:
+
+```bash
+pnpm run m4:preview:promote -- --pr <merged-pr-number>
+```
+
+See the [M4 Preview development workflow](docs/m4-preview-development-v1.md)
+for the candidate/accepted contract and the explicit `--deploy` fallback.
+
 ## Borrowed Foundations
 
 Cloud should keep borrowing mature infrastructure patterns instead of growing

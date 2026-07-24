@@ -89,3 +89,24 @@ pnpm run lint
 
 Before finishing a code session, run the narrowest useful gate and report
 exactly what passed or failed.
+
+## M4 Preview Completion Protocol
+
+- Direct `m4:preview:sync` and `m4:preview:deploy` operations are candidate
+  previews. They prove behavior but do not prove that the source reached
+  `master`.
+- Do not report an M4-validated change as accepted until its pull request is
+  merged into `master` and a clean, current `origin/master` worktree runs
+  `pnpm run m4:preview:promote -- --pr <number>`.
+- Promotion uses source sync by default. Add `--deploy` only when the command
+  reports that dependency, Dockerfile, lock-file, Compose, proxy, or deployment
+  script inputs require an M4 image rebuild.
+- Final evidence must show `acceptance_state=accepted`, the merged PR number,
+  `source_branch=master`, `source_dirty=false`, and the current
+  `origin/master` revision in `m4:preview:status`.
+- GitHub rebase merge may replace feature commit SHAs. Use the merged PR,
+  current `origin/master`, and deployed source revision as the acceptance
+  chain; do not require the pre-merge feature SHA to remain an ancestor.
+- Keep M4 access operator-initiated. Do not add M4 SSH credentials to
+  GitHub-hosted CI or turn preview promotion into a second deployment control
+  plane.

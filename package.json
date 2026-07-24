@@ -70,6 +70,7 @@
     "m4:preview:prepare": "bash scripts/m4-preview.sh prepare",
     "m4:preview:deploy": "bash scripts/m4-preview.sh deploy",
     "m4:preview:sync": "bash scripts/m4-preview.sh sync",
+    "m4:preview:promote": "bash scripts/m4-preview.sh promote",
     "m4:preview:tunnel": "bash scripts/m4-preview.sh tunnel",
     "m4:preview:status": "bash scripts/m4-preview.sh status",
     "m4:preview:logs": "bash scripts/m4-preview.sh logs",
