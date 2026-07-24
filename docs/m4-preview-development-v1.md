@@ -6,13 +6,17 @@ AI agents must also follow the normative
 for task classification, evidence states, Git completion, and final reporting.
 The rationale for candidate and accepted states is recorded in
 [ADR-023](decisions/023-m4-preview-candidate-acceptance-promotion.md).
+The source-only authoring and agent checkpoint-dispatch decision is recorded in
+[ADR-025](decisions/025-source-only-authoring-and-ai-m4-checkpoint-dispatch.md).
 
 ## Decision
 
-The authoring Mac remains the source and Git truth. The M4 is a disposable
-Docker development runtime for build, execution, migration, tests, and preview.
-No day-to-day Docker installation is required on the authoring Mac, and no Git
-checkout or source edit is performed on M4.
+The authoring Mac remains the source and Git truth and runs operator commands.
+The M4 is the routine Docker development runtime for build, execution,
+migration, tests, and preview. The approved office workflow does not use the
+authoring Mac as a silent Cloud Docker fallback, and no Git checkout or source
+edit is performed on M4. No day-to-day Docker installation is required on the
+authoring Mac.
 
 The operator approved replacing the disposable legacy Cloud Preview rather than
 keeping two Cloud stacks in parallel. The current defaults are:
@@ -144,9 +148,12 @@ M4 Preview is an integration runtime, not a mandatory inner loop.
    Cloudflare Access protected, off-machine browser path is the behavior being
    checked.
 
-Do not add a second preview hostname, Cloudflare service-token storage in the
-WordPress addon, a tunnel daemon, or another control plane to make this
-single-operator development path more automatic.
+For an already authorized Cloud code task, an AI agent runs `sync` or `deploy`
+at a coherent task checkpoint without waiting for another deployment request.
+This is an explicit task action, not a per-save watcher. Do not add a second
+preview hostname, Cloudflare service-token storage in the WordPress addon, a
+tunnel daemon, Git hook, hosted-CI callback, or another control plane to make
+this single-operator development path more automatic.
 
 Keep this model for five working days and record only:
 
@@ -157,8 +164,25 @@ Keep this model for five working days and record only:
 
 Keep M4 as the default Cloud integration runtime when edit-to-preview normally
 stays under two minutes and environment friction stays under ten minutes per
-day. If those limits are repeatedly exceeded, use local Docker selectively for
-the affected Cloud task and retain M4 as the integration/preview gate.
+day. If those limits are repeatedly exceeded, diagnose transfer, network,
+runtime, or test-scope friction and revise the workflow through an explicit
+operator decision. Do not silently move the routine Cloud runtime back to the
+authoring Mac.
+
+### AI checkpoint rule
+
+The default AI handoff for Cloud code is:
+
+1. finish a coherent source edit batch on the authoring Mac;
+2. run the narrowest useful source/static check there;
+3. dispatch `m4:preview:sync`, or `m4:preview:deploy` when fingerprints require
+   a rebuild;
+4. verify the relevant M4 behavior and `m4:preview:status`;
+5. repeat the checkpoint after later source changes.
+
+Documentation-only and other local-only work does not trigger M4. An M4
+failure leaves runtime evidence incomplete; it does not authorize an unreported
+local Docker substitute.
 
 ## Daily Commands
 
@@ -322,10 +346,10 @@ the merged PR, current `origin/master`, and the deployed source revision; the
 pre-merge feature SHA does not need to remain an ancestor.
 
 This command does not merge a PR or deploy production. GitHub-hosted CI
-receives no M4 SSH credential. There is no automatic callback, second preview
-stack, or second deployment control plane. A later candidate sync intentionally
-replaces the accepted status and must be promoted again before completion is
-reported.
+receives no M4 SSH credential. Agent-driven task-checkpoint dispatch does not
+add an automatic callback, second preview stack, or second deployment control
+plane. A later candidate sync intentionally replaces the accepted status and
+must be promoted again before completion is reported.
 
 ## Native M4 Ollama
 

@@ -102,6 +102,19 @@ exactly what passed or failed.
   `docs/m4-preview-ai-development-standard-v1.md`. Classify the change as
   local-only, Cloud source, or build/runtime, then use the smallest valid
   verification lane defined there.
+- In the approved M4 workflow, the authoring Mac owns source edits, Git, and
+  operator commands only. Routine Cloud Docker build, execution, migration,
+  and runtime testing belong on M4; do not silently replace a failed or
+  unavailable M4 lane with local Docker.
+- A user-authorized Cloud source or build/runtime task also authorizes the
+  corresponding candidate preview action. After a coherent task checkpoint
+  and the narrowest useful local source/static gate, run `m4:preview:sync` or
+  `m4:preview:deploy` without waiting for the user to ask again.
+- Automatic checkpoint dispatch means an explicit agent action in the active
+  task. Do not add per-save watchers, background daemons, Git hooks, or
+  GitHub-hosted M4 deployment credentials. Batch related edits into a coherent
+  checkpoint; if source changes after validation, dispatch the candidate again
+  before claiming M4 evidence.
 - During the edit loop, prefer
   `pnpm run m4:preview:test -- --focused <tests/path-or-node-id>`. Use
   `--contract`, `--domain`, or `--full` only when that broader scope answers a

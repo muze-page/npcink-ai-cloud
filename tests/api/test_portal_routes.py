@@ -4716,6 +4716,9 @@ def test_portal_debug_bypass_is_disabled_in_production_even_with_allowlist(
         settings_overrides={
             "environment": "production",
             "admin_key_sha256": "b" * 64,
+            "dev_admin_key": "",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
             "browser_origin_allowlist": "https://cloud.example.com",
             "trusted_host_allowlist": "testserver,cloud.example.com",
             "debug_local_origin_allowlist": "http://127.0.0.1:8010",
