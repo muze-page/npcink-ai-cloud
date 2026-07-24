@@ -122,8 +122,13 @@ assert.doesNotMatch(
 
 assert.match(
   registerSource,
-  /QQ quick login can be bound after you sign in/,
-  'portal registration copy must keep QQ as post-registration binding'
+  /<QqLoginButton/,
+  'portal registration must expose QQ as a first-class registration entry'
+);
+assert.match(
+  clientSource,
+  /startQqLogin[\s\S]*intent: 'login'/,
+  'portal client must start the QQ login and first-registration flow explicitly'
 );
 
 console.log('portal_registration_ui_contract: ok');

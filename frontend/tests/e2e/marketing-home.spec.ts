@@ -6,13 +6,13 @@ test('marketing home visual smoke: hero and CTA render', async ({ page }) => {
 
   await expect(
     page.getByRole('heading', {
-      name: /Hosted AI Runtime for Modern Applications|面向现代应用的托管式 AI Runtime|面向現代應用的託管式 AI Runtime/i,
+      name: /Run AI.*cloud.*control.*site|让 AI.*云端.*控制权.*站点/i,
     })
   ).toBeVisible();
 
   await expect(
     page.getByRole('link', {
-      name: /Get Started|开始使用|開始使用/i,
+      name: /Start free|免费开始/i,
     })
   ).toBeVisible();
 

@@ -181,6 +181,11 @@ function withSecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
+function withAdminIndexingDisabled(response: NextResponse): NextResponse {
+  response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+  return response;
+}
+
 function buildAdminLoginRedirect(request: NextRequest): NextResponse {
   const loginUrl = new URL('/admin/login', request.url);
   const redirectTo = `${request.nextUrl.pathname}${request.nextUrl.search}`;
@@ -249,7 +254,7 @@ export async function proxy(request: NextRequest) {
   const isAdminApiRoute = pathname === '/api/admin' || pathname.startsWith('/api/admin/');
 
   if (isAdminApiRoute && !hasAdminSession) {
-    return withSecurityHeaders(
+    return withAdminIndexingDisabled(withSecurityHeaders(
       NextResponse.json(
         {
           status: 'error',
@@ -259,11 +264,15 @@ export async function proxy(request: NextRequest) {
         },
         { status: 401 }
       )
-    );
+    ));
   }
 
   if (isAdminRoute && !isAdminPublicRoute && !hasAdminSession) {
-    return withSecurityHeaders(buildAdminLoginRedirect(request));
+    return withAdminIndexingDisabled(withSecurityHeaders(buildAdminLoginRedirect(request)));
+  }
+
+  if (isAdminRoute || isAdminApiRoute) {
+    return withAdminIndexingDisabled(response);
   }
 
   // Skip auth check for non-portal routes

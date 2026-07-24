@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import React, { Suspense, useEffect, useState } from 'react';
 import { PortalAuthShell } from '@/components/portal/PortalAuthShell';
 import { PortalCard } from '@/components/portal/PortalScaffold';
+import { QqLoginButton } from '@/components/portal/QqLoginButton';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
@@ -207,7 +208,7 @@ function RegisterFormContent() {
               {t(
                 'portal.register.desc',
                 undefined,
-                'Use email verification to open a Free account for one WordPress site. QQ quick login can be bound after you sign in.'
+                'Use QQ to create a Free account directly, or continue with email verification.'
               )}
             </p>
           </PortalCard>
@@ -225,6 +226,14 @@ function RegisterFormContent() {
         </>
       )}
     >
+      <div className="space-y-5">
+        <QqLoginButton />
+        <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+          <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+          <span>{t('auth.or_email_code', undefined, 'or register with email')}</span>
+          <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+        </div>
+      </div>
       <form
                 onSubmit={form.step === 'request' ? handleRequestCode : handleVerifyCode}
                 className="space-y-5"
@@ -319,6 +328,17 @@ function RegisterFormContent() {
                   ) : null}
                 </div>
       </form>
+      <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+        {t('auth.legal_notice', undefined, 'By continuing, you agree to the Terms of Service and acknowledge the Privacy Policy.')}
+        {' '}
+        <Link href="/terms" className="font-semibold text-blue-600 hover:underline dark:text-blue-400">
+          {t('auth.terms_link', undefined, 'Terms')}
+        </Link>
+        {' · '}
+        <Link href="/privacy" className="font-semibold text-blue-600 hover:underline dark:text-blue-400">
+          {t('auth.privacy_link', undefined, 'Privacy')}
+        </Link>
+      </p>
     </PortalAuthShell>
   );
 }

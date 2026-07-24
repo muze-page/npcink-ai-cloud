@@ -318,7 +318,7 @@ def build_new_portal_session_metadata(
 
 def set_portal_session_cookies(
     request: Request,
-    response: JSONResponse,
+    response: Response,
     *,
     principal_id: str,
     site_id: str = "",

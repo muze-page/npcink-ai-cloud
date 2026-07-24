@@ -1672,6 +1672,15 @@ export class PortalClient {
   }
 
   /**
+   * 发起 QQ 登录或首次注册
+   * GET /portal/v1/auth/qq/start?intent=login
+   */
+  async startQqLogin(returnTo = '/portal'): Promise<PortalEnvelope<PortalQqStartResponse>> {
+    const params = new URLSearchParams({ intent: 'login', return_to: returnTo });
+    return this.request('GET', `/auth/qq/start?${params.toString()}`, undefined);
+  }
+
+  /**
    * 解绑 QQ 快捷登录
    * POST /portal/v1/auth/qq/unbind
    */

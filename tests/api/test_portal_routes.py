@@ -3268,7 +3268,7 @@ def test_portal_qq_unbind_revokes_current_session(
     dispose_engine(database_url)
 
 
-def test_portal_qq_callback_requires_existing_binding(
+def test_portal_qq_callback_registers_first_time_user(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
@@ -3290,6 +3290,14 @@ def test_portal_qq_callback_requires_existing_binding(
         "_fetch_qq_openid",
         lambda request, *, access_token: {"openid": "qq-openid-unbound", "unionid": ""},
     )
+    monkeypatch.setattr(
+        portal_routes,
+        "_fetch_qq_profile",
+        lambda request, *, access_token, openid: {
+            "display_name": "First QQ User",
+            "avatar_url": "https://q.qlogo.cn/example.png",
+        },
+    )
 
     start_response = client.get("/portal/v1/auth/qq/start")
     assert start_response.status_code == 200
@@ -3299,10 +3307,46 @@ def test_portal_qq_callback_requires_existing_binding(
     assert callback_response.status_code == 200, callback_response.text
     data = callback_response.json()["data"]
     _assert_no_portal_qq_internal_identity_fields(data)
-    assert set(data) == {"status", "provider", "return_to"}
-    assert data["status"] == "binding_required"
-    assert data["provider"] == "qq"
-    assert data["return_to"] == "/portal"
+    _assert_strict_portal_session(data)
+    assert data["email"] == ""
+    assert data["sites"] == []
+    assert data["selected_context"] is None
+    assert data["session"]["state"] == "active"
+
+    session_response = client.get("/portal/v1/session")
+    assert session_response.status_code == 200
+    _assert_strict_portal_session(session_response.json()["data"])
+
+    with get_session(database_url) as session:
+        principal = session.scalar(select(Principal))
+        binding = session.scalar(select(IdentityProviderBinding))
+        membership = session.scalar(select(AccountUserMembership))
+        subscription = session.scalar(select(AccountSubscription))
+        assert principal is not None
+        assert principal.email is None
+        assert principal.metadata_json["provider"] == "qq"
+        assert binding is not None
+        assert binding.principal_id == principal.principal_id
+        assert binding.external_subject_hash != "qq-openid-unbound"
+        assert membership is not None
+        assert membership.principal_id == principal.principal_id
+        assert subscription is not None
+        assert subscription.account_id == membership.account_id
+
+    logout_response = client.post("/portal/v1/logout")
+    assert logout_response.status_code == 200
+    browser_start = client.get(
+        "/portal/v1/auth/qq/start?return_to=/portal/account",
+    )
+    browser_state = browser_start.json()["data"]["state"]
+    browser_callback = client.get(
+        f"/open/auth/qq/callback?code=qq-code-again&state={browser_state}",
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert browser_callback.status_code == 303
+    assert browser_callback.headers["location"] == "/portal/account"
+    assert COOKIE_PORTAL_SESSION_TOKEN in browser_callback.cookies
 
     dispose_engine(database_url)
 

@@ -1366,6 +1366,45 @@ def _fetch_qq_openid(request: Request, *, access_token: str) -> dict[str, str]:
     }
 
 
+def _fetch_qq_profile(
+    request: Request,
+    *,
+    access_token: str,
+    openid: str,
+) -> dict[str, str]:
+    config = _portal_qq_config(request)
+    with httpx.Client(timeout=float(config.get("timeout_seconds") or 10.0)) as client:
+        response = client.get(
+            "https://graph.qq.com/user/get_user_info",
+            params={
+                "access_token": access_token,
+                "oauth_consumer_key": str(config.get("client_id") or "").strip(),
+                "openid": openid,
+                "format": "json",
+            },
+        )
+        response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or int(payload.get("ret") or 0) != 0:
+        raise CommercialServiceError(
+            502,
+            "portal.qq_profile_fetch_failed",
+            "QQ profile fetch failed",
+        )
+    avatar_url = str(
+        payload.get("figureurl_qq_2")
+        or payload.get("figureurl_qq_1")
+        or payload.get("figureurl_2")
+        or ""
+    ).strip()
+    if avatar_url.startswith("http://"):
+        avatar_url = f"https://{avatar_url.removeprefix('http://')}"
+    return {
+        "display_name": " ".join(str(payload.get("nickname") or "").split())[:80],
+        "avatar_url": avatar_url,
+    }
+
+
 def _portal_write_guard(request: Request) -> JSONResponse | None:
     return None
 
@@ -1560,27 +1599,19 @@ async def finish_qq_login_callback(
             unionid=str(subject.get("unionid") or ""),
         )
         if str(login.get("status") or "") == "binding_required":
-            redirect = _portal_oauth_return_response(
+            profile = _fetch_qq_profile(
                 request,
-                return_to=return_to,
-                status="binding_required",
+                access_token=str(token.get("access_token") or ""),
+                openid=str(subject.get("openid") or ""),
             )
-            if redirect is not None:
-                _clear_portal_qq_oauth_nonce_cookie(redirect)
-                return redirect
-            response = JSONResponse(
-                status_code=200,
-                content=_portal_route_envelope(
-                    message="portal QQ binding required",
-                    data={
-                        "status": "binding_required",
-                        "provider": str(login.get("provider") or "qq"),
-                        "return_to": return_to,
-                    },
-                ),
+            login = _get_commercial_service(request).register_portal_identity_provider_login(
+                provider="qq",
+                external_subject=str(subject.get("openid") or ""),
+                unionid=str(subject.get("unionid") or ""),
+                display_name=str(profile.get("display_name") or ""),
+                avatar_url=str(profile.get("avatar_url") or ""),
+                audit_context=_build_audit_context(request),
             )
-            _clear_portal_qq_oauth_nonce_cookie(response)
-            return response
         principal_id = str(login.get("principal_id") or "")
         data = serialize_portal_session(
             request,
@@ -1613,6 +1644,16 @@ async def finish_qq_login_callback(
         site_id=str(data.get("site_id") or ""),
     )
     _clear_portal_qq_oauth_nonce_cookie(response)
+    if _portal_prefers_html(request):
+        redirect = RedirectResponse(return_to, status_code=303)
+        set_portal_session_cookies(
+            request,
+            redirect,
+            principal_id=principal_id,
+            site_id=str(data.get("site_id") or ""),
+        )
+        _clear_portal_qq_oauth_nonce_cookie(redirect)
+        return redirect
     return response
 
 

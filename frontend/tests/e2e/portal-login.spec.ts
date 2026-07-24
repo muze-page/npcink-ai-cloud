@@ -77,6 +77,7 @@ async function installLoginFlowMocks(
   let requestCodeCount = 0;
   let verifyCodeCalled = false;
   let addonConnectionPayload: Record<string, unknown> | null = null;
+  let qqStartReturnTo = '';
 
   await page.route(/\/(?:api\/portal|portal\/v1)\/.*/, async (route) => {
     const url = new URL(route.request().url());
@@ -130,6 +131,20 @@ async function installLoginFlowMocks(
       return;
     }
 
+    if (pathname === '/auth/qq/start') {
+      qqStartReturnTo = String(url.searchParams.get('return_to') || '');
+      expect(url.searchParams.get('intent')).toBe('login');
+      await fulfillJson(route, {
+        provider: 'qq',
+        authorization_url: `${BASE_URL}/qq-authorize-test`,
+        state: 'qq-e2e-state',
+        expires_in_seconds: 300,
+        return_to: qqStartReturnTo,
+        intent: 'login',
+      });
+      return;
+    }
+
     if (pathname === '/auth/identity-providers') {
       await fulfillJson(route, {
         providers: [
@@ -178,8 +193,19 @@ async function installLoginFlowMocks(
     requestCodeCount: () => requestCodeCount,
     verifyCodeCalled: () => verifyCodeCalled,
     addonConnectionPayload: () => addonConnectionPayload,
+    qqStartReturnTo: () => qqStartReturnTo,
   };
 }
+
+test('QQ is a first-class login entry and preserves the Portal return path', async ({ page }) => {
+  const calls = await installLoginFlowMocks(page);
+
+  await page.goto('/portal/login?redirect=/portal/usage');
+  await page.getByRole('button', { name: /QQ 登录|QQ login/i }).click();
+
+  await expect(page).toHaveURL(`${BASE_URL}/qq-authorize-test`);
+  expect(calls.qqStartReturnTo()).toBe('/portal/usage');
+});
 
 test('portal email-code login enters the dashboard after verification', async ({ page }) => {
   const calls = await installLoginFlowMocks(page);

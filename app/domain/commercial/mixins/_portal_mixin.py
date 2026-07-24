@@ -893,6 +893,141 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 ),
             }
 
+    def register_portal_identity_provider_login(
+        self,
+        *,
+        provider: str,
+        external_subject: str,
+        unionid: str = "",
+        display_name: str = "",
+        avatar_url: str = "",
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_provider = _normalize_identity_provider(provider)
+        subject_hash = _hash_external_identity(normalized_provider, external_subject)
+        unionid_hash = (
+            _hash_external_identity(normalized_provider, unionid, kind="unionid") if unionid else ""
+        )
+        normalized_display_name = " ".join(str(display_name or "").split())[:80]
+        normalized_avatar_url = str(avatar_url or "").strip()[:1024]
+        if normalized_avatar_url and not normalized_avatar_url.startswith("https://"):
+            normalized_avatar_url = ""
+        now = self.now_factory()
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            existing = repository.get_identity_provider_binding(
+                provider=normalized_provider,
+                external_subject_hash=subject_hash,
+            )
+            if existing is None and unionid_hash:
+                existing = repository.get_identity_provider_binding_by_unionid(
+                    provider=normalized_provider,
+                    unionid_hash=unionid_hash,
+                )
+            if existing is not None:
+                raise CommercialPermissionError(
+                    "service.identity_provider_binding_conflict",
+                    "this identity provider account is already registered",
+                )
+
+            principal_id = _new_principal_id()
+            account_id = f"acct_{principal_id.removeprefix('prn_')}"
+            profile_metadata = {
+                "display_name": normalized_display_name,
+                "avatar_url": normalized_avatar_url,
+            }
+            account = repository.upsert_account(
+                account_id=account_id,
+                name=f"{normalized_display_name or 'QQ 用户'} Free",
+                status=ACCOUNT_STATUS_ACTIVE,
+                metadata_json={
+                    "source": "portal_self_registration",
+                    "created_via": "qq_login",
+                },
+            )
+            subscription_payload = cast(
+                Any,
+                self,
+            )._bind_default_free_subscription_for_account_in_session(
+                repository=repository,
+                account_id=account.account_id,
+                audit_context=audit_context,
+            )
+            identity = repository.upsert_principal_identity(
+                principal_id=principal_id,
+                email=None,
+                status=PRINCIPAL_STATUS_ACTIVE,
+                metadata_json={
+                    "source": "portal_self_registration",
+                    "identity_type": IDENTITY_TYPE_USER,
+                    "provider": normalized_provider,
+                    "profile": profile_metadata,
+                },
+                last_login_at=now,
+            )
+            repository.upsert_account_user_membership(
+                membership_id=f"aum_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                account_id=account.account_id,
+                role=normalize_user_role(USER_ROLE_USER),
+                status=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+                allowed_actions_json=resolve_principal_allowed_actions(),
+                metadata_json={
+                    "source": "portal_self_registration",
+                    "created_via": "qq_login",
+                },
+            )
+            binding = repository.upsert_identity_provider_binding(
+                binding_id=f"pib_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                provider=normalized_provider,
+                external_subject_hash=subject_hash,
+                unionid_hash=unionid_hash or None,
+                status=IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
+                metadata_json={
+                    "source": "portal_qq_self_registration",
+                    "profile": profile_metadata,
+                },
+                last_login_at=now,
+            )
+            payload: dict[str, object] = {
+                "status": "registered",
+                "provider": normalized_provider,
+                "principal_id": identity.principal_id,
+                "session_version": int(identity.session_version or 1),
+                "account_id": account.account_id,
+                "identity_type": IDENTITY_TYPE_USER,
+                "role": USER_ROLE_USER,
+                "binding": _serialize_identity_provider_binding(
+                    binding,
+                    principal_id=identity.principal_id,
+                ),
+                "subscription": (
+                    subscription_payload.get("subscription")
+                    if isinstance(subscription_payload, dict)
+                    else None
+                ),
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="portal.registration",
+                outcome="succeeded",
+                account_id=account.account_id,
+                scope_kind="account_membership",
+                scope_id=identity.principal_id,
+                payload_json={
+                    "status": "registered",
+                    "provider": normalized_provider,
+                    "created_via": "qq_login",
+                    "account_id": account.account_id,
+                    "principal_id": identity.principal_id,
+                },
+            )
+            session.commit()
+        return payload
+
     def issue_portal_login_code(
         self,
         *,

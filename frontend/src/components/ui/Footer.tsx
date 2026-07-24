@@ -28,8 +28,8 @@ export function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/admin/login" className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
-                  {t('nav.admin')}
+                <Link href="/status" className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
+                  {t('service_status.health', {}, 'Status')}
                 </Link>
               </li>
             </ul>

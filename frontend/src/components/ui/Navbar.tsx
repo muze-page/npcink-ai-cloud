@@ -35,7 +35,7 @@ export function Navbar() {
   const navItems = [
     { href: '/', label: t('nav.home', undefined, 'Home') },
     { href: '/portal/login', label: t('nav.portal', undefined, 'Portal') },
-    { href: '/admin/login', label: t('nav.admin', undefined, 'Admin') },
+    { href: '/status', label: t('service_status.health', undefined, 'Status') },
   ];
 
   const toggleMobileMenu = useCallback(() => {
