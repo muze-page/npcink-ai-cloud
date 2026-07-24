@@ -8,6 +8,7 @@ import json
 import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 
 
@@ -18,22 +19,32 @@ def classname_to_path(classname: str) -> str:
     return f"{'/'.join(parts)}.py"
 
 
-def collect_file_weights(junit_xml: Path) -> dict[str, float]:
-    root = ET.parse(junit_xml).getroot()
+def _report_paths(junit_xml: Path | Iterable[Path]) -> list[Path]:
+    if isinstance(junit_xml, Path):
+        return [junit_xml]
+    return list(junit_xml)
+
+
+def collect_file_weights(junit_xml: Path | Iterable[Path]) -> dict[str, float]:
     weights: defaultdict[str, float] = defaultdict(float)
-    for case in root.iter("testcase"):
-        classname = case.attrib.get("classname", "").strip()
-        if not classname:
-            continue
-        try:
-            seconds = max(0.0, float(case.attrib.get("time", "0")))
-        except ValueError:
-            seconds = 0.0
-        weights[classname_to_path(classname)] += seconds
+    for report_path in _report_paths(junit_xml):
+        root = ET.parse(report_path).getroot()
+        for case in root.iter("testcase"):
+            classname = case.attrib.get("classname", "").strip()
+            if not classname:
+                continue
+            try:
+                seconds = max(0.0, float(case.attrib.get("time", "0")))
+            except ValueError:
+                seconds = 0.0
+            weights[classname_to_path(classname)] += seconds
     return {path: round(seconds, 3) for path, seconds in sorted(weights.items())}
 
 
-def build_payload(junit_xml: Path, source_label: str) -> dict[str, object]:
+def build_payload(
+    junit_xml: Path | Iterable[Path],
+    source_label: str,
+) -> dict[str, object]:
     weights = collect_file_weights(junit_xml)
     return {
         "schema": "pytest-duration-weights-v1",
@@ -44,7 +55,7 @@ def build_payload(junit_xml: Path, source_label: str) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("junit_xml", type=Path)
+    parser.add_argument("junit_xml", type=Path, nargs="+")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--source-label", default="")
     argv = sys.argv[1:]
@@ -52,10 +63,11 @@ def main() -> int:
         argv = argv[1:]
     args = parser.parse_args(argv)
 
-    if not args.junit_xml.is_file():
-        raise SystemExit(f"JUnit XML report not found: {args.junit_xml}")
+    for report_path in args.junit_xml:
+        if not report_path.is_file():
+            raise SystemExit(f"JUnit XML report not found: {report_path}")
 
-    source_label = args.source_label or str(args.junit_xml)
+    source_label = args.source_label or ",".join(str(path) for path in args.junit_xml)
     payload = build_payload(args.junit_xml, source_label)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

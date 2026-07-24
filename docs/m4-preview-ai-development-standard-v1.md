@@ -193,6 +193,10 @@ evidence, Git/PR evidence, and accepted M4 evidence.
 Run the narrowest applicable contract, lint, type, or documentation gate.
 Confirm links and commands referenced by the changed documentation. M4 runtime
 evidence is not required unless the change claims to alter runtime behavior.
+A pull request containing only approved Markdown documentation paths uses the
+repository's docs-only CI lane. Adding tests, scripts, workflow files, fixtures,
+or runtime source intentionally exits that lane and restores the applicable
+targeted or full gate.
 
 ### 8.2 Cloud source lane
 

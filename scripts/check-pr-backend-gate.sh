@@ -123,11 +123,11 @@ pnpm run test:anti-drift
 bash scripts/check-changed-python-quality.sh
 
 echo "[run] pytest contract gate"
-.venv/bin/python -m pytest tests/contract -q
+.venv/bin/python -m pytest tests/contract -q --durations=25
 
 while IFS= read -r path; do
 	case "${path}" in
-		tests/api/test_*.py|tests/contract/test_*.py|tests/domain/test_*.py|tests/core/test_*.py|tests/dev/test_*.py)
+		tests/api/test_*.py|tests/domain/test_*.py|tests/core/test_*.py|tests/dev/test_*.py)
 			printf '%s\n' "${path}"
 			;;
 	esac
@@ -137,5 +137,5 @@ if [ -s "${TMP_TESTS}" ]; then
 	echo "[run] pytest changed test files"
 	.venv/bin/python -m pytest $(cat "${TMP_TESTS}") -q
 else
-	echo "[ok] No changed pytest files detected."
+	echo "[ok] No additional changed pytest files detected; contract files are already covered."
 fi

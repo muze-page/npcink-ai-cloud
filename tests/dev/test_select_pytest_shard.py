@@ -74,3 +74,33 @@ def test_junit_report_writes_per_file_weights(tmp_path: Path) -> None:
             "tests/contract/test_release.py": 0.5,
         },
     }
+
+
+def test_junit_reports_merge_per_file_weights_across_shards(tmp_path: Path) -> None:
+    first = tmp_path / "first.xml"
+    second = tmp_path / "second.xml"
+    first.write_text(
+        """
+<testsuite>
+  <testcase classname="tests.contract.test_release" name="test_one" time="2" />
+</testsuite>
+""",
+        encoding="utf-8",
+    )
+    second.write_text(
+        """
+<testsuite>
+  <testcase classname="tests.contract.test_release" name="test_two" time="3" />
+  <testcase classname="tests.domain.test_runtime" name="test_three" time="1" />
+</testsuite>
+""",
+        encoding="utf-8",
+    )
+
+    payload = write_pytest_duration_weights.build_payload([first, second], "fixture shards")
+
+    assert payload["source"] == "fixture shards"
+    assert payload["weights"] == {
+        "tests/contract/test_release.py": 5.0,
+        "tests/domain/test_runtime.py": 1.0,
+    }

@@ -33,6 +33,7 @@ jobs:
     outputs:
       deploy_required: ${{ steps.changed.outputs.deploy_required }}
       static_terms_only: ${{ steps.changed.outputs.static_terms_only }}
+      docs_only: ${{ steps.changed.outputs.docs_only }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -41,48 +42,36 @@ jobs:
 
       - name: Classify changed files
         id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          deploy_required="true"
-          static_terms_only="false"
-
-          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF}" = "refs/heads/production" ]; then
-            mapfile -t changed_files < <(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
-            if [ "${#changed_files[@]}" -gt 0 ]; then
-              static_terms_only="true"
-              deploy_required="false"
-              for changed_file in "${changed_files[@]}"; do
-                if [[ "${changed_file}" != site/terms/* ]]; then
-                  static_terms_only="false"
-                fi
-                case "${changed_file}" in
-                  .github/workflows/ci.yml|.github/workflows/deploy-production.yml|docker-compose*.yml|Dockerfile*|*/Dockerfile*|deploy/*.sh)
-                    deploy_required="true"
-                    ;;
-                  .github/*|.github/workflows/*|docs/*|docs/**/*|tests/*|tests/**/*|deploy/RELEASE_CHECKLIST.md)
-                    ;;
-                  site/terms/*)
-                    deploy_required="true"
-                    ;;
-                  *)
-                    deploy_required="true"
-                    ;;
-                esac
-              done
-            fi
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            mapfile -t changed_files < <(
+              git diff --name-only --diff-filter=ACMRD "${BASE_SHA}...${HEAD_SHA}"
+            )
+          elif [ -n "${BEFORE_SHA}" ] && [[ ! "${BEFORE_SHA}" =~ ^0+$ ]]; then
+            mapfile -t changed_files < <(
+              git diff --name-only --diff-filter=ACMRD "${BEFORE_SHA}...${HEAD_SHA}"
+            )
+          else
+            mapfile -t changed_files < <(
+              git show --pretty='' --name-only --diff-filter=ACMRD "${HEAD_SHA}"
+            )
           fi
 
-          printf 'deploy_required=%s\n' "${deploy_required}" >> "${GITHUB_OUTPUT}"
-          printf 'static_terms_only=%s\n' "${static_terms_only}" >> "${GITHUB_OUTPUT}"
-          printf 'deploy_required=%s\n' "${deploy_required}"
-          printf 'static_terms_only=%s\n' "${static_terms_only}"
+          bash scripts/classify-ci-changes.sh "${changed_files[@]}" \
+            | tee -a "${GITHUB_OUTPUT}"
 
   backend-scope:
     needs: [classify]
     if: needs.classify.outputs.static_terms_only != 'true'
     runs-on: ubuntu-latest
     outputs:
-      requires_full_backend: ${{ steps.scope.outputs.requires_full_backend }}
+      requires_full_backend: ${{ steps.scope.outputs.requires_full_backend || steps.docs_scope.outputs.requires_full_backend }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -91,12 +80,18 @@ jobs:
 
       - name: Classify backend gate scope
         id: scope
+        if: needs.classify.outputs.docs_only != 'true'
         run: bash scripts/check-pr-backend-gate.sh --classify-only
+
+      - name: Select docs-only backend gate
+        id: docs_scope
+        if: needs.classify.outputs.docs_only == 'true'
+        run: echo "requires_full_backend=0" >> "${GITHUB_OUTPUT}"
 
   python-dependency-audit:
     name: Python dependency audit
     needs: [classify]
-    if: needs.classify.outputs.static_terms_only != 'true'
+    if: needs.classify.outputs.static_terms_only != 'true' && needs.classify.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -138,7 +133,7 @@ jobs:
 
   backend-targeted:
     needs: [classify, backend-scope]
-    if: needs.classify.outputs.static_terms_only != 'true' && github.event_name == 'pull_request' && needs['backend-scope'].outputs.requires_full_backend != '1'
+    if: needs.classify.outputs.static_terms_only != 'true' && needs['backend-scope'].outputs.requires_full_backend != '1' && (github.event_name == 'pull_request' || needs.classify.outputs.docs_only == 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -147,14 +142,17 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Python
+        if: needs.classify.outputs.docs_only != 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Setup pnpm
+        if: needs.classify.outputs.docs_only != 'true'
         uses: pnpm/action-setup@v6
 
       - name: Setup Node
+        if: needs.classify.outputs.docs_only != 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -162,13 +160,23 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install uv
+        if: needs.classify.outputs.docs_only != 'true'
         run: python -m pip install --upgrade uv
 
       - name: Bootstrap Cloud Dev Environment
+        if: needs.classify.outputs.docs_only != 'true'
         run: make bootstrap-dev
 
       - name: PR backend fast gate
+        if: needs.classify.outputs.docs_only != 'true'
         run: bash scripts/check-pr-backend-gate.sh --targeted-only
+
+      - name: Docs-only gate
+        if: needs.classify.outputs.docs_only == 'true'
+        env:
+          NPCINK_CLOUD_CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          NPCINK_CLOUD_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/check-docs-only.sh
 
   backend-static:
     needs: [classify, backend-scope]
@@ -353,6 +361,7 @@ jobs:
           BACKEND_PYTEST_RESULT: ${{ needs['backend-pytest'].result }}
           BACKEND_POSTGRES_CUTOVER_RESULT: ${{ needs['backend-postgres-cutover'].result }}
           REQUIRES_FULL_BACKEND: ${{ needs['backend-scope'].outputs.requires_full_backend }}
+          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
         run: |
           set -euo pipefail
           echo "scope=${BACKEND_SCOPE_RESULT}"
@@ -369,9 +378,14 @@ jobs:
             exit 1
           fi
 
-          if [ "${PYTHON_DEPENDENCY_AUDIT_RESULT}" != "success" ]; then
-            echo "python dependency audit did not pass" >&2
-            exit 1
+          if [ "${DOCS_ONLY}" = "true" ]; then
+            if [ "${PYTHON_DEPENDENCY_AUDIT_RESULT}" != "skipped" ]; then
+              echo "python dependency audit should be skipped for docs-only changes" >&2
+              exit 1
+            fi
+          elif [ "${PYTHON_DEPENDENCY_AUDIT_RESULT}" != "success" ]; then
+              echo "python dependency audit did not pass" >&2
+              exit 1
           fi
 
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ "${REQUIRES_FULL_BACKEND}" = "1" ]; then
@@ -419,12 +433,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
+        if: needs.classify.outputs.docs_only != 'true'
         uses: actions/checkout@v6
 
       - name: Setup pnpm
+        if: needs.classify.outputs.docs_only != 'true'
         uses: pnpm/action-setup@v6
 
       - name: Setup Node
+        if: needs.classify.outputs.docs_only != 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -432,16 +449,24 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
+        if: needs.classify.outputs.docs_only != 'true'
         run: pnpm install --frozen-lockfile --filter frontend...
 
       - name: Lint
+        if: needs.classify.outputs.docs_only != 'true'
         run: pnpm --dir frontend run lint
 
       - name: Type Check
+        if: needs.classify.outputs.docs_only != 'true'
         run: pnpm --dir frontend run type-check
 
       - name: Frontend Contracts
+        if: needs.classify.outputs.docs_only != 'true'
         run: pnpm --dir frontend run test:contracts
+
+      - name: Docs-only frontend acknowledgement
+        if: needs.classify.outputs.docs_only == 'true'
+        run: echo "Frontend gate is not required for documentation-only changes."
 
   static-terms:
     needs: [classify]

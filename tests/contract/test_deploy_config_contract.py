@@ -182,6 +182,7 @@ def _release_policy_fixture_root(tmp_path: Path, dependabot_text: str) -> Path:
         "check-first-install-cve-gate.py",
         "check-pg18-proof.sh",
         "check-pr-backend-gate.sh",
+        "classify-ci-changes.sh",
         "cloud-deploy-bundle-smoke-flow.sh",
         "dev-compose.sh",
         "dev-frontend-recover.sh",
@@ -2298,8 +2299,13 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "PROD_INCLUDE_EXTERNAL_IMAGES" not in ci_workflow
     assert "PROD_INCLUDE_EXTERNAL_IMAGES" not in deploy_workflow
     assert "deploy_required:" in ci_workflow
-    assert ".github/workflows/ci.yml|.github/workflows/deploy-production.yml" in (ci_workflow)
-    assert "docker-compose*.yml|Dockerfile*|*/Dockerfile*|deploy/*.sh" in ci_workflow
+    ci_classifier = (
+        cloud_root / "scripts" / "classify-ci-changes.sh"
+    ).read_text()
+    assert ".github/workflows/ci.yml|.github/workflows/deploy-production.yml" in (
+        ci_classifier
+    )
+    assert "docker-compose*.yml|Dockerfile*|*/Dockerfile*|deploy/*.sh" in ci_classifier
     assert "needs: [classify, backend-scope]" in ci_workflow
     assert "needs['backend-scope'].outputs.requires_full_backend == '1'" in ci_workflow
     assert "should be skipped for a targeted PR" in ci_workflow
@@ -2311,7 +2317,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "load-plan" in remote_load_script
     assert "verify loaded image IDs" in remote_load_script
     assert "static_terms_only" in ci_workflow
-    assert "site/terms/*" in ci_workflow
+    assert "site/terms/*" in ci_classifier
     assert "- secret-scan" in ci_workflow
     assert "backend-scope:" in ci_workflow
     assert "backend-targeted:" in ci_workflow

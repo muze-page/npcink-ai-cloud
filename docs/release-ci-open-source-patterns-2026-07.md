@@ -80,8 +80,10 @@ and branch protection.
 
 ## Follow-Up Order
 
-1. Refresh `ci/pytest-backend-durations.json` from several successful
-   `pytest-backend-timing-shard-*` artifacts after the new split has run.
+1. Refresh `ci/pytest-backend-durations.json` from all successful
+   `pytest-backend-timing-shard-*` artifacts in the same full run; passing all
+   shard XML files to `scripts/write-pytest-duration-weights.py` merges their
+   per-file timing evidence without dropping files from the other shards.
 2. Compare actual wall time for `backend-static` and the three pytest shards
    against the previous 7-8 minute monolithic backend gate.
 3. Rebalance shard count only if one shard remains the long pole for several
