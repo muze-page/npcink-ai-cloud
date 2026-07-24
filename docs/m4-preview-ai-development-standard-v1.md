@@ -16,6 +16,9 @@ The documents have separate responsibilities:
 - [ADR-024](decisions/024-risk-tiered-development-validation-authority.md)
   records why focused feedback, GitHub integration gates, and M4 runtime
   acceptance have separate responsibilities.
+- [ADR-025](decisions/025-source-only-authoring-and-ai-m4-checkpoint-dispatch.md)
+  records why the authoring Mac is source-only and why an agent dispatches M4
+  automatically at a coherent task checkpoint.
 - [M4 Preview Development Workflow](m4-preview-development-v1.md) is the
   operational runbook for hosts, ports, commands, recovery, and implementation
   details.
@@ -30,7 +33,7 @@ the runbook for command mechanics.
 
 | Surface | Owns | Must not become |
 | --- | --- | --- |
-| Authoring Mac | source edits, Git worktrees, commits, pull requests, operator commands | dependent on local Docker for daily work |
+| Authoring Mac | source edits, source/static checks, Git worktrees, commits, pull requests, operator commands | a routine Cloud Docker runtime |
 | GitHub `master` | reviewed development integration truth | proof that an unpromoted M4 candidate is accepted |
 | M4 | disposable Docker build, runtime, migration, test, and preview evidence | source or Git truth |
 | Local WordPress | abilities, workflows, approval, preflight, final writes, local settings truth | dependent on Cloud for its control-plane truth |
@@ -132,6 +135,34 @@ complete at this point.
 
 Do not commit every experimental iteration. Commit once the focused behavior,
 diff, and relevant gates are coherent enough for review.
+
+### 5.1 Default task-checkpoint dispatch
+
+When the user has authorized a Cloud source or build/runtime change, the agent
+MUST treat that authorization as including the corresponding candidate preview
+action. It MUST NOT wait for a second user message asking why the preview has
+not changed.
+
+Dispatch at a coherent task checkpoint:
+
+- the intended edit batch is internally consistent;
+- the narrowest useful local source, static, or contract check has completed;
+- the current diff is suitable for runtime observation;
+- no immediately planned edit would knowingly make the candidate stale.
+
+Automatic dispatch means the active agent explicitly runs
+`m4:preview:sync` or `m4:preview:deploy` from the current authoring worktree.
+It does not mean a per-save watcher, background daemon, Git hook, hosted CI
+callback, or second deployment controller. Agents SHOULD batch related edits
+instead of transferring every saved file. If source changes after candidate
+validation, the agent MUST dispatch the candidate again before claiming that
+M4 represents the current worktree.
+
+The authoring Mac MUST NOT become the fallback Cloud Docker runtime. If M4 is
+unavailable or the operation fails, preserve the source and Git work, diagnose
+safe in-scope causes, and report M4 candidate evidence as incomplete. Use local
+Docker only after separate explicit operator authorization changes the selected
+workflow for that task.
 
 ## 6. Command Selection
 
@@ -418,6 +449,8 @@ The final handoff MUST include:
 - accepted M4 evidence, when runtime promotion was required;
 - known limitations and any human/external acceptance still pending;
 - confirmation that unrelated user work and production were not changed.
+- when M4 evidence is incomplete, the exact failed checkpoint and confirmation
+  that no silent local-Docker substitution occurred.
 
 Use precise state labels:
 
@@ -438,7 +471,9 @@ Never collapse these into a single unqualified "done".
 [ ] Change envelope reported
 [ ] Change classified as local-only, Cloud source, or build/runtime
 [ ] Narrowest local gate passed
+[ ] Authorized Cloud code reached a coherent checkpoint and was dispatched to M4 without a second prompt
 [ ] M4 sync/deploy used only when the selected lane requires it
+[ ] No per-save watcher, Git hook, hosted-CI deploy, or silent local-Docker fallback was introduced
 [ ] Focused M4 test used instead of full gate during the inner loop
 [ ] Full gate was not duplicated for the same revision without a recorded reason
 [ ] Candidate behavior and status verified

@@ -18,6 +18,12 @@ AI_STANDARD = ROOT / "docs" / "m4-preview-ai-development-standard-v1.md"
 VALIDATION_ADR = (
     ROOT / "docs" / "decisions" / "024-risk-tiered-development-validation-authority.md"
 )
+CHECKPOINT_ADR = (
+    ROOT
+    / "docs"
+    / "decisions"
+    / "025-source-only-authoring-and-ai-m4-checkpoint-dispatch.md"
+)
 OLLAMA_LAUNCH_AGENT = ROOT / "deploy" / "top.mqzj.npcink-ollama-preview.plist"
 
 
@@ -411,6 +417,9 @@ def test_m4_runbook_preserves_source_cloudflare_and_recovery_boundaries() -> Non
     assert "checks are the merge authority" in runbook
     assert "same revision" in runbook
     assert "source bundle intentionally omits `.git`" in runbook
+    assert "AI checkpoint rule" in runbook
+    assert "coherent task checkpoint" in runbook
+    assert "does not authorize an unreported" in runbook
 
 
 def test_m4_ai_development_standard_is_actionable_and_linked() -> None:
@@ -446,6 +455,10 @@ def test_m4_ai_development_standard_is_actionable_and_linked() -> None:
         "under two minutes",
         "under ten minutes per",
         "report candidate validation as accepted completion",
+        "Default task-checkpoint dispatch",
+        "MUST NOT wait for a second user message",
+        "per-save watcher",
+        "MUST NOT become the fallback Cloud Docker runtime",
     ):
         assert required_text in standard
 
@@ -462,3 +475,24 @@ def test_m4_validation_authority_decision_is_linked_and_bounded() -> None:
     assert "GitHub required checks are the repository merge authority" in decision
     assert "must not be repeated for one revision" in decision
     assert "does not authorize production" in decision
+
+
+def test_m4_checkpoint_dispatch_decision_is_linked_and_bounded() -> None:
+    decision = CHECKPOINT_ADR.read_text(encoding="utf-8")
+    standard = AI_STANDARD.read_text(encoding="utf-8")
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    decision_name = "025-source-only-authoring-and-ai-m4-checkpoint-dispatch.md"
+
+    assert decision_name in standard
+    assert decision_name in runbook
+    assert decision_name in readme
+    assert "coherent task checkpoint" in agents
+    assert "without waiting for the user to ask again" in agents
+    assert "M4 is the routine Cloud Docker environment" in decision
+    assert "without waiting for a second deployment request" in decision
+    assert "does not silently fall back to local Docker" in decision
+    assert "does not authorize\nproduction deployment" in decision
+    assert "per-save watchers" in decision
+    assert "GitHub-hosted M4 credentials" in decision
