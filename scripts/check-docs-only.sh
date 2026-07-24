@@ -18,7 +18,10 @@ if ! git -C "${ROOT_DIR}" rev-parse --verify --quiet "${HEAD_REF}" >/dev/null; t
 	exit 1
 fi
 
-mapfile -t changed_files < <(
+changed_files=()
+while IFS= read -r changed_file; do
+	changed_files+=("${changed_file}")
+done < <(
 	git -C "${ROOT_DIR}" diff --name-only --diff-filter=ACMRD "${BASE_REF}...${HEAD_REF}"
 )
 if [ "${#changed_files[@]}" -eq 0 ]; then
