@@ -70,6 +70,7 @@ Operational references:
 - [deploy/RELEASE_CHECKLIST.md](deploy/RELEASE_CHECKLIST.md)
 - [docs/m4-preview-ai-development-standard-v1.md](docs/m4-preview-ai-development-standard-v1.md)
 - [docs/m4-preview-development-v1.md](docs/m4-preview-development-v1.md)
+- [docs/decisions/024-risk-tiered-development-validation-authority.md](docs/decisions/024-risk-tiered-development-validation-authority.md)
 - [docs/portal-commerce-production-development-history-2026-07-11.md](docs/portal-commerce-production-development-history-2026-07-11.md)
 - [deploy/PROJECTION_DRILL_EVIDENCE_2026-04-15.md](deploy/PROJECTION_DRILL_EVIDENCE_2026-04-15.md)
 - [docs/internal-alpha-execution-plan.md](docs/internal-alpha-execution-plan.md)
@@ -312,6 +313,8 @@ Cloud development and verification now follow a fixed three-layer order:
      worktree while M4 alone builds and runs Docker; M4 has no Git role
    - validate the current branch with focused `pytest` and the narrowest
      applicable perimeter gate
+   - when the test needs M4 containers, use
+     `pnpm run m4:preview:test -- --focused <tests/path-or-node-id>`
 3. Remote host deploy verification:
    - use `deploy-to-ssh-host.sh` only after local checks pass
    - remote hosts exist to prove `scp -> load/up -> migrate -> seed -> smoke`,
@@ -338,6 +341,11 @@ for host and command mechanics. AI agents must use the
 [M4 Preview AI development standard](docs/m4-preview-ai-development-standard-v1.md)
 to select the local-only, Cloud source, or build/runtime lane and to keep
 candidate, Git, and accepted evidence distinct.
+
+GitHub required checks are the repository merge authority. The full M4
+contract/domain gate is reserved for high-risk or M4-specific runtime evidence;
+it is not repeated before and after the same green PR by default. Post-merge
+M4 acceptance normally uses source promotion, status, and the relevant smoke.
 
 ## Borrowed Foundations
 

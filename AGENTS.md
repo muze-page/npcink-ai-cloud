@@ -72,11 +72,17 @@ prompt/router/preset local truth, or WordPress write owner.
 
 ## Verification Gates
 
-Default fast gate:
+Repository integration gate:
 
 ```bash
 pnpm run check:fast
 ```
+
+`check:fast` is not the default inner-loop command for every small edit. Start
+with the narrowest test, lint, type, or contract gate that covers the changed
+seam. Use `check:fast` when risk or integration closeout requires the combined
+contract/domain suite, and do not duplicate the same full gate for one revision
+without a distinct reason.
 
 Additional gates by scope:
 
@@ -96,6 +102,13 @@ exactly what passed or failed.
   `docs/m4-preview-ai-development-standard-v1.md`. Classify the change as
   local-only, Cloud source, or build/runtime, then use the smallest valid
   verification lane defined there.
+- During the edit loop, prefer
+  `pnpm run m4:preview:test -- --focused <tests/path-or-node-id>`. Use
+  `--contract`, `--domain`, or `--full` only when that broader scope answers a
+  real risk question.
+- GitHub required checks are the merge authority. Do not routinely rerun the
+  same full contract/domain gate on M4 before and after a green CI result for
+  the same revision.
 - Direct `m4:preview:sync` and `m4:preview:deploy` operations are candidate
   previews. They prove behavior but do not prove that the source reached
   `master`.
@@ -105,6 +118,9 @@ exactly what passed or failed.
 - Promotion uses source sync by default. Add `--deploy` only when the command
   reports that dependency, Dockerfile, lock-file, Compose, proxy, or deployment
   script inputs require an M4 image rebuild.
+- Post-merge acceptance normally requires promotion, status, and the relevant
+  smoke; another full M4 suite requires a recorded M4-specific or high-risk
+  reason.
 - Final evidence must show `acceptance_state=accepted`, the merged PR number,
   `source_branch=master`, `source_dirty=false`, and the current
   `origin/master` revision in `m4:preview:status`.

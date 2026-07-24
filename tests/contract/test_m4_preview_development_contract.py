@@ -15,6 +15,9 @@ PACKAGE_PROXY = ROOT / "scripts" / "m4-package-proxy.py"
 OVERLAY = ROOT / "docker-compose.m4-preview.yml"
 RUNBOOK = ROOT / "docs" / "m4-preview-development-v1.md"
 AI_STANDARD = ROOT / "docs" / "m4-preview-ai-development-standard-v1.md"
+VALIDATION_ADR = (
+    ROOT / "docs" / "decisions" / "024-risk-tiered-development-validation-authority.md"
+)
 OLLAMA_LAUNCH_AGENT = ROOT / "deploy" / "top.mqzj.npcink-ollama-preview.plist"
 
 
@@ -91,6 +94,10 @@ def test_m4_preview_shell_contract_is_syntax_valid_and_fail_closed() -> None:
     assert "com.docker.compose.project" in source
     assert "prepare complete: images and Compose config are ready" in source
     assert "equivalent_gate=pnpm run check:fast" in source
+    assert "test_scope=focused" in source
+    assert "test_scope=contract" in source
+    assert "test_scope=domain" in source
+    assert "test_scope=full" in source
     assert 'label=com.docker.compose.oneoff=False' in source
     assert "recovery requires existing container" in source
     assert '"${compose[@]}" start postgres redis' in source
@@ -142,6 +149,52 @@ def test_m4_tunnel_dry_run_is_local_only_and_non_mutating() -> None:
     assert "ServerAliveCountMax=3" in completed.stdout
     assert "docker" not in completed.stdout
     assert "rsync" not in completed.stdout
+
+
+def test_m4_test_scopes_are_explicit_and_dry_run_is_non_mutating() -> None:
+    focused = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "test",
+            "--dry-run",
+            "--focused",
+            "tests/domain/test_commercial_service.py::test_operator_grant",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "test_scope=focused" in focused.stdout
+    assert (
+        "test_target=tests/domain/test_commercial_service.py::test_operator_grant"
+        in focused.stdout
+    )
+    assert "ssh" not in focused.stdout
+    assert "docker" not in focused.stdout
+
+    for scope in ("contract", "domain", "full"):
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "test", "--dry-run", f"--{scope}"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert f"test_scope={scope}" in completed.stdout
+        assert "ssh" not in completed.stdout
+        assert "docker" not in completed.stdout
+
+    rejected = subprocess.run(
+        ["bash", str(SCRIPT), "test", "--dry-run", "--focused", "../outside.py"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "must stay under tests/" in rejected.stderr
 
 
 def test_m4_ollama_launch_agent_is_loopback_only_and_dry_run_is_non_mutating() -> None:
@@ -353,6 +406,11 @@ def test_m4_runbook_preserves_source_cloudflare_and_recovery_boundaries() -> Non
     assert "pnpm run m4:preview:promote -- --pr" in runbook
     assert "acceptance_state=accepted" in runbook
     assert "receives no M4 SSH credential" in runbook
+    assert "m4:preview:test -- --focused" in runbook
+    assert "GitHub required" in runbook
+    assert "checks are the merge authority" in runbook
+    assert "same revision" in runbook
+    assert "source bundle intentionally omits `.git`" in runbook
 
 
 def test_m4_ai_development_standard_is_actionable_and_linked() -> None:
@@ -376,6 +434,10 @@ def test_m4_ai_development_standard_is_actionable_and_linked() -> None:
         "pnpm run m4:preview:deploy",
         "pnpm run m4:preview:promote -- --pr",
         "pnpm run m4:preview:test",
+        "m4:preview:test -- --focused",
+        "GitHub required checks",
+        "same full contract/domain gate",
+        "focused bug-fix feedback loop",
         "http://127.0.0.1:18010",
         "https://cloud.mqzjmax.top",
         "acceptance_state=accepted",
@@ -386,3 +448,17 @@ def test_m4_ai_development_standard_is_actionable_and_linked() -> None:
         "report candidate validation as accepted completion",
     ):
         assert required_text in standard
+
+
+def test_m4_validation_authority_decision_is_linked_and_bounded() -> None:
+    decision = VALIDATION_ADR.read_text(encoding="utf-8")
+    standard = AI_STANDARD.read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    decision_path = "decisions/024-risk-tiered-development-validation-authority.md"
+
+    assert decision_path in standard
+    assert "024-risk-tiered-development-validation-authority.md" in readme
+    assert "M4 Preview" in decision
+    assert "GitHub required checks are the repository merge authority" in decision
+    assert "must not be repeated for one revision" in decision
+    assert "does not authorize production" in decision
